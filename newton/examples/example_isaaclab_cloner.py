@@ -78,7 +78,13 @@ class Example:
         self.renderer = None
         if stage_path:
             self.renderer = newton.utils.SimRendererOpenGL(
-                path=stage_path, model=self.model, scaling=2.0, up_axis=up_axis
+                path=stage_path,
+                model=self.model,
+                scaling=1.0,
+                up_axis=up_axis,
+                screen_width=1280,
+                screen_height=720,
+                camera_pos=(0, 3, 10),
             )
 
         self.use_cuda_graph = wp.get_device().is_cuda
@@ -123,7 +129,7 @@ if __name__ == "__main__":
         help="Path to the output USD file.",
     )
     parser.add_argument("--num_frames", type=int, default=12000, help="Total number of frames.")
-    parser.add_argument("--num_envs", type=int, default=16, help="Total number of simulated environments.")
+    parser.add_argument("--num_envs", type=int, default=256, help="Total number of simulated environments.")
 
     args = parser.parse_known_args()[0]
 
