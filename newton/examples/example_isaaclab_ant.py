@@ -74,8 +74,16 @@ class Example:
         # ===========================================================
         self.ants = newton.utils.selection.ArticulationView(self.model, "/ant/torso", include_root_joint=False)
 
-        print(self.ants.get_attribute("joint_q", self.state_0).shape)
-        print(self.ants.get_attribute("joint_act", self.control).shape)
+        print(f"articulation count: {self.ants.count}")
+        print(f"link_count:         {self.ants.link_count}")
+        print(f"joint_count:        {self.ants.joint_count}")
+        print(f"joint_axis_count:   {self.ants.joint_axis_count}")
+
+        print(f"joint_q shape:      {self.ants.get_attribute_shape('joint_q')}")
+        print(f"joint_qd shape:     {self.ants.get_attribute_shape('joint_qd')}")
+        print(f"joint_act shape:    {self.ants.get_attribute_shape('joint_act')}")
+        print(f"body_q shape:       {self.ants.get_attribute_shape('body_q')}")
+        print(f"body_qd shape:      {self.ants.get_attribute_shape('body_qd')}")
 
         self.use_cuda_graph = wp.get_device().is_cuda
         if self.use_cuda_graph:
@@ -93,7 +101,8 @@ class Example:
         # =========================
         # apply random controls
         # =========================
-        joint_forces = 10.0 - 20.0 * torch.rand((self.num_envs, 8))
+        act_shape = self.ants.get_attribute_shape("joint_act")
+        joint_forces = 10.0 - 20.0 * torch.rand(act_shape)
         self.ants.set_attribute("joint_act", self.control, joint_forces)
 
         with wp.ScopedTimer("step", active=False):
