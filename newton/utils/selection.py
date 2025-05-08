@@ -107,9 +107,41 @@ class ArticulationView:
         self.attrib_slices["body_qd"] = (slice(0, count), slice(body_begin, body_end))
 
         # create articulation mask
-        self.articulation_mask = wp.zeros(model.articulation_count, dtype=bool)
+        self._articulation_mask = wp.zeros(model.articulation_count, dtype=bool)
         indices = wp.array(articulation_ids, dtype=int)
-        wp.launch(set_mask_kernel, dim=indices.shape, inputs=[indices, self.articulation_mask])
+        wp.launch(set_mask_kernel, dim=indices.shape, inputs=[indices, self._articulation_mask])
+
+        # set some counting properties
+        self._count = count
+        self._link_count = len(links)
+        self._joint_count = joint_end - joint_begin
+        self._joint_axis_count = joint_axis_end - joint_axis_begin
+
+    @property
+    def articulation_mask(self) -> wp.array(dtype=bool):
+        return self._articulation_mask
+
+    @property
+    def count(self) -> int:
+        return self._count
+
+    @property
+    def link_count(self) -> int:
+        return self._link_count
+
+    @property
+    def joint_count(self) -> int:
+        return self._joint_count
+
+    @property
+    def joint_axis_count(self) -> int:
+        return self._joint_axis_count
+
+    def get_attribute_shape(self, name: str):
+        shape = []
+        for s in self.attrib_slices[name]:
+            shape.append(s.stop - s.start)
+        return tuple(shape)
 
     def get_attribute(self, name: str, source: Model | State | Control, copy=False):
         attrib = getattr(source, name)
