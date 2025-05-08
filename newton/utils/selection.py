@@ -28,7 +28,7 @@ def set_mask_kernel(indices: wp.array(dtype=int), mask: wp.array(dtype=bool)):
 
 
 class ArticulationView:
-    def __init__(self, model: Model, pattern: str):
+    def __init__(self, model: Model, pattern: str, include_root_joint=True):
         articulation_ids = []
         for id, key in enumerate(model.articulation_key):
             if fnmatch(key, pattern):
@@ -50,12 +50,15 @@ class ArticulationView:
 
         arti_0 = articulation_ids[0]
 
+        joint_begin = articulation_start[arti_0]
+        joint_end = articulation_start[arti_0 + 1]
+
         # FIXME: is this always correct?
-        num_joints = articulation_start[arti_0 + 1] - articulation_start[arti_0]
+        num_joints = joint_end - joint_begin
         print(f"  num_joints: {num_joints}")
 
         links = {}
-        for joint_id in range(articulation_start[arti_0], articulation_start[arti_0 + 1]):
+        for joint_id in range(joint_begin, joint_end):
             joint_name = model.joint_key[joint_id]
             print(f"    joint {joint_name}:")
             print(f"      bodies: {joint_parent[joint_id]} -> {joint_child[joint_id]}")
@@ -75,8 +78,11 @@ class ArticulationView:
         self.attrib_shapes = {}
         self.attrib_slices = {}
 
-        joint_begin = articulation_start[arti_0]
-        joint_end = articulation_start[arti_0 + 1]
+        if not include_root_joint:
+            # check if a root joint is present and skip it
+            if joint_parent[joint_begin] == -1:
+                joint_begin += 1
+
         self.attrib_shapes["joint_q"] = (count, model.joint_q.size // count)
         self.attrib_slices["joint_q"] = (
             slice(0, count),
