@@ -13,11 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-###########################################################################
-# An example of using the ArticulationView.
-###########################################################################
+import math
 
-import numpy as np
 import torch
 import warp as wp
 
@@ -25,17 +22,15 @@ import newton
 import newton.core.articulation
 import newton.examples
 import newton.utils
-import newton.utils.isaaclab
+from newton.utils.isaaclab import replicate_environment
 from newton.utils.selection import ArticulationView
-
-np.set_printoptions(suppress=True)
 
 
 class Example:
     def __init__(self, stage_path="example_cartpole.usd", num_envs=8):
         self.num_envs = num_envs
 
-        builder, stage_info = newton.utils.isaaclab.replicate_environment(
+        builder, stage_info = replicate_environment(
             newton.examples.get_asset("cartpole_prototype.usda"),
             "/World/envs/env_0",
             "/World/envs/env_{}",
@@ -79,7 +74,7 @@ class Example:
         # randomize initial state
         # =========================
         cart_positions = 2.0 - 4.0 * torch.rand(num_envs)
-        pole_angles = np.pi / 16.0 - np.pi / 8.0 * torch.rand(num_envs)
+        pole_angles = math.pi / 16.0 - math.pi / 8.0 * torch.rand(num_envs)
         joint_states = torch.stack([cart_positions, pole_angles], dim=1)
         self.cartpoles.set_attribute("joint_q", self.state_0, joint_states)
 
