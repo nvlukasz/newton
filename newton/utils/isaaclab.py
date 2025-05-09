@@ -19,9 +19,7 @@ import newton
 from newton.examples import compute_env_offsets
 
 
-def replicate_environment(
-    source, prototype_path, path_pattern, num_envs, env_spacing, up_vector=(0.0, 0.0, 1.0), **usd_kwargs
-):
+def replicate_environment(source, prototype_path, path_pattern, num_envs, env_spacing, up_axis="Z", **usd_kwargs):
     """
     Replicates a prototype USD environment in Newton.
 
@@ -37,6 +35,16 @@ def replicate_environment(
     Returns:
         (newton.ModelBuilder, dict): The resulting ModelBuilder containing all replicated environments and a dictionary with USD stage information.
     """
+
+    up_vectors = {
+        "X": (1.0, 0.0, 0.0),
+        "Y": (0.0, 1.0, 0.0),
+        "Z": (0.0, 0.0, 1.0),
+    }
+
+    up_vector = up_vectors.get(up_axis.upper())
+    if up_vector is None:
+        raise ValueError(f"up_axis should be 'X', 'Y', or 'Z', got {up_axis}")
 
     builder = newton.ModelBuilder(up_vector=up_vector)
 
@@ -57,7 +65,10 @@ def replicate_environment(
         **usd_kwargs,
     )
 
-    up_axis = stage_info.get("up_axis") or "Z"
+    # up_axis sanity check
+    stage_up_axis = stage_info.get("up_axis")
+    if isinstance(stage_up_axis, str) and stage_up_axis.upper() != up_axis.upper():
+        print(f"WARNING: up_axis '{up_axis}' does not match USD stage up_axis '{stage_up_axis}'")
 
     env_offsets = compute_env_offsets(num_envs, env_offset=env_spacing, up_axis=up_axis)
 
