@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 import warp as wp
 
@@ -6,32 +5,26 @@ import newton
 import newton.core.articulation
 import newton.examples
 import newton.utils
-import newton.utils.selection
+from newton.utils.isaaclab import replicate_environment
+from newton.utils.selection import ArticulationView
 
 
 class Example:
     def __init__(self, stage_path="example_ant.usd", num_envs=8):
         self.num_envs = num_envs
 
-        up_axis = "Z"
-        up_vector = (0.0, 0.0, 1.0)
-        gravity = -9.81
-
-        articulation_builder = newton.ModelBuilder(up_vector=up_vector, gravity=gravity)
-        newton.utils.parse_usd(
-            newton.examples.get_asset("flattened_ant.usd"),
-            articulation_builder,
-            collapse_fixed_joints=True,
+        builder, stage_info = replicate_environment(
+            newton.examples.get_asset("ant_prototype.usd"),
+            "/World/envs/env_0",
+            "/World/envs/env_{}",
+            num_envs,
+            (5.0, 5.0, 0.0),
+            # USD importer args
+            xform=wp.transform(wp.vec3(0, 0, 1.0), wp.quat_identity()),
+            collapse_fixed_joints=False,
         )
 
-        builder = newton.ModelBuilder(up_vector=up_vector, gravity=gravity)
-
-        positions = newton.examples.compute_env_offsets(num_envs, env_offset=(2.0, 2.0, 0.0), up_axis=up_axis)
-
-        for i in range(self.num_envs):
-            builder.add_builder(
-                articulation_builder, xform=wp.transform(positions[i] + np.array((0, 0, 1)), wp.quat_identity())
-            )
+        up_axis = stage_info.get("up_axis") or "Z"
 
         # finalize model
         self.model = builder.finalize()
@@ -72,7 +65,7 @@ class Example:
         # ===========================================================
         # create articulation view, note the include_root_joint flag
         # ===========================================================
-        self.ants = newton.utils.selection.ArticulationView(self.model, "/ant/torso", include_root_joint=False)
+        self.ants = ArticulationView(self.model, "/World/envs/*/Robot/torso", include_root_joint=False)
 
         print(f"articulation count: {self.ants.count}")
         print(f"link_count:         {self.ants.link_count}")
