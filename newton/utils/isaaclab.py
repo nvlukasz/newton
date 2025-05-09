@@ -19,7 +19,9 @@ import newton
 from newton.examples import compute_env_offsets
 
 
-def replicate_environment(source, prototype_path, path_pattern, num_envs, env_spacing, **usd_kwargs):
+def replicate_environment(
+    source, prototype_path, path_pattern, num_envs, env_spacing, up_vector=(0.0, 0.0, 1.0), **usd_kwargs
+):
     """
     Replicates a prototype USD environment in Newton.
 
@@ -29,24 +31,26 @@ def replicate_environment(source, prototype_path, path_pattern, num_envs, env_sp
         path_pattern (str): The USD path pattern for replicated envs, e.g., "/World/envs/env_{}".
         num_envs (int): Number of replicas to create.
         env_spacing (tuple[float]): Environment spacing vector.
+        up_vector (tuple[float]): The desired up-vector (should match the USD stage).
         **usd_kwargs: Keyword arguments to pass to the USD importer (see `newton.utils.parse_usd()`).
 
     Returns:
         (newton.ModelBuilder, dict): The resulting ModelBuilder containing all replicated environments and a dictionary with USD stage information.
     """
 
-    # first, load everything except the prototype env
-    builder = newton.ModelBuilder()
-    stage_info = newton.utils.parse_usd(
-        source,
-        builder,
-        ignore_paths=[prototype_path],
-        **usd_kwargs,
-    )
+    builder = newton.ModelBuilder(up_vector=up_vector)
 
-    # now, load just the prototype env
-    prototype_builder = newton.ModelBuilder()
-    newton.utils.parse_usd(
+    # # first, load everything except the prototype env (TODO: do we need this?)
+    # stage_info = newton.utils.parse_usd(
+    #     source,
+    #     builder,
+    #     ignore_paths=[prototype_path],
+    #     **usd_kwargs,
+    # )
+
+    # load just the prototype env
+    prototype_builder = newton.ModelBuilder(up_vector=up_vector)
+    stage_info = newton.utils.parse_usd(
         source,
         prototype_builder,
         root_path=prototype_path,
