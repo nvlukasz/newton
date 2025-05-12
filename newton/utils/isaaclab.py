@@ -48,20 +48,11 @@ def replicate_environment(source, prototype_path, path_pattern, num_envs, env_sp
 
     builder = newton.ModelBuilder(up_vector=up_vector)
 
-    # # first, load everything except the prototype env (TODO: do we need this?)
-    # stage_info = newton.utils.parse_usd(
-    #     source,
-    #     builder,
-    #     ignore_paths=[prototype_path],
-    #     **usd_kwargs,
-    # )
-
-    # load just the prototype env
-    prototype_builder = newton.ModelBuilder(up_vector=up_vector)
+    # first, load everything except the prototype env
     stage_info = newton.utils.parse_usd(
         source,
-        prototype_builder,
-        root_path=prototype_path,
+        builder,
+        ignore_paths=[prototype_path],
         **usd_kwargs,
     )
 
@@ -69,6 +60,15 @@ def replicate_environment(source, prototype_path, path_pattern, num_envs, env_sp
     stage_up_axis = stage_info.get("up_axis")
     if isinstance(stage_up_axis, str) and stage_up_axis.upper() != up_axis.upper():
         print(f"WARNING: up_axis '{up_axis}' does not match USD stage up_axis '{stage_up_axis}'")
+
+    # load just the prototype env
+    prototype_builder = newton.ModelBuilder(up_vector=up_vector)
+    newton.utils.parse_usd(
+        source,
+        prototype_builder,
+        root_path=prototype_path,
+        **usd_kwargs,
+    )
 
     env_offsets = compute_env_offsets(num_envs, env_offset=env_spacing, up_axis=up_axis)
 
