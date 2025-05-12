@@ -79,7 +79,9 @@ class Example:
         # ===========================================================
         # create articulation view, note the include_root_joint flag
         # ===========================================================
-        self.ants = ArticulationView(self.model, "/World/envs/*/Robot/torso", include_root_joint=False, env_offsets=env_offsets)
+        self.ants = ArticulationView(
+            self.model, "/World/envs/*/Robot/torso", include_root_joint=False, env_offsets=env_offsets
+        )
 
         print(f"articulation count: {self.ants.count}")
         print(f"link_count:         {self.ants.link_count}")
