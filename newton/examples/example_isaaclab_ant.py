@@ -62,7 +62,7 @@ class Example:
                 up_axis=up_axis,
                 screen_width=1280,
                 screen_height=720,
-                camera_pos=(0, 4, 20),
+                camera_pos=(0, 4, 30),
             )
 
         self.state_0 = self.model.state()
@@ -128,7 +128,7 @@ class Example:
     def step(self):
         # if self.sim_time < 0.5:
         #     print(f"\n----- t = {self.sim_time} --------------------------------------")
-        #     print(self.ants.get_root_transforms(self.state_0).numpy()[:, :3])
+        #     # print(self.ants.get_root_transforms(self.state_0).numpy()[:, :3])
         #     print(self.ants.get_root_velocities(self.state_0).numpy()[:, 3:])
 
         # =========================
