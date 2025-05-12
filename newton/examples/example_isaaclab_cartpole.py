@@ -30,7 +30,7 @@ class Example:
     def __init__(self, stage_path="example_cartpole.usd", num_envs=8):
         self.num_envs = num_envs
 
-        builder, stage_info = replicate_environment(
+        builder, stage_info, env_offsets = replicate_environment(
             newton.examples.get_asset("cartpole_prototype.usda"),
             "/World/envs/env_0",
             "/World/envs/env_{}",
@@ -62,7 +62,7 @@ class Example:
         # =======================
         # get cartpole view
         # =======================
-        self.cartpoles = ArticulationView(self.model, "/World/envs/*/Robot")
+        self.cartpoles = ArticulationView(self.model, "/World/envs/*/Robot", env_offsets=env_offsets)
 
         # print(self.cartpoles.get_attribute("body_q", self.state_0))
         # print(self.cartpoles.get_attribute("body_qd", self.state_0))
