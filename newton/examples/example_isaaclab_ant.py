@@ -77,10 +77,10 @@ class Example:
         self.sim_dt = self.frame_dt / self.sim_substeps
 
         # ===========================================================
-        # create articulation view, note the include_root_joint flag
+        # create articulation view
         # ===========================================================
         self.ants = ArticulationView(
-            self.model, "/World/envs/*/Robot/torso", include_root_joint=False, env_offsets=env_offsets
+            self.model, "/World/envs/*/Robot/torso", env_offsets=env_offsets
         )
 
         print(f"articulation count: {self.ants.count}")
