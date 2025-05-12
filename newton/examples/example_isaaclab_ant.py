@@ -76,6 +76,8 @@ class Example:
         self.sim_substeps = 10
         self.sim_dt = self.frame_dt / self.sim_substeps
 
+        self.next_pop = 0.0
+
         # ===========================================================
         # create articulation view
         # ===========================================================
@@ -91,27 +93,6 @@ class Example:
         print(f"joint_act shape:    {self.ants.get_attribute_shape('joint_act')}")
         print(f"body_q shape:       {self.ants.get_attribute_shape('body_q')}")
         print(f"body_qd shape:      {self.ants.get_attribute_shape('body_qd')}")
-
-        # ===========================================================
-        # set root transforms
-        # ===========================================================
-        root_transforms = torch.zeros((num_envs, 7), dtype=torch.float32)
-        root_transforms[:, 2] = 0.8  # height along z-axis
-        root_transforms[:, 6] = 1.0  # quaternion identity
-        self.ants.set_root_transforms(self.state_0, root_transforms)
-
-        # ===========================================================
-        # set root velocities
-        # ===========================================================
-        root_velocities = torch.zeros((num_envs, 6), dtype=torch.float32)
-        root_velocities[:, 0] = 2 * math.pi  # rotate about x-axis
-        root_velocities[:, 5] = 5.0  # move up z-axis
-        self.ants.set_root_velocities(self.state_0, root_velocities)
-
-        # ===========================================================
-        # apply transforms to all links
-        # ===========================================================
-        self.ants.eval_fk(self.state_0)
 
         self.use_cuda_graph = wp.get_device().is_cuda
         if self.use_cuda_graph:
@@ -131,6 +112,10 @@ class Example:
         #     # print(self.ants.get_root_transforms(self.state_0).numpy()[:, :3])
         #     print(self.ants.get_root_velocities(self.state_0).numpy()[:, 3:])
 
+        if self.sim_time >= self.next_pop:
+            self.reset()
+            self.next_pop = self.sim_time + 3.0
+
         # =========================
         # apply random controls
         # =========================
@@ -144,6 +129,28 @@ class Example:
             else:
                 self.simulate()
         self.sim_time += self.frame_dt
+
+    def reset(self):
+        # ===========================================================
+        # set root transforms
+        # ===========================================================
+        root_transforms = torch.zeros((self.num_envs, 7), dtype=torch.float32)
+        root_transforms[:, 2] = 0.8  # height along z-axis
+        root_transforms[:, 6] = 1.0  # quaternion identity
+        self.ants.set_root_transforms(self.state_0, root_transforms)
+
+        # ===========================================================
+        # set root velocities
+        # ===========================================================
+        root_velocities = torch.zeros((self.num_envs, 6), dtype=torch.float32)
+        root_velocities[:, 0] = 2 * math.pi  # rotate about x-axis
+        root_velocities[:, 5] = 5.0  # move up z-axis
+        self.ants.set_root_velocities(self.state_0, root_velocities)
+
+        # ===========================================================
+        # update transforms of all links
+        # ===========================================================
+        self.ants.eval_fk(self.state_0)
 
     def render(self):
         if self.renderer is None:
