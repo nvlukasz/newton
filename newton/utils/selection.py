@@ -201,7 +201,7 @@ def get_articulation_root_velocities_kernel_v2(
 
 
 class ArticulationView:
-    def __init__(self, model: Model, pattern: str, include_root_joint=False, env_offsets=None):
+    def __init__(self, model: Model, pattern: str, include_free_joint=False, env_offsets=None):
         self.model = model
         self.device = model.device
 
@@ -215,6 +215,7 @@ class ArticulationView:
             raise KeyError("No matching articulations")
 
         articulation_start = model.articulation_start.numpy()
+        joint_type = model.joint_type.numpy()
         joint_parent = model.joint_parent.numpy()
         joint_child = model.joint_child.numpy()
         joint_axis_start = model.joint_axis_start.numpy()
@@ -254,10 +255,9 @@ class ArticulationView:
         self.attrib_shapes = {}
         self.attrib_slices = {}
 
-        if not include_root_joint:
-            # check if a root joint is present and skip it
-            if joint_parent[joint_begin] == -1:
-                joint_begin += 1
+        # if the root joint is a free joint, skip it
+        if joint_type[joint_begin] == newton.JOINT_FREE and not include_free_joint:
+            joint_begin += 1
 
         self.attrib_shapes["joint_q"] = (count, model.joint_q.size // count)
         self.attrib_slices["joint_q"] = (
