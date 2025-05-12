@@ -18,8 +18,8 @@ from fnmatch import fnmatch
 import warp as wp
 from warp.types import is_array
 
-from newton import Control, Model, State
 import newton.core.articulation
+from newton import Control, Model, State
 
 
 @wp.kernel
@@ -50,7 +50,8 @@ def set_articulation_root_transforms_kernel(
     # apply env offset
     root_pose = wp.transform(
         wp.vec3(root_pose[0], root_pose[1], root_pose[2]) + env_offset,
-        wp.quat(root_pose[3], root_pose[4], root_pose[5], root_pose[6]))
+        wp.quat(root_pose[3], root_pose[4], root_pose[5], root_pose[6]),
+    )
 
     if joint_type[joint_start] == newton.JOINT_FREE:
         for i in range(7):
@@ -80,7 +81,7 @@ def get_articulation_root_transforms_kernel_v1(
     if joint_type[joint_start] == newton.JOINT_FREE:
         root_pose = wp.transform(
             wp.vec3(joint_q[q_start + 0], joint_q[q_start + 1], joint_q[q_start + 2]),
-            wp.quat(joint_q[q_start + 3], joint_q[q_start + 4], joint_q[q_start + 5], joint_q[q_start + 6])
+            wp.quat(joint_q[q_start + 3], joint_q[q_start + 4], joint_q[q_start + 5], joint_q[q_start + 6]),
         )
     elif joint_type[joint_start] == newton.JOINT_FIXED:
         root_pose = joint_X_p[joint_start]
@@ -88,7 +89,8 @@ def get_articulation_root_transforms_kernel_v1(
     # apply env offset
     root_pose = wp.transform(
         wp.vec3(root_pose[0], root_pose[1], root_pose[2]) - env_offset,
-        wp.quat(root_pose[3], root_pose[4], root_pose[5], root_pose[6]))
+        wp.quat(root_pose[3], root_pose[4], root_pose[5], root_pose[6]),
+    )
 
     root_transforms[tid] = root_pose
 
@@ -119,7 +121,8 @@ def get_articulation_root_transforms_kernel_v2(
     # apply env offset
     root_pose = wp.transform(
         wp.vec3(root_pose[0], root_pose[1], root_pose[2]) - env_offset,
-        wp.quat(root_pose[3], root_pose[4], root_pose[5], root_pose[6]))
+        wp.quat(root_pose[3], root_pose[4], root_pose[5], root_pose[6]),
+    )
 
     root_xforms[tid] = root_pose
 
