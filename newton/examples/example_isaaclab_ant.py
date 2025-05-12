@@ -79,9 +79,7 @@ class Example:
         # ===========================================================
         # create articulation view
         # ===========================================================
-        self.ants = ArticulationView(
-            self.model, "/World/envs/*/Robot/torso", env_offsets=env_offsets
-        )
+        self.ants = ArticulationView(self.model, "/World/envs/*/Robot/torso", env_offsets=env_offsets)
 
         print(f"articulation count: {self.ants.count}")
         print(f"link_count:         {self.ants.link_count}")
