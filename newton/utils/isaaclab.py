@@ -33,7 +33,7 @@ def replicate_environment(source, prototype_path, path_pattern, num_envs, env_sp
         **usd_kwargs: Keyword arguments to pass to the USD importer (see `newton.utils.parse_usd()`).
 
     Returns:
-        (newton.ModelBuilder, dict): The resulting ModelBuilder containing all replicated environments and a dictionary with USD stage information.
+        (ModelBuilder, dict, np.array): The resulting ModelBuilder containing all replicated environments, a dictionary with USD stage information, and a NumPy array of env offsets.
     """
 
     up_vectors = {
@@ -92,7 +92,7 @@ def replicate_environment(source, prototype_path, path_pattern, num_envs, env_sp
                 articulation_start=articulation_start,
             )
 
-    return builder, stage_info
+    return builder, stage_info, env_offsets
 
 
 def update_paths(

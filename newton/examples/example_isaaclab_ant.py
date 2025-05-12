@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
+
 import torch
 import warp as wp
 
@@ -28,14 +30,13 @@ class Example:
     def __init__(self, stage_path="example_ant.usd", num_envs=8):
         self.num_envs = num_envs
 
-        builder, stage_info = replicate_environment(
+        builder, stage_info, env_offsets = replicate_environment(
             newton.examples.get_asset("ant_prototype.usd"),
             "/World/envs/env_0",
             "/World/envs/env_{}",
             num_envs,
             (5.0, 5.0, 0.0),
             # USD importer args
-            xform=wp.transform(wp.vec3(0, 0, 1.0), wp.quat_identity()),
             collapse_fixed_joints=False,
         )
 
@@ -75,12 +76,10 @@ class Example:
         self.sim_substeps = 10
         self.sim_dt = self.frame_dt / self.sim_substeps
 
-        newton.core.articulation.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, None, self.state_0)
-
         # ===========================================================
         # create articulation view, note the include_root_joint flag
         # ===========================================================
-        self.ants = ArticulationView(self.model, "/World/envs/*/Robot/torso", include_root_joint=False)
+        self.ants = ArticulationView(self.model, "/World/envs/*/Robot/torso", include_root_joint=False, env_offsets=env_offsets)
 
         print(f"articulation count: {self.ants.count}")
         print(f"link_count:         {self.ants.link_count}")
@@ -92,6 +91,27 @@ class Example:
         print(f"joint_act shape:    {self.ants.get_attribute_shape('joint_act')}")
         print(f"body_q shape:       {self.ants.get_attribute_shape('body_q')}")
         print(f"body_qd shape:      {self.ants.get_attribute_shape('body_qd')}")
+
+        # ===========================================================
+        # set root transforms
+        # ===========================================================
+        root_transforms = torch.zeros((num_envs, 7), dtype=torch.float32)
+        root_transforms[:, 2] = 0.8  # height along z-axis
+        root_transforms[:, 6] = 1.0  # quaternion identity
+        self.ants.set_root_transforms(self.state_0, root_transforms)
+
+        # ===========================================================
+        # set root velocities
+        # ===========================================================
+        root_velocities = torch.zeros((num_envs, 6), dtype=torch.float32)
+        root_velocities[:, 0] = 2 * math.pi  # rotate about x-axis
+        root_velocities[:, 5] = 5.0  # move up z-axis
+        self.ants.set_root_velocities(self.state_0, root_velocities)
+
+        # ===========================================================
+        # apply transforms to all links
+        # ===========================================================
+        self.ants.eval_fk(self.state_0)
 
         self.use_cuda_graph = wp.get_device().is_cuda
         if self.use_cuda_graph:
@@ -106,11 +126,16 @@ class Example:
             self.state_0, self.state_1 = self.state_1, self.state_0
 
     def step(self):
+        # if self.sim_time < 0.5:
+        #     print(f"\n----- t = {self.sim_time} --------------------------------------")
+        #     print(self.ants.get_root_transforms(self.state_0).numpy()[:, :3])
+        #     print(self.ants.get_root_velocities(self.state_0).numpy()[:, 3:])
+
         # =========================
         # apply random controls
         # =========================
         act_shape = self.ants.get_attribute_shape("joint_act")
-        joint_forces = 10.0 - 20.0 * torch.rand(act_shape)
+        joint_forces = 100.0 - 200.0 * torch.rand(act_shape)
         self.ants.set_attribute("joint_act", self.control, joint_forces)
 
         with wp.ScopedTimer("step", active=False):
@@ -150,9 +175,11 @@ if __name__ == "__main__":
         example = Example(stage_path=args.stage_path, num_envs=args.num_envs)
 
         for _ in range(args.num_frames):
-            # time.sleep(1)
             example.step()
             example.render()
+
+            # import time
+            # time.sleep(0.2)
 
         if example.renderer:
             example.renderer.save()
