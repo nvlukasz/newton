@@ -61,42 +61,7 @@ def set_articulation_root_transforms_kernel(
 
 
 @wp.kernel
-def get_articulation_root_transforms_kernel_v1(
-    articulation_indices: wp.array(dtype=int),
-    articulation_start: wp.array(dtype=int),
-    joint_type: wp.array(dtype=int),
-    joint_q: wp.array(dtype=float),
-    joint_q_start: wp.array(dtype=int),
-    joint_X_p: wp.array(dtype=wp.transform),
-    env_offsets: wp.array(dtype=wp.vec3),
-    # outputs
-    root_transforms: wp.array(dtype=wp.transform),
-):
-    tid = wp.tid()
-    articulation = articulation_indices[tid]
-    joint_start = articulation_start[articulation]
-    q_start = joint_q_start[joint_start]
-    env_offset = env_offsets[tid]
-
-    if joint_type[joint_start] == newton.JOINT_FREE:
-        root_pose = wp.transform(
-            wp.vec3(joint_q[q_start + 0], joint_q[q_start + 1], joint_q[q_start + 2]),
-            wp.quat(joint_q[q_start + 3], joint_q[q_start + 4], joint_q[q_start + 5], joint_q[q_start + 6]),
-        )
-    elif joint_type[joint_start] == newton.JOINT_FIXED:
-        root_pose = joint_X_p[joint_start]
-
-    # apply env offset
-    root_pose = wp.transform(
-        wp.vec3(root_pose[0], root_pose[1], root_pose[2]) - env_offset,
-        wp.quat(root_pose[3], root_pose[4], root_pose[5], root_pose[6]),
-    )
-
-    root_transforms[tid] = root_pose
-
-
-@wp.kernel
-def get_articulation_root_transforms_kernel_v2(
+def get_articulation_root_transforms_kernel(
     articulation_indices: wp.array(dtype=int),
     articulation_start: wp.array(dtype=int),
     joint_parent: wp.array(dtype=int),
@@ -149,37 +114,7 @@ def set_articulation_root_velocities_kernel(
 
 
 @wp.kernel
-def get_articulation_root_velocities_kernel_v1(
-    articulation_indices: wp.array(dtype=int),
-    articulation_start: wp.array(dtype=int),
-    joint_qd: wp.array(dtype=float),
-    joint_type: wp.array(dtype=int),
-    joint_qd_start: wp.array(dtype=int),
-    # outputs
-    root_vels: wp.array(dtype=wp.spatial_vector),
-):
-    tid = wp.tid()
-    articulation = articulation_indices[tid]
-    joint_start = articulation_start[articulation]
-    qd_start = joint_qd_start[joint_start]
-
-    if joint_type[joint_start] == newton.JOINT_FREE:
-        root_vel = wp.spatial_vector(
-            joint_qd[qd_start + 0],
-            joint_qd[qd_start + 1],
-            joint_qd[qd_start + 2],
-            joint_qd[qd_start + 3],
-            joint_qd[qd_start + 4],
-            joint_qd[qd_start + 5],
-        )
-    elif joint_type[joint_start] == newton.JOINT_FIXED:
-        root_vel = wp.spatial_vector(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-
-    root_vels[tid] = root_vel
-
-
-@wp.kernel
-def get_articulation_root_velocities_kernel_v2(
+def get_articulation_root_velocities_kernel(
     articulation_indices: wp.array(dtype=int),
     articulation_start: wp.array(dtype=int),
     joint_parent: wp.array(dtype=int),
@@ -369,43 +304,22 @@ class ArticulationView:
         if self._root_transforms is None:
             self._root_transforms = wp.empty(self.count, dtype=wp.transform, device=self.device)
 
-        if False:
-            # get transforms from root joints
-            wp.launch(
-                get_articulation_root_transforms_kernel_v1,
-                self.count,
-                inputs=[
-                    self.articulation_indices,
-                    self.model.articulation_start,
-                    self.model.joint_type,
-                    source.joint_q,
-                    self.model.joint_q_start,
-                    self.model.joint_X_p,  # hmmm
-                    self.env_offsets,
-                ],
-                outputs=[
-                    self._root_transforms,
-                ],
-                device=self.device,
-            )
-        else:
-            # get transforms from root bodies
-            wp.launch(
-                get_articulation_root_transforms_kernel_v2,
-                self.count,
-                inputs=[
-                    self.articulation_indices,
-                    self.model.articulation_start,
-                    self.model.joint_parent,
-                    self.model.joint_child,
-                    source.body_q,
-                    self.env_offsets,
-                ],
-                outputs=[
-                    self._root_transforms,
-                ],
-                device=self.device,
-            )
+        wp.launch(
+            get_articulation_root_transforms_kernel,
+            self.count,
+            inputs=[
+                self.articulation_indices,
+                self.model.articulation_start,
+                self.model.joint_parent,
+                self.model.joint_child,
+                source.body_q,
+                self.env_offsets,
+            ],
+            outputs=[
+                self._root_transforms,
+            ],
+            device=self.device,
+        )
 
         return self._root_transforms
 
@@ -446,40 +360,21 @@ class ArticulationView:
         if self._root_velocities is None:
             self._root_velocities = wp.empty(self.count, dtype=wp.spatial_vector, device=self.device)
 
-        if False:
-            # get velocities from root joints
-            wp.launch(
-                get_articulation_root_velocities_kernel_v1,
-                self.count,
-                inputs=[
-                    self.articulation_indices,
-                    self.model.articulation_start,
-                    source.joint_qd,
-                    self.model.joint_type,
-                    self.model.joint_q_start,
-                ],
-                outputs=[
-                    self._root_velocities,
-                ],
-                device=self.device,
-            )
-        else:
-            # get velocities from root bodies
-            wp.launch(
-                get_articulation_root_velocities_kernel_v2,
-                self.count,
-                inputs=[
-                    self.articulation_indices,
-                    self.model.articulation_start,
-                    self.model.joint_parent,
-                    self.model.joint_child,
-                    source.body_qd,
-                ],
-                outputs=[
-                    self._root_velocities,
-                ],
-                device=self.device,
-            )
+        wp.launch(
+            get_articulation_root_velocities_kernel,
+            self.count,
+            inputs=[
+                self.articulation_indices,
+                self.model.articulation_start,
+                self.model.joint_parent,
+                self.model.joint_child,
+                source.body_qd,
+            ],
+            outputs=[
+                self._root_velocities,
+            ],
+            device=self.device,
+        )
 
         return self._root_velocities
 
