@@ -229,6 +229,7 @@ class ArticulationView:
 
         joint_begin = articulation_start[arti_0]
         joint_end = articulation_start[arti_0 + 1]
+        joint_last = joint_end - 1
 
         # FIXME: is this always correct?
         num_joints = joint_end - joint_begin
@@ -271,7 +272,8 @@ class ArticulationView:
         )
 
         joint_axis_begin = joint_axis_start[joint_begin]
-        joint_axis_end = joint_axis_start[joint_end]
+        # joint_axis_end = joint_axis_start[joint_end]
+        joint_axis_end = joint_axis_start[joint_last] + joint_axis_dim[joint_last][0] + joint_axis_dim[joint_last][1]
         self.attrib_shapes["joint_act"] = (count, model.joint_act.size // count)
         self.attrib_slices["joint_act"] = (slice(0, count), slice(int(joint_axis_begin), int(joint_axis_end)))
 
