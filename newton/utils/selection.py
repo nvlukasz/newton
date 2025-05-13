@@ -302,6 +302,15 @@ class ArticulationView:
     # ...
 
     def get_root_transforms(self, source: Model | State):
+        """
+        Get the root transforms of the articulations.
+
+        Args:
+            source (Model | State): Where to get the root transforms (Model or State).
+
+        Returns:
+            array: The root transforms (dtype=wp.transform).
+        """
         if self._root_transforms is None:
             self._root_transforms = wp.empty(self.count, dtype=wp.transform, device=self.device)
 
@@ -326,12 +335,12 @@ class ArticulationView:
 
     def set_root_transforms(self, target: Model | State, root_transforms: wp.array):
         """
-        Sets the transforms of the root bodies in the articulations.
-        Call `eval_fk()` to apply changes to all links.
+        Set the root transforms of the articulations.
+        Call `eval_fk()` to apply changes to all articulation links.
 
         Args:
             target (Model | State): Where to set the root transforms (Model or State).
-            root_transforms (array): The root transforms to set.
+            root_transforms (array): The root transforms to set (dtype=wp.transform).
         """
 
         if not is_array(root_transforms):
@@ -358,6 +367,15 @@ class ArticulationView:
         )
 
     def get_root_velocities(self, source: Model | State):
+        """
+        Get the root velocities of the articulations.
+
+        Args:
+            source (Model | State): Where to get the root velocities (Model or State).
+
+        Returns:
+            array: The root velocities (dtype=wp.spatial_vector).
+        """
         if self._root_velocities is None:
             self._root_velocities = wp.empty(self.count, dtype=wp.spatial_vector, device=self.device)
 
@@ -381,12 +399,11 @@ class ArticulationView:
 
     def set_root_velocities(self, target: Model | State, root_vels: wp.array):
         """
-        Sets the velocities of the root bodies in the articulations.
-        Call `eval_fk()` to apply changes to all links.
+        Set the root velocities of the articulations.
 
         Args:
             target (Model | State): Where to set the root velocities (Model or State).
-            root_vels (array): The root velocities to set.
+            root_vels (array): The root velocities to set (dtype=wp.spatial_vector).
         """
 
         if not is_array(root_vels):
