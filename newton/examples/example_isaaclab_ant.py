@@ -19,7 +19,6 @@ import torch
 import warp as wp
 
 import newton
-import newton.core.articulation
 import newton.examples
 import newton.utils
 from newton.utils.isaaclab import replicate_environment

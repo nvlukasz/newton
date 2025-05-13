@@ -19,7 +19,6 @@ import torch
 import warp as wp
 
 import newton
-import newton.core.articulation
 import newton.examples
 import newton.utils
 from newton.utils.isaaclab import replicate_environment
@@ -77,10 +76,7 @@ class Example:
         pole_angles = math.pi / 16.0 - math.pi / 8.0 * torch.rand(num_envs)
         joint_states = torch.stack([cart_positions, pole_angles], dim=1)
         self.cartpoles.set_attribute("joint_q", self.state_0, joint_states)
-
-        newton.core.articulation.eval_fk(
-            self.model, self.state_0.joint_q, self.state_0.joint_qd, self.cartpoles.articulation_mask, self.state_0
-        )
+        self.cartpoles.eval_fk(self.state_0)
 
         self.renderer = None
         if stage_path:
