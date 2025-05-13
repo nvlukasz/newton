@@ -46,18 +46,7 @@ class Example:
         self.model = builder.finalize()
         self.model.ground = True
 
-        # from pprint import pprint
-        # pprint(self.model.articulation_key)
-        # pprint(self.model.body_key)
-        # pprint(self.model.joint_key)
-        # pprint(self.model.shape_key)
-        # print("Shape | Path")
-        # for i, key in enumerate(self.model.shape_key):
-        #     print(f"{i:5d} | {key}")
-        # pprint(builder.shape_collision_group_map)
-
         self.solver = newton.solvers.MuJoCoSolver(self.model)
-        # self.solver = newton.solvers.XPBDSolver(self.model)
 
         self.renderer = None
         if stage_path:
@@ -106,8 +95,6 @@ class Example:
         joint_limit_lower = wp.to_torch(self.ants.get_attribute("joint_limit_lower", self.model))
         joint_limit_upper = wp.to_torch(self.ants.get_attribute("joint_limit_upper", self.model))
         self.default_dof_positions = 0.5 * (joint_limit_lower + joint_limit_upper)
-        # print(joint_limit_lower)
-        # print(joint_limit_upper)
 
         self.use_cuda_graph = wp.get_device().is_cuda
         if self.use_cuda_graph:
@@ -127,11 +114,6 @@ class Example:
             self.state_0, self.state_1 = self.state_1, self.state_0
 
     def step(self):
-        # if self.sim_time < 0.5:
-        #     print(f"\n----- t = {self.sim_time} --------------------------------------")
-        #     # print(self.ants.get_root_transforms(self.state_0).numpy()[:, :3])
-        #     print(self.ants.get_root_velocities(self.state_0).numpy()[:, 3:])
-
         if self.sim_time >= self.next_pop:
             self.reset()
             self.next_pop = self.sim_time + 3.0
