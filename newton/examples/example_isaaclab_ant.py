@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# import math
+import math
 
 import torch
 import warp as wp
@@ -76,7 +76,7 @@ class Example:
         # ===========================================================
         # create articulation view
         # ===========================================================
-        self.ants = ArticulationView(self.model, "/World/envs/*/Robot/torso")
+        self.ants = ArticulationView(self.model, "/World/envs/*/Robot/torso", include_free_joint=True)
 
         print(f"articulation count: {self.ants.count}")
         print(f"link_count:         {self.ants.link_count}")
@@ -89,12 +89,32 @@ class Example:
         print(f"body_q shape:       {self.ants.get_attribute_shape('body_q')}")
         print(f"body_qd shape:      {self.ants.get_attribute_shape('body_qd')}")
 
-        self.default_root_transforms = wp.to_torch(self.ants.get_root_transforms(self.model)).clone()
-        self.default_root_transforms[:, 2] = 0.8
+        # set all dofs to the middle of their range by default
+        dof_limit_lower = wp.to_torch(self.ants.get_attribute("joint_limit_lower", self.model))
+        dof_limit_upper = wp.to_torch(self.ants.get_attribute("joint_limit_upper", self.model))
+        default_dof_transforms = 0.5 * (dof_limit_lower + dof_limit_upper)
 
-        joint_limit_lower = wp.to_torch(self.ants.get_attribute("joint_limit_lower", self.model))
-        joint_limit_upper = wp.to_torch(self.ants.get_attribute("joint_limit_upper", self.model))
-        self.default_dof_positions = 0.5 * (joint_limit_lower + joint_limit_upper)
+        if self.ants.include_free_joint:
+            # combined root and dof transforms
+            self.default_transforms = wp.to_torch(self.ants.get_attribute("joint_q", self.model)).clone()
+            self.default_transforms[:, 2] = 0.8  # z-coordinate of articulation root
+            self.default_transforms[:, 7:] = default_dof_transforms
+            # combined root and dof velocities
+            self.default_velocities = wp.to_torch(self.ants.get_attribute("joint_qd", self.model)).clone()
+            self.default_velocities[:, 2] = 0.5 * math.pi  # rotate about z-axis
+            self.default_velocities[:, 5] = 5.0  # move up z-axis
+        else:
+            # root transforms
+            self.default_root_transforms = wp.to_torch(self.ants.get_root_transforms(self.model)).clone()
+            self.default_root_transforms[:, 2] = 0.8
+            # dof transforms
+            self.default_dof_transforms = default_dof_transforms
+            # root velocities
+            self.default_root_velocities = torch.zeros((self.num_envs, 6), dtype=torch.float32)
+            self.default_root_velocities[:, 2] = 0.5 * math.pi  # rotate about z-axis
+            self.default_root_velocities[:, 5] = 5.0  # move up z-axis
+            # dof velocities
+            self.default_dof_velocities = torch.zeros((self.num_envs, 8), dtype=torch.float32)
 
         self.use_cuda_graph = wp.get_device().is_cuda
         if self.use_cuda_graph:
@@ -133,22 +153,20 @@ class Example:
         self.sim_time += self.frame_dt
 
     def reset(self):
-        # ===========================================================
-        # set transforms
-        # ===========================================================
-        self.ants.set_root_transforms(self.state_0, self.default_root_transforms)
-        self.ants.set_attribute("joint_q", self.state_0, self.default_dof_positions)
-        self.ants.eval_fk(self.state_0)
-
-        # ===========================================================
-        # set velocities
-        # ===========================================================
-        root_velocities = torch.zeros((self.num_envs, 6), dtype=torch.float32)
-        # root_velocities[:, 0] = 2 * math.pi  # rotate about x-axis
-        root_velocities[:, 5] = 5.0  # move up z-axis
-        dof_velocities = torch.zeros((self.num_envs, 8), dtype=torch.float32)
-        self.ants.set_root_velocities(self.state_0, root_velocities)
-        self.ants.set_attribute("joint_qd", self.state_0, dof_velocities)
+        if self.ants.include_free_joint:
+            # set root and dof transforms together
+            self.ants.set_attribute("joint_q", self.state_0, self.default_transforms)
+            self.ants.eval_fk(self.state_0)
+            # set root and dof velocities together
+            self.ants.set_attribute("joint_qd", self.state_0, self.default_velocities)
+        else:
+            # set root and dof transforms separately
+            self.ants.set_root_transforms(self.state_0, self.default_root_transforms)
+            self.ants.set_attribute("joint_q", self.state_0, self.default_dof_transforms)
+            self.ants.eval_fk(self.state_0)
+            # set root and dof velocities separately
+            self.ants.set_root_velocities(self.state_0, self.default_root_velocities)
+            self.ants.set_attribute("joint_qd", self.state_0, self.default_dof_velocities)
 
     def render(self):
         if self.renderer is None:

@@ -139,6 +139,7 @@ class ArticulationView:
     def __init__(self, model: Model, pattern: str, include_free_joint=False, env_offsets=None):
         self.model = model
         self.device = model.device
+        self.include_free_joint = include_free_joint
 
         articulation_ids = []
         for id, key in enumerate(model.articulation_key):
