@@ -81,7 +81,7 @@ class Example:
         # ===========================================================
         # create articulation view
         # ===========================================================
-        self.ants = ArticulationView(self.model, "/World/envs/*/Robot/torso", env_offsets=env_offsets)
+        self.ants = ArticulationView(self.model, "/World/envs/*/Robot/torso")
 
         print(f"articulation count: {self.ants.count}")
         print(f"link_count:         {self.ants.link_count}")
@@ -93,6 +93,9 @@ class Example:
         print(f"joint_act shape:    {self.ants.get_attribute_shape('joint_act')}")
         print(f"body_q shape:       {self.ants.get_attribute_shape('body_q')}")
         print(f"body_qd shape:      {self.ants.get_attribute_shape('body_qd')}")
+
+        self.default_root_transforms = wp.to_torch(self.ants.get_root_transforms(self.model)).clone()
+        self.default_root_transforms[:, 2] = 0.8
 
         self.use_cuda_graph = wp.get_device().is_cuda
         if self.use_cuda_graph:
@@ -134,10 +137,7 @@ class Example:
         # ===========================================================
         # set root transforms
         # ===========================================================
-        root_transforms = torch.zeros((self.num_envs, 7), dtype=torch.float32)
-        root_transforms[:, 2] = 0.8  # height along z-axis
-        root_transforms[:, 6] = 1.0  # quaternion identity
-        self.ants.set_root_transforms(self.state_0, root_transforms)
+        self.ants.set_root_transforms(self.state_0, self.default_root_transforms)
 
         # ===========================================================
         # set root velocities

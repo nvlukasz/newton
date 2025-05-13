@@ -62,7 +62,7 @@ class Example:
         # =======================
         # get cartpole view
         # =======================
-        self.cartpoles = ArticulationView(self.model, "/World/envs/*/Robot", env_offsets=env_offsets)
+        self.cartpoles = ArticulationView(self.model, "/World/envs/*/Robot")
 
         # print(self.cartpoles.get_attribute("body_q", self.state_0))
         # print(self.cartpoles.get_attribute("body_qd", self.state_0))

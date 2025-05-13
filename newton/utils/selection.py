@@ -290,7 +290,10 @@ class ArticulationView:
         wp.launch(set_mask_kernel, dim=indices.shape, inputs=[indices, self._articulation_mask], device=self.device)
 
         # env offsets
-        self.env_offsets = wp.array(env_offsets, dtype=wp.vec3, device=self.device)
+        if env_offsets is None:
+            self.env_offsets = wp.zeros(count, dtype=wp.vec3, device=self.device)
+        else:
+            self.env_offsets = wp.array(env_offsets, shape=count, dtype=wp.vec3, device=self.device)
 
         # set some counting properties
         self._count = count
