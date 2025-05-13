@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import math
+# import math
 
 import torch
 import warp as wp
@@ -37,7 +37,7 @@ class Example:
             num_envs,
             (5.0, 5.0, 0.0),
             # USD importer args
-            collapse_fixed_joints=False,
+            collapse_fixed_joints=True,
         )
 
         up_axis = stage_info.get("up_axis") or "Z"
@@ -50,8 +50,14 @@ class Example:
         # pprint(self.model.articulation_key)
         # pprint(self.model.body_key)
         # pprint(self.model.joint_key)
+        # pprint(self.model.shape_key)
+        # print("Shape | Path")
+        # for i, key in enumerate(self.model.shape_key):
+        #     print(f"{i:5d} | {key}")
+        # pprint(builder.shape_collision_group_map)
 
         self.solver = newton.solvers.MuJoCoSolver(self.model)
+        # self.solver = newton.solvers.XPBDSolver(self.model)
 
         self.renderer = None
         if stage_path:
@@ -97,6 +103,12 @@ class Example:
         self.default_root_transforms = wp.to_torch(self.ants.get_root_transforms(self.model)).clone()
         self.default_root_transforms[:, 2] = 0.8
 
+        joint_limit_lower = wp.to_torch(self.ants.get_attribute("joint_limit_lower", self.model))
+        joint_limit_upper = wp.to_torch(self.ants.get_attribute("joint_limit_upper", self.model))
+        self.default_dof_positions = 0.5 * (joint_limit_lower + joint_limit_upper)
+        # print(joint_limit_lower)
+        # print(joint_limit_upper)
+
         self.use_cuda_graph = wp.get_device().is_cuda
         if self.use_cuda_graph:
             with wp.ScopedCapture() as capture:
@@ -106,6 +118,11 @@ class Example:
     def simulate(self):
         for _ in range(self.sim_substeps):
             self.state_0.clear_forces()
+
+            # explicit collisions needed without MuJoCo solver
+            if not isinstance(self.solver, newton.solvers.MuJoCoSolver):
+                newton.collision.collide(self.model, self.state_0)
+
             self.solver.step(self.model, self.state_0, self.state_1, self.control, None, self.sim_dt)
             self.state_0, self.state_1 = self.state_1, self.state_0
 
@@ -135,22 +152,21 @@ class Example:
 
     def reset(self):
         # ===========================================================
-        # set root transforms
+        # set transforms
         # ===========================================================
         self.ants.set_root_transforms(self.state_0, self.default_root_transforms)
+        self.ants.set_attribute("joint_q", self.state_0, self.default_dof_positions)
+        self.ants.eval_fk(self.state_0)
 
         # ===========================================================
-        # set root velocities
+        # set velocities
         # ===========================================================
         root_velocities = torch.zeros((self.num_envs, 6), dtype=torch.float32)
-        root_velocities[:, 0] = 2 * math.pi  # rotate about x-axis
+        # root_velocities[:, 0] = 2 * math.pi  # rotate about x-axis
         root_velocities[:, 5] = 5.0  # move up z-axis
+        dof_velocities = torch.zeros((self.num_envs, 8), dtype=torch.float32)
         self.ants.set_root_velocities(self.state_0, root_velocities)
-
-        # ===========================================================
-        # update transforms of all links
-        # ===========================================================
-        self.ants.eval_fk(self.state_0)
+        self.ants.set_attribute("joint_qd", self.state_0, dof_velocities)
 
     def render(self):
         if self.renderer is None:

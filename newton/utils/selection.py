@@ -277,6 +277,11 @@ class ArticulationView:
         self.attrib_shapes["joint_act"] = (count, model.joint_act.size // count)
         self.attrib_slices["joint_act"] = (slice(0, count), slice(int(joint_axis_begin), int(joint_axis_end)))
 
+        self.attrib_shapes["joint_limit_lower"] = (count, model.joint_act.size // count)
+        self.attrib_slices["joint_limit_lower"] = (slice(0, count), slice(int(joint_axis_begin), int(joint_axis_end)))
+        self.attrib_shapes["joint_limit_upper"] = (count, model.joint_act.size // count)
+        self.attrib_slices["joint_limit_upper"] = (slice(0, count), slice(int(joint_axis_begin), int(joint_axis_end)))
+
         body_begin = links[0]
         body_end = links[-1] + 1
         self.attrib_shapes["body_q"] = (count, model.body_q.shape[0] // count)
