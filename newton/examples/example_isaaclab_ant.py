@@ -76,7 +76,7 @@ class Example:
         # ===========================================================
         # create articulation view
         # ===========================================================
-        self.ants = ArticulationView(self.model, "/World/envs/*/Robot/torso", include_free_joint=True)
+        self.ants = ArticulationView(self.model, "/World/envs/*/Robot/torso", include_free_joint=False)
 
         print(f"articulation count: {self.ants.count}")
         print(f"link_count:         {self.ants.link_count}")
@@ -110,11 +110,11 @@ class Example:
             # dof transforms
             self.default_dof_transforms = default_dof_transforms
             # root velocities
-            self.default_root_velocities = torch.zeros((self.num_envs, 6), dtype=torch.float32)
+            self.default_root_velocities = wp.to_torch(self.ants.get_root_velocities(self.model)).clone()
             self.default_root_velocities[:, 2] = 0.5 * math.pi  # rotate about z-axis
             self.default_root_velocities[:, 5] = 5.0  # move up z-axis
             # dof velocities
-            self.default_dof_velocities = torch.zeros((self.num_envs, 8), dtype=torch.float32)
+            self.default_dof_velocities = wp.to_torch(self.ants.get_attribute("joint_qd", self.model)).clone()
 
         self.use_cuda_graph = wp.get_device().is_cuda
         if self.use_cuda_graph:
