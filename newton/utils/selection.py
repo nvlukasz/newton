@@ -239,9 +239,8 @@ class ArticulationView:
         self.articulation_indices = wp.array(articulation_ids, dtype=int, device=self.device)
 
         # create articulation mask
-        self._articulation_mask = wp.zeros(model.articulation_count, dtype=bool)
-        indices = wp.array(articulation_ids, dtype=int, device=self.device)
-        wp.launch(set_mask_kernel, dim=indices.shape, inputs=[indices, self._articulation_mask], device=self.device)
+        self.articulation_mask = wp.zeros(model.articulation_count, dtype=bool)
+        wp.launch(set_mask_kernel, dim=count, inputs=[self.articulation_indices, self.articulation_mask], device=self.device)
 
         # env offsets
         if env_offsets is None:
@@ -259,10 +258,6 @@ class ArticulationView:
 
         self._root_transforms = None
         self._root_velocities = None
-
-    @property
-    def articulation_mask(self) -> wp.array(dtype=bool):
-        return self._articulation_mask
 
     @property
     def count(self) -> int:
