@@ -155,17 +155,18 @@ class Example:
         if self.ants.include_free_joint:
             # set root and dof transforms together
             self.ants.set_attribute("joint_q", self.state_0, self.default_transforms)
-            self.ants.eval_fk(self.state_0)
             # set root and dof velocities together
             self.ants.set_attribute("joint_qd", self.state_0, self.default_velocities)
         else:
             # set root and dof transforms separately
             self.ants.set_root_transforms(self.state_0, self.default_root_transforms)
             self.ants.set_attribute("joint_q", self.state_0, self.default_dof_transforms)
-            self.ants.eval_fk(self.state_0)
             # set root and dof velocities separately
             self.ants.set_root_velocities(self.state_0, self.default_root_velocities)
             self.ants.set_attribute("joint_qd", self.state_0, self.default_dof_velocities)
+
+        if not isinstance(self.solver, newton.solvers.MuJoCoSolver):
+            self.ants.eval_fk(self.state_0)
 
     def render(self):
         if self.renderer is None:

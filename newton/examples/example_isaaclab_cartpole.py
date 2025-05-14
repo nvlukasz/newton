@@ -76,7 +76,9 @@ class Example:
         pole_angles = math.pi / 16.0 - math.pi / 8.0 * torch.rand(num_envs)
         joint_states = torch.stack([cart_positions, pole_angles], dim=1)
         self.cartpoles.set_attribute("joint_q", self.state_0, joint_states)
-        self.cartpoles.eval_fk(self.state_0)
+
+        if not isinstance(self.solver, newton.solvers.MuJoCoSolver):
+            self.cartpoles.eval_fk(self.state_0)
 
         self.renderer = None
         if stage_path:
