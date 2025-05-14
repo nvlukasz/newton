@@ -30,7 +30,9 @@ def set_mask_kernel(indices: wp.array(dtype=int), mask: wp.array(dtype=bool)):
 
 
 @wp.kernel
-def set_mask_indexed_kernel(indices: wp.array(dtype=int), indices_indices: wp.array(dtype=int), mask: wp.array(dtype=bool)):
+def set_mask_indexed_kernel(
+    indices: wp.array(dtype=int), indices_indices: wp.array(dtype=int), mask: wp.array(dtype=bool)
+):
     tid = wp.tid()
     mask[indices[indices_indices[tid]]] = True
 
@@ -240,7 +242,9 @@ class ArticulationView:
 
         # create articulation mask
         self.articulation_mask = wp.zeros(model.articulation_count, dtype=bool)
-        wp.launch(set_mask_kernel, dim=count, inputs=[self.articulation_indices, self.articulation_mask], device=self.device)
+        wp.launch(
+            set_mask_kernel, dim=count, inputs=[self.articulation_indices, self.articulation_mask], device=self.device
+        )
 
         # env offsets
         if env_offsets is None:
