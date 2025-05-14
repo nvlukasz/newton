@@ -70,7 +70,7 @@ class Example:
         self.sim_substeps = 10
         self.sim_dt = self.frame_dt / self.sim_substeps
 
-        self.next_pop = 0.0
+        self.next_reset = 0.0
 
         # ===========================================================
         # create articulation view
@@ -115,6 +115,15 @@ class Example:
             # dof velocities
             self.default_dof_velocities = wp.to_torch(self.ants.get_attribute("joint_qd", self.model)).clone()
 
+        # create disjoint index groups to alternate between
+        all_indices = torch.arange(num_envs, dtype=torch.int32)
+        self.indices_0 = all_indices[::2]
+        self.indices_1 = all_indices[1::2]
+
+        # reset all
+        self.reset()
+        self.next_reset = self.sim_time + 2.0
+
         self.use_cuda_graph = wp.get_device().is_cuda
         if self.use_cuda_graph:
             with wp.ScopedCapture() as capture:
@@ -133,9 +142,10 @@ class Example:
             self.state_0, self.state_1 = self.state_1, self.state_0
 
     def step(self):
-        if self.sim_time >= self.next_pop:
-            self.reset()
-            self.next_pop = self.sim_time + 3.0
+        if self.sim_time >= self.next_reset:
+            self.reset(self.indices_0)
+            self.next_reset = self.sim_time + 2.0
+            self.indices_0, self.indices_1 = self.indices_1, self.indices_0
 
         # =========================
         # apply random controls
@@ -151,22 +161,22 @@ class Example:
                 self.simulate()
         self.sim_time += self.frame_dt
 
-    def reset(self):
+    def reset(self, indices=None):
         if self.ants.include_free_joint:
             # set root and dof transforms together
-            self.ants.set_attribute("joint_q", self.state_0, self.default_transforms)
+            self.ants.set_attribute("joint_q", self.state_0, self.default_transforms, indices=indices)
             # set root and dof velocities together
-            self.ants.set_attribute("joint_qd", self.state_0, self.default_velocities)
+            self.ants.set_attribute("joint_qd", self.state_0, self.default_velocities, indices=indices)
         else:
             # set root and dof transforms separately
-            self.ants.set_root_transforms(self.state_0, self.default_root_transforms)
-            self.ants.set_attribute("joint_q", self.state_0, self.default_dof_transforms)
+            self.ants.set_root_transforms(self.state_0, self.default_root_transforms, indices=indices)
+            self.ants.set_attribute("joint_q", self.state_0, self.default_dof_transforms, indices=indices)
             # set root and dof velocities separately
-            self.ants.set_root_velocities(self.state_0, self.default_root_velocities)
-            self.ants.set_attribute("joint_qd", self.state_0, self.default_dof_velocities)
+            self.ants.set_root_velocities(self.state_0, self.default_root_velocities, indices=indices)
+            self.ants.set_attribute("joint_qd", self.state_0, self.default_dof_velocities, indices=indices)
 
         if not isinstance(self.solver, newton.solvers.MuJoCoSolver):
-            self.ants.eval_fk(self.state_0)
+            self.ants.eval_fk(self.state_0, indices=indices)
 
     def render(self):
         if self.renderer is None:

@@ -15,6 +15,7 @@
 
 from fnmatch import fnmatch
 
+import numpy as np
 import warp as wp
 from warp.types import is_array
 
@@ -29,6 +30,12 @@ def set_mask_kernel(indices: wp.array(dtype=int), mask: wp.array(dtype=bool)):
 
 
 @wp.kernel
+def set_mask_indexed_kernel(indices: wp.array(dtype=int), indices_indices: wp.array(dtype=int), mask: wp.array(dtype=bool)):
+    tid = wp.tid()
+    mask[indices[indices_indices[tid]]] = True
+
+
+@wp.kernel
 def set_articulation_root_transforms_kernel(
     articulation_indices: wp.array(dtype=int),
     articulation_start: wp.array(dtype=int),
@@ -36,16 +43,18 @@ def set_articulation_root_transforms_kernel(
     joint_q_start: wp.array(dtype=int),
     root_transforms: wp.array(dtype=wp.transform),
     env_offsets: wp.array(dtype=wp.vec3),
+    env_indices: wp.array(dtype=int),
     # outputs
     joint_q: wp.array(dtype=float),
     joint_X_p: wp.array(dtype=wp.transform),
 ):
     tid = wp.tid()
-    root_pose = root_transforms[tid]
-    articulation = articulation_indices[tid]
+    idx = env_indices[tid]
+    root_pose = root_transforms[idx]
+    articulation = articulation_indices[idx]
     joint_start = articulation_start[articulation]
     q_start = joint_q_start[joint_start]
-    env_offset = env_offsets[tid]
+    env_offset = env_offsets[idx]
 
     # apply env offset
     root_pose = wp.transform(
@@ -99,14 +108,16 @@ def set_articulation_root_velocities_kernel(
     joint_type: wp.array(dtype=int),
     joint_qd_start: wp.array(dtype=int),
     root_vels: wp.array(dtype=wp.spatial_vector),
+    env_indices: wp.array(dtype=int),
     # outputs
     joint_qd: wp.array(dtype=float),
 ):
     tid = wp.tid()
-    articulation = articulation_indices[tid]
+    idx = env_indices[tid]
+    articulation = articulation_indices[idx]
     joint_start = articulation_start[articulation]
     qd_start = joint_qd_start[joint_start]
-    root_vel = root_vels[tid]
+    root_vel = root_vels[idx]
 
     if joint_type[joint_start] == newton.JOINT_FREE:
         for i in range(6):
@@ -238,6 +249,8 @@ class ArticulationView:
         else:
             self.env_offsets = wp.array(env_offsets, shape=count, dtype=wp.vec3, device=self.device)
 
+        self.all_indices = wp.array(np.arange(count, dtype=np.int32), device=self.device)
+
         # set some counting properties
         self._count = count
         self._link_count = len(links)
@@ -282,12 +295,17 @@ class ArticulationView:
         else:
             return attrib
 
-    def set_attribute(self, name: str, target: Model | State | Control, values):
+    def set_attribute(self, name: str, target: Model | State | Control, values, indices=None):
         attrib = getattr(target, name)
         attrib = attrib.reshape(self.attrib_shapes[name])
         attrib = attrib[*self.attrib_slices[name]]
         if not is_array(values):
             values = wp.array(values, dtype=attrib.dtype, shape=attrib.shape, device=self.device)
+        if indices is not None:
+            if not is_array(indices):
+                indices = wp.array(indices, dtype=int, device=self.device)
+            attrib = wp.indexedarray(attrib, [indices])
+            values = wp.indexedarray(values, [indices])
         wp.copy(attrib, values)
 
     # convenience wrappers to align with legacy tensor API
@@ -333,7 +351,7 @@ class ArticulationView:
 
         return self._root_transforms
 
-    def set_root_transforms(self, target: Model | State, root_transforms: wp.array):
+    def set_root_transforms(self, target: Model | State, root_transforms: wp.array, indices=None):
         """
         Set the root transforms of the articulations.
         Call `eval_fk()` to apply changes to all articulation links.
@@ -348,9 +366,15 @@ class ArticulationView:
 
         assert len(root_transforms) == self.count, "Root poses should be provided for each articulation"
 
+        if indices is not None:
+            if not is_array(indices):
+                indices = wp.array(indices, dtype=int, device=self.device)
+        else:
+            indices = self.all_indices
+
         wp.launch(
             set_articulation_root_transforms_kernel,
-            self.count,
+            indices.size,
             inputs=[
                 self.articulation_indices,
                 self.model.articulation_start,
@@ -358,6 +382,7 @@ class ArticulationView:
                 self.model.joint_q_start,
                 root_transforms,
                 self.env_offsets,
+                indices,
             ],
             outputs=[
                 target.joint_q,
@@ -397,7 +422,7 @@ class ArticulationView:
 
         return self._root_velocities
 
-    def set_root_velocities(self, target: Model | State, root_vels: wp.array):
+    def set_root_velocities(self, target: Model | State, root_vels: wp.array, indices=None):
         """
         Set the root velocities of the articulations.
 
@@ -411,15 +436,22 @@ class ArticulationView:
 
         assert len(root_vels) == self.count, "Root velocities should be provided for each articulation"
 
+        if indices is not None:
+            if not is_array(indices):
+                indices = wp.array(indices, dtype=int, device=self.device)
+        else:
+            indices = self.all_indices
+
         wp.launch(
             set_articulation_root_velocities_kernel,
-            self.count,
+            indices.size,
             inputs=[
                 self.articulation_indices,
                 self.model.articulation_start,
                 self.model.joint_type,
                 self.model.joint_qd_start,
                 root_vels,
+                indices,
             ],
             outputs=[
                 target.joint_qd,
@@ -427,5 +459,15 @@ class ArticulationView:
             device=self.device,
         )
 
-    def eval_fk(self, target: Model | State):
-        newton.core.articulation.eval_fk(self.model, target.joint_q, target.joint_qd, self.articulation_mask, target)
+    def eval_fk(self, target: Model | State, indices=None):
+        if indices is not None:
+            # create a custom mask for builtin eval_fk()
+            # TODO: something more efficient?
+            if not is_array(indices):
+                indices = wp.array(indices, dtype=int, device=self.device)
+            mask = wp.zeros(self.model.articulation_count, dtype=bool, device=self.device)
+            wp.launch(set_mask_indexed_kernel, dim=indices.size, inputs=[self.articulation_indices, indices, mask])
+        else:
+            mask = self.articulation_mask
+
+        newton.core.articulation.eval_fk(self.model, target.joint_q, target.joint_qd, mask, target)
