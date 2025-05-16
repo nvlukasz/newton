@@ -37,6 +37,7 @@ class Example:
             (2.0, 3.0, 0.0),
             # USD importer args
             collapse_fixed_joints=True,
+            joint_ordering="dfs",
         )
 
         up_axis = stage_info.get("up_axis") or newton.Axis.Z
