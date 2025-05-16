@@ -163,6 +163,9 @@ class Example:
         self.sim_time += self.frame_dt
 
     def reset(self, indices=None):
+        # ==============================
+        # set transforms and velocities
+        # ==============================
         if self.ants.include_free_joint:
             # set root and dof transforms together
             self.ants.set_attribute("joint_q", self.state_0, self.default_transforms, indices=indices)
