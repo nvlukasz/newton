@@ -36,9 +36,7 @@ def replicate_environment(source, prototype_path, path_pattern, num_envs, env_sp
         (ModelBuilder, dict, np.array): The resulting ModelBuilder containing all replicated environments, a dictionary with USD stage information, and a NumPy array of env offsets.
     """
 
-    up_axis_id = newton.Axis.from_string(up_axis)
-
-    builder = newton.ModelBuilder(up_axis=up_axis_id)
+    builder = newton.ModelBuilder(up_axis=up_axis)
 
     # first, load everything except the prototype env
     stage_info = newton.utils.parse_usd(
@@ -54,7 +52,7 @@ def replicate_environment(source, prototype_path, path_pattern, num_envs, env_sp
         print(f"WARNING: up_axis '{up_axis}' does not match USD stage up_axis '{stage_up_axis}'")
 
     # load just the prototype env
-    prototype_builder = newton.ModelBuilder(up_axis=up_axis_id)
+    prototype_builder = newton.ModelBuilder(up_axis=up_axis)
     newton.utils.parse_usd(
         source,
         prototype_builder,
