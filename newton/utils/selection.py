@@ -223,12 +223,12 @@ class ArticulationView:
         joint_axis_begin = joint_axis_start[joint_begin]
         # joint_axis_end = joint_axis_start[joint_end]
         joint_axis_end = joint_axis_start[joint_last] + joint_axis_dim[joint_last][0] + joint_axis_dim[joint_last][1]
-        self.attrib_shapes["joint_act"] = (count, model.joint_act.size // count)
-        self.attrib_slices["joint_act"] = (slice(0, count), slice(int(joint_axis_begin), int(joint_axis_end)))
+        self.attrib_shapes["joint_target"] = (count, model.joint_target.size // count)
+        self.attrib_slices["joint_target"] = (slice(0, count), slice(int(joint_axis_begin), int(joint_axis_end)))
 
-        self.attrib_shapes["joint_limit_lower"] = (count, model.joint_act.size // count)
+        self.attrib_shapes["joint_limit_lower"] = (count, model.joint_limit_lower.size // count)
         self.attrib_slices["joint_limit_lower"] = (slice(0, count), slice(int(joint_axis_begin), int(joint_axis_end)))
-        self.attrib_shapes["joint_limit_upper"] = (count, model.joint_act.size // count)
+        self.attrib_shapes["joint_limit_upper"] = (count, model.joint_limit_upper.size // count)
         self.attrib_slices["joint_limit_upper"] = (slice(0, count), slice(int(joint_axis_begin), int(joint_axis_end)))
 
         body_begin = links[0]
