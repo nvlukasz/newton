@@ -39,7 +39,7 @@ class Example:
             collapse_fixed_joints=True,
         )
 
-        up_axis = stage_info.get("up_axis") or "Z"
+        up_axis = stage_info.get("up_axis") or newton.Axis.Z
 
         # finalize model
         self.model = builder.finalize()
@@ -53,7 +53,7 @@ class Example:
                 path=stage_path,
                 model=self.model,
                 scaling=2.0,
-                up_axis=up_axis,
+                up_axis=str(up_axis),
                 screen_width=1280,
                 screen_height=720,
                 camera_pos=(0, 4, 30),
@@ -84,7 +84,7 @@ class Example:
 
         print(f"joint_q shape:      {self.ants.get_attribute_shape('joint_q')}")
         print(f"joint_qd shape:     {self.ants.get_attribute_shape('joint_qd')}")
-        print(f"joint_act shape:    {self.ants.get_attribute_shape('joint_act')}")
+        print(f"joint_target shape: {self.ants.get_attribute_shape('joint_target')}")
         print(f"body_q shape:       {self.ants.get_attribute_shape('body_q')}")
         print(f"body_qd shape:      {self.ants.get_attribute_shape('body_qd')}")
 
@@ -150,9 +150,9 @@ class Example:
         # =========================
         # apply random controls
         # =========================
-        act_shape = self.ants.get_attribute_shape("joint_act")
+        act_shape = self.ants.get_attribute_shape("joint_target")
         joint_forces = 100.0 - 200.0 * torch.rand(act_shape)
-        self.ants.set_attribute("joint_act", self.control, joint_forces)
+        self.ants.set_attribute("joint_target", self.control, joint_forces)
 
         with wp.ScopedTimer("step", active=False):
             if self.use_cuda_graph:

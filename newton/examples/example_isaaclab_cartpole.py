@@ -39,7 +39,7 @@ class Example:
             collapse_fixed_joints=True,
         )
 
-        up_axis = stage_info.get("up_axis") or "Z"
+        up_axis = stage_info.get("up_axis") or newton.Axis.Z
 
         # finalize model
         self.model = builder.finalize()
@@ -67,7 +67,7 @@ class Example:
         # print(self.cartpoles.get_attribute("body_qd", self.state_0))
         # print(self.cartpoles.get_attribute("joint_q", self.state_0))
         # print(self.cartpoles.get_attribute("joint_qd", self.state_0))
-        # print(self.cartpoles.get_attribute("joint_act", self.control))
+        # print(self.cartpoles.get_attribute("joint_target", self.control))
 
         # =========================
         # randomize initial state
@@ -86,7 +86,7 @@ class Example:
                 path=stage_path,
                 model=self.model,
                 scaling=1.0,
-                up_axis=up_axis,
+                up_axis=str(up_axis),
                 screen_width=1280,
                 screen_height=720,
                 camera_pos=(0, 3, 10),
@@ -115,7 +115,7 @@ class Example:
         # =========================
         joint_forces = torch.zeros((self.num_envs, 2))
         joint_forces[:, 0] = torch.where(joint_states[:, 0] > 0, -100, 100)
-        self.cartpoles.set_attribute("joint_act", self.control, joint_forces)
+        self.cartpoles.set_attribute("joint_target", self.control, joint_forces)
 
         # simulate
         with wp.ScopedTimer("step", active=False):
