@@ -23,6 +23,70 @@ import newton.core.articulation
 from newton import Control, Model, State
 
 
+class AttributeRegistry:
+    def __init__(self):
+        # builtin attributes grouped by indexing mode
+        builtin_attribs = {
+            "joint": {
+                "joint_type",
+                "joint_parent",
+                "joint_child",
+                "joint_ancestor",
+                "joint_X_p",
+                "joint_X_c",
+                "joint_axis_start",
+                "joint_axis_dim",
+                "joint_enabled",
+                "joint_twist_lower",
+                "joint_twist_upper",
+            },
+            "joint_coord": {
+                "joint_q",
+            },
+            "joint_dof": {
+                "joint_qd",
+                "joint_f",
+                "joint_armature",
+            },
+            "joint_axis": {
+                "joint_target",
+                "joint_axis",
+                "joint_target_ke",
+                "joint_target_kd",
+                "joint_axis_mode",
+                "joint_limit_lower",
+                "joint_limit_upper",
+                "joint_limit_ke",
+                "joint_limit_kd",
+            },
+            "body": {
+                "body_q",
+                "body_qd",
+                "body_com",
+                "body_inertia",
+                "body_inv_inertia",
+                "body_mass",
+                "body_inv_mass",
+                "body_f",
+            },
+        }
+
+        # map attribute names to indexing groups
+        self._indexing_map: dict[str: str] = {}
+        for group, names in builtin_attribs.items():
+            for name in names:
+                self.register_attribute(name, group)
+
+    def register_attribute(self, name: str, group: str):
+        self._indexing_map[name] = group
+    
+    def get_indexing_group(self, attribute_name: str):
+        return self._indexing_map[attribute_name]
+
+
+attribute_registry = AttributeRegistry()
+
+
 @wp.kernel
 def set_mask_kernel(indices: wp.array(dtype=int), mask: wp.array(dtype=bool)):
     tid = wp.tid()
@@ -163,6 +227,7 @@ class ArticulationView:
         if count == 0:
             raise KeyError("No matching articulations")
 
+        # FIXME: avoid this readback?
         articulation_start = model.articulation_start.numpy()
         joint_type = model.joint_type.numpy()
         joint_parent = model.joint_parent.numpy()
@@ -172,25 +237,18 @@ class ArticulationView:
         joint_q_start = model.joint_q_start.numpy()
         joint_qd_start = model.joint_qd_start.numpy()
 
-        # FIXME: this assumes homogeneous envs with one selected articulation per env
+        # FIXME:
+        # - this assumes homogeneous envs with one selected articulation per env
+        # - we're going to have problems if there are any bodies or joints in the "global" env
 
         arti_0 = articulation_ids[0]
 
         joint_begin = articulation_start[arti_0]
-        joint_end = articulation_start[arti_0 + 1]
+        joint_end = articulation_start[arti_0 + 1]  # FIXME: is this always correct?
         joint_last = joint_end - 1
-
-        # FIXME: is this always correct?
-        num_joints = joint_end - joint_begin
-        print(f"  num_joints: {num_joints}")
 
         links = {}
         for joint_id in range(joint_begin, joint_end):
-            joint_name = model.joint_key[joint_id]
-            print(f"    joint {joint_name}:")
-            print(f"      bodies: {joint_parent[joint_id]} -> {joint_child[joint_id]}")
-            print(f"      axis_start: {joint_axis_start[joint_id]}")
-            print(f"      axis_dim: {joint_axis_dim[joint_id]}")
             if joint_parent[joint_id] != -1:
                 links[int(joint_parent[joint_id])] = None
             if joint_child[joint_id] != -1:
@@ -198,45 +256,32 @@ class ArticulationView:
 
         links = sorted(links.keys())
         num_links = len(links)
-        print(f"  num_links: {num_links}, {links}")
-        for body_id in links:
-            print(f"    {model.body_key[body_id]}")
 
-        self.attrib_shapes = {}
-        self.attrib_slices = {}
+        # print stuff for debugging
+        if True:
+            print(f"num_joints: {joint_end - joint_begin}")
+            for joint_id in range(joint_begin, joint_end):
+                joint_name = model.joint_key[joint_id]
+                print(f"  joint {joint_name}:")
+                print(f"    bodies: {joint_parent[joint_id]} -> {joint_child[joint_id]}")
+                print(f"    axis_start: {joint_axis_start[joint_id]}")
+                print(f"    axis_dim: {joint_axis_dim[joint_id]}")
+            print(f"num_links: {num_links}, {links}")
+            for body_id in links:
+                print(f"  {model.body_key[body_id]}")
 
         # if the root joint is a free joint, skip it
         if joint_type[joint_begin] == newton.JOINT_FREE and not include_free_joint:
             joint_begin += 1
 
-        self.attrib_shapes["joint_q"] = (count, model.joint_q.size // count)
-        self.attrib_slices["joint_q"] = (
-            slice(0, count),
-            slice(int(joint_q_start[joint_begin]), int(joint_q_start[joint_end])),
-        )
-        self.attrib_shapes["joint_qd"] = (count, model.joint_qd.size // count)
-        self.attrib_slices["joint_qd"] = (
-            slice(0, count),
-            slice(int(joint_qd_start[joint_begin]), int(joint_qd_start[joint_end])),
-        )
-
+        joint_coord_begin = joint_q_start[joint_begin]
+        joint_coord_end = joint_q_start[joint_end]
+        joint_dof_begin = joint_qd_start[joint_begin]
+        joint_dof_end = joint_qd_start[joint_end]
         joint_axis_begin = joint_axis_start[joint_begin]
-        # joint_axis_end = joint_axis_start[joint_end]
         joint_axis_end = joint_axis_start[joint_last] + joint_axis_dim[joint_last][0] + joint_axis_dim[joint_last][1]
-        self.attrib_shapes["joint_target"] = (count, model.joint_target.size // count)
-        self.attrib_slices["joint_target"] = (slice(0, count), slice(int(joint_axis_begin), int(joint_axis_end)))
-
-        self.attrib_shapes["joint_limit_lower"] = (count, model.joint_limit_lower.size // count)
-        self.attrib_slices["joint_limit_lower"] = (slice(0, count), slice(int(joint_axis_begin), int(joint_axis_end)))
-        self.attrib_shapes["joint_limit_upper"] = (count, model.joint_limit_upper.size // count)
-        self.attrib_slices["joint_limit_upper"] = (slice(0, count), slice(int(joint_axis_begin), int(joint_axis_end)))
-
         body_begin = links[0]
         body_end = links[-1] + 1
-        self.attrib_shapes["body_q"] = (count, model.body_q.shape[0] // count)
-        self.attrib_slices["body_q"] = (slice(0, count), slice(body_begin, body_end))
-        self.attrib_shapes["body_qd"] = (count, model.body_qd.shape[0] // count)
-        self.attrib_slices["body_qd"] = (slice(0, count), slice(body_begin, body_end))
 
         self.articulation_indices = wp.array(articulation_ids, dtype=int, device=self.device)
 
@@ -255,49 +300,69 @@ class ArticulationView:
         self.all_indices = wp.array(np.arange(count, dtype=np.int32), device=self.device)
 
         # set some counting properties
-        self._count = count
-        self._link_count = len(links)
-        self._joint_count = joint_end - joint_begin
-        self._joint_axis_count = joint_axis_end - joint_axis_begin
+        self.count = count
+        self.link_count = len(links)
+        self.joint_count = joint_end - joint_begin
+        self.joint_coord_count = joint_coord_end - joint_coord_begin
+        self.joint_dof_count = joint_dof_end - joint_dof_begin
+        self.joint_axis_count = joint_axis_end - joint_axis_begin
+
+        # slices by indexing group
+        self._slices = {
+            "joint": slice(int(joint_begin), int(joint_end)),
+            "joint_coord": slice(int(joint_coord_begin), int(joint_coord_end)),
+            "joint_dof": slice(int(joint_dof_begin), int(joint_dof_end)),
+            "joint_axis": slice(int(joint_axis_begin), int(joint_axis_end)),
+            "body": slice(int(body_begin), int(body_end)),
+        }
+
+        self._attrib_cache = {}
 
         self._root_transforms = None
         self._root_velocities = None
 
-    @property
-    def count(self) -> int:
-        return self._count
+    def _get_cached_attribute(self, name: str, source: Model | State | Control):
+        # cache the reshaped attribute array to avoid repeated overhead
+        key = (source, name)
+        attrib = self._attrib_cache.get(key)
+        if attrib is None:
+            # get the attribute array
+            attrib = getattr(source, name)
+            assert isinstance(attrib, wp.array)
 
-    @property
-    def link_count(self) -> int:
-        return self._link_count
+            # reshape with batch dim at front
+            assert attrib.shape[0] % self.count == 0
+            batched_shape = (self.count, attrib.shape[0] // self.count, *attrib.shape[1:])
 
-    @property
-    def joint_count(self) -> int:
-        return self._joint_count
+            # get attribute slice
+            attrib_group = attribute_registry.get_indexing_group(name)
+            attrib_slice = self._slices[attrib_group]
 
-    @property
-    def joint_axis_count(self) -> int:
-        return self._joint_axis_count
+            # create strided array
+            attrib = attrib.reshape(batched_shape)
+            attrib = attrib[:, attrib_slice]
 
-    def get_attribute_shape(self, name: str):
-        shape = []
-        for s in self.attrib_slices[name]:
-            shape.append(s.stop - s.start)
-        return tuple(shape)
+            self._attrib_cache[key] = attrib
+
+        return attrib
+
+    def get_attribute_shape(self, name: str, source: Model | State | Control | None = None):
+        if source is None:
+            # most attributes are defined in the Model, with some exceptions
+            if not hasattr(self.model, name):
+                raise KeyError(f"Attribute '{name}' not found in Model, please specify source (e.g., State or Control instance)")
+            source = self.model
+        return self._get_cached_attribute(name, source).shape
 
     def get_attribute(self, name: str, source: Model | State | Control, copy=False):
-        attrib = getattr(source, name)
-        attrib = attrib.reshape(self.attrib_shapes[name])
-        attrib = attrib[*self.attrib_slices[name]]
+        attrib = self._get_cached_attribute(name, source)
         if copy:
             return wp.clone(attrib)
         else:
             return attrib
 
     def set_attribute(self, name: str, target: Model | State | Control, values, indices=None):
-        attrib = getattr(target, name)
-        attrib = attrib.reshape(self.attrib_shapes[name])
-        attrib = attrib[*self.attrib_slices[name]]
+        attrib = self._get_cached_attribute(name, target)
         if not is_array(values):
             values = wp.array(values, dtype=attrib.dtype, shape=attrib.shape, device=self.device)
         if indices is not None:
