@@ -30,7 +30,7 @@ class Example:
         self.num_envs = num_envs
 
         builder, stage_info, env_offsets = replicate_environment(
-            newton.examples.get_asset("ant_prototype.usd"),
+            newton.examples.get_asset("ant_prototype.usda"),
             "/World/envs/env_0",
             "/World/envs/env_{}",
             num_envs,
