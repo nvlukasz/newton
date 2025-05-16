@@ -26,7 +26,7 @@ from newton import Control, Model, State
 class AttributeRegistry:
     def __init__(self):
         # look up indexing mode for known attributes
-        self._indexing_mode: dict[str: str] = {}
+        self._indexing_mode: dict[str:str] = {}
 
         # addressable by joint id
         self.register_attribute("joint_type", "joint")
@@ -343,7 +343,9 @@ class ArticulationView:
         if source is None:
             # most attributes are defined in the Model, with some exceptions
             if not hasattr(self.model, name):
-                raise KeyError(f"Attribute '{name}' not found in Model, please specify source (e.g., State or Control instance)")
+                raise KeyError(
+                    f"Attribute '{name}' not found in Model, please specify source (e.g., State or Control instance)"
+                )
             source = self.model
         return self._get_cached_attribute(name, source).shape
 
