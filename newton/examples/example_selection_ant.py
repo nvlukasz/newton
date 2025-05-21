@@ -85,6 +85,7 @@ class Example:
 
         print(f"joint_q shape:      {self.ants.get_attribute_shape('joint_q')}")
         print(f"joint_qd shape:     {self.ants.get_attribute_shape('joint_qd')}")
+        print(f"joint_f shape:      {self.ants.get_attribute_shape('joint_f')}")
         print(f"joint_target shape: {self.ants.get_attribute_shape('joint_target')}")
         print(f"body_q shape:       {self.ants.get_attribute_shape('body_q')}")
         print(f"body_qd shape:      {self.ants.get_attribute_shape('body_qd')}")
@@ -151,9 +152,11 @@ class Example:
         # =========================
         # apply random controls
         # =========================
-        act_shape = self.ants.get_attribute_shape("joint_target")
-        joint_forces = 100.0 - 200.0 * torch.rand(act_shape)
-        self.ants.set_attribute("joint_target", self.control, joint_forces)
+        joint_forces = 300.0 - 600.0 * torch.rand((self.num_envs, 8))
+        if self.ants.include_free_joint:
+            # include the leading root joint (pad with zeros)
+            joint_forces = torch.cat([torch.zeros((self.num_envs, 6)), joint_forces], axis=1)
+        self.ants.set_attribute("joint_f", self.control, joint_forces)
 
         with wp.ScopedTimer("step", active=False):
             if self.use_cuda_graph:
