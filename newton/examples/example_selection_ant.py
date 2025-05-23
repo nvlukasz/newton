@@ -26,11 +26,11 @@ from newton.utils.selection import ArticulationView
 
 
 class Example:
-    def __init__(self, stage_path="example_ant.usd", num_envs=8):
+    def __init__(self, stage_path=None, num_envs=8):
         self.num_envs = num_envs
 
         builder, stage_info, env_offsets = replicate_environment(
-            newton.examples.get_asset("ant_prototype.usda"),
+            newton.examples.get_asset("envs/ant_env.usda"),
             "/World/envs/env_0",
             "/World/envs/env_{}",
             num_envs,
@@ -203,7 +203,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--stage_path",
         type=lambda x: None if x == "None" else str(x),
-        default="example_ant.usd",
+        default="example_selection_ant.usd",
         help="Path to the output USD file.",
     )
     parser.add_argument("--num_frames", type=int, default=1200, help="Total number of frames.")
