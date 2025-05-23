@@ -236,7 +236,6 @@ class ArticulationView:
                 links[int(joint_child[joint_id])] = None
 
         links = sorted(links.keys())
-        num_links = len(links)
 
         # print stuff for debugging
         if verbose:
@@ -247,6 +246,7 @@ class ArticulationView:
                 print(f"    bodies: {joint_parent[joint_id]} -> {joint_child[joint_id]}")
                 print(f"    axis_start: {joint_axis_start[joint_id]}")
                 print(f"    axis_dim: {joint_axis_dim[joint_id]}")
+            num_links = len(links)
             print(f"num_links: {num_links}, {links}")
             for body_id in links:
                 print(f"  {model.body_key[body_id]}")
@@ -281,6 +281,46 @@ class ArticulationView:
         self.joint_coord_count = joint_coord_end - joint_coord_begin
         self.joint_dof_count = joint_dof_end - joint_dof_begin
         self.joint_axis_count = joint_axis_end - joint_axis_begin
+
+        self.joint_names = []
+        self.joint_coord_names = []
+        self.joint_dof_names = []
+        self.joint_axis_names = []
+        self.body_names = []
+
+        def get_name_from_key(key):
+            return key.split("/")[-1]
+
+        for joint_id in range(joint_begin, joint_end):
+            joint_name = get_name_from_key(model.joint_key[joint_id])
+            self.joint_names.append(joint_name)
+            num_coords = joint_q_start[joint_id + 1] - joint_q_start[joint_id]
+            if num_coords == 1:
+                self.joint_coord_names.append(joint_name)
+            elif num_coords > 1:
+                for coord in range(num_coords):
+                    self.joint_coord_names.append(f"{joint_name}:{coord}")
+            num_dofs = joint_qd_start[joint_id + 1] - joint_qd_start[joint_id]
+            if num_dofs == 1:
+                self.joint_dof_names.append(joint_name)
+            elif num_dofs > 1:
+                for dof in range(num_dofs):
+                    self.joint_dof_names.append(f"{joint_name}:{dof}")
+            num_axes = joint_axis_dim[joint_id][0] + joint_axis_dim[joint_id][1]
+            if num_axes == 1:
+                self.joint_axis_names.append(joint_name)
+            elif num_axes > 1:
+                for axis in range(num_axes):
+                    self.joint_axis_names.append(f"{joint_name}:{axis}")
+
+        for body_id in range(body_begin, body_end):
+            self.body_names.append(get_name_from_key(model.body_key[body_id]))
+
+        print(self.joint_names)
+        print(self.joint_coord_names)
+        print(self.joint_dof_names)
+        print(self.joint_axis_names)
+        print(self.body_names)
 
         # slices by indexing mode
         self._slices = {
