@@ -13,8 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from fnmatch import fnmatch
 import functools
+from fnmatch import fnmatch
 
 import numpy as np
 import warp as wp
@@ -191,7 +191,7 @@ def get_articulation_root_velocities_kernel(
 
 
 class ArticulationView:
-    def __init__(self, model: Model, pattern: str, include_free_joint: bool = False, verbose: bool = None):
+    def __init__(self, model: Model, pattern: str, include_free_joint: bool = False, verbose: bool | None = None):
         self.model = model
         self.device = model.device
         self.include_free_joint = include_free_joint
@@ -294,7 +294,7 @@ class ArticulationView:
         self._root_transforms = None
         self._root_velocities = None
 
-    @functools.lru_cache(maxsize=None)
+    @functools.lru_cache(maxsize=None)  # noqa
     def _get_cached_attribute(self, name: str, source: Model | State | Control):
         # get the attribute array
         attrib = getattr(source, name)
