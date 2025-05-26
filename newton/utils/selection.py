@@ -14,6 +14,7 @@
 # limitations under the License.
 
 from fnmatch import fnmatch
+import functools
 
 import numpy as np
 import warp as wp
@@ -290,42 +291,31 @@ class ArticulationView:
             "body": slice(int(body_begin), int(body_end)),
         }
 
-        self._attrib_cache = {}
-
         self._root_transforms = None
         self._root_velocities = None
 
+    @functools.lru_cache(maxsize=None)
     def _get_cached_attribute(self, name: str, source: Model | State | Control):
-        # cache the reshaped attribute array to avoid repeated overhead
-        key = (source, name)
-        attrib = self._attrib_cache.get(key)
-        if attrib is None:
-            # get the attribute array
-            attrib = getattr(source, name)
-            assert isinstance(attrib, wp.array)
+        # get the attribute array
+        attrib = getattr(source, name)
+        assert isinstance(attrib, wp.array)
 
-            # reshape with batch dim at front
-            assert attrib.shape[0] % self.count == 0
-            batched_shape = (self.count, attrib.shape[0] // self.count, *attrib.shape[1:])
+        # reshape with batch dim at front
+        assert attrib.shape[0] % self.count == 0
+        batched_shape = (self.count, attrib.shape[0] // self.count, *attrib.shape[1:])
 
-            # get attribute slice
-            indexing_mode = attribute_registry.get_indexing_mode(name)
-            attrib_slice = self._slices[indexing_mode]
+        # get attribute slice
+        indexing_mode = attribute_registry.get_indexing_mode(name)
+        attrib_slice = self._slices[indexing_mode]
 
-            # create strided array
-            attrib = attrib.reshape(batched_shape)
-            attrib = attrib[:, attrib_slice]
-
-            self._attrib_cache[key] = attrib
+        # create strided array
+        attrib = attrib.reshape(batched_shape)
+        attrib = attrib[:, attrib_slice]
 
         return attrib
 
-    def get_attribute(self, name: str, source: Model | State | Control, copy=False):
-        attrib = self._get_cached_attribute(name, source)
-        if copy:
-            return wp.clone(attrib)
-        else:
-            return attrib
+    def get_attribute(self, name: str, source: Model | State | Control):
+        return self._get_cached_attribute(name, source)
 
     def set_attribute(self, name: str, target: Model | State | Control, values, indices=None):
         attrib = self._get_cached_attribute(name, target)
