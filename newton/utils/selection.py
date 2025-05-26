@@ -101,7 +101,6 @@ def set_articulation_root_transforms_kernel(
     joint_type: wp.array(dtype=int),
     joint_q_start: wp.array(dtype=int),
     root_transforms: wp.array(dtype=wp.transform),
-    env_offsets: wp.array(dtype=wp.vec3),
     env_indices: wp.array(dtype=int),
     # outputs
     joint_q: wp.array(dtype=float),
@@ -113,13 +112,6 @@ def set_articulation_root_transforms_kernel(
     articulation = articulation_indices[idx]
     joint_start = articulation_start[articulation]
     q_start = joint_q_start[joint_start]
-    env_offset = env_offsets[idx]
-
-    # apply env offset
-    root_pose = wp.transform(
-        wp.vec3(root_pose[0], root_pose[1], root_pose[2]) + env_offset,
-        wp.quat(root_pose[3], root_pose[4], root_pose[5], root_pose[6]),
-    )
 
     if joint_type[joint_start] == newton.JOINT_FREE:
         for i in range(7):
@@ -135,14 +127,12 @@ def get_articulation_root_transforms_kernel(
     joint_parent: wp.array(dtype=int),
     joint_child: wp.array(dtype=int),
     body_q: wp.array(dtype=wp.transform),
-    env_offsets: wp.array(dtype=wp.vec3),
     # outputs
     root_xforms: wp.array(dtype=wp.transform),
 ):
     tid = wp.tid()
     articulation = articulation_indices[tid]
     joint_start = articulation_start[articulation]
-    env_offset = env_offsets[tid]
 
     if joint_parent[joint_start] != -1:
         root_body = joint_parent[joint_start]
@@ -150,12 +140,6 @@ def get_articulation_root_transforms_kernel(
         root_body = joint_child[joint_start]
 
     root_pose = body_q[root_body]
-
-    # apply env offset
-    root_pose = wp.transform(
-        wp.vec3(root_pose[0], root_pose[1], root_pose[2]) - env_offset,
-        wp.quat(root_pose[3], root_pose[4], root_pose[5], root_pose[6]),
-    )
 
     root_xforms[tid] = root_pose
 
@@ -206,7 +190,7 @@ def get_articulation_root_velocities_kernel(
 
 
 class ArticulationView:
-    def __init__(self, model: Model, pattern: str, include_free_joint=False, env_offsets=None):
+    def __init__(self, model: Model, pattern: str, include_free_joint=False):
         self.model = model
         self.device = model.device
         self.include_free_joint = include_free_joint
@@ -283,12 +267,6 @@ class ArticulationView:
         wp.launch(
             set_mask_kernel, dim=count, inputs=[self.articulation_indices, self.articulation_mask], device=self.device
         )
-
-        # env offsets
-        if env_offsets is None:
-            self.env_offsets = wp.zeros(count, dtype=wp.vec3, device=self.device)
-        else:
-            self.env_offsets = wp.array(env_offsets, shape=count, dtype=wp.vec3, device=self.device)
 
         self.all_indices = wp.array(np.arange(count, dtype=np.int32), device=self.device)
 
@@ -390,7 +368,6 @@ class ArticulationView:
                 self.model.joint_parent,
                 self.model.joint_child,
                 source.body_q,
-                self.env_offsets,
             ],
             outputs=[
                 self._root_transforms,
@@ -430,7 +407,6 @@ class ArticulationView:
                 self.model.joint_type,
                 self.model.joint_q_start,
                 root_transforms,
-                self.env_offsets,
                 indices,
             ],
             outputs=[
