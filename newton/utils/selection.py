@@ -190,10 +190,13 @@ def get_articulation_root_velocities_kernel(
 
 
 class ArticulationView:
-    def __init__(self, model: Model, pattern: str, include_free_joint=False):
+    def __init__(self, model: Model, pattern: str, include_free_joint: bool = False, verbose: bool = None):
         self.model = model
         self.device = model.device
         self.include_free_joint = include_free_joint
+
+        if verbose is None:
+            verbose = wp.config.verbose
 
         articulation_ids = []
         for id, key in enumerate(model.articulation_key):
@@ -235,7 +238,7 @@ class ArticulationView:
         num_links = len(links)
 
         # print stuff for debugging
-        if True:
+        if verbose:
             print(f"num_joints: {joint_end - joint_begin}")
             for joint_id in range(joint_begin, joint_end):
                 joint_name = model.joint_key[joint_id]
