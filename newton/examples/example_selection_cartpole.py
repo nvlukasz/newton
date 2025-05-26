@@ -68,7 +68,7 @@ class Example:
         # print(self.cartpoles.get_attribute("body_qd", self.state_0))
         # print(self.cartpoles.get_attribute("joint_q", self.state_0))
         # print(self.cartpoles.get_attribute("joint_qd", self.state_0))
-        # print(self.cartpoles.get_attribute("joint_target", self.control))
+        # print(self.cartpoles.get_attribute("joint_f", self.control))
 
         # =========================
         # randomize initial state
@@ -116,7 +116,7 @@ class Example:
         # =========================
         joint_forces = torch.zeros((self.num_envs, 2))
         joint_forces[:, 0] = torch.where(joint_states[:, 0] > 0, -100, 100)
-        self.cartpoles.set_attribute("joint_target", self.control, joint_forces)
+        self.cartpoles.set_attribute("joint_f", self.control, joint_forces)
 
         # simulate
         with wp.ScopedTimer("step", active=False):
