@@ -339,16 +339,6 @@ class ArticulationView:
 
         return attrib
 
-    def get_attribute_shape(self, name: str, source: Model | State | Control | None = None):
-        if source is None:
-            # most attributes are defined in the Model, with some exceptions
-            if not hasattr(self.model, name):
-                raise KeyError(
-                    f"Attribute '{name}' not found in Model, please specify source (e.g., State or Control instance)"
-                )
-            source = self.model
-        return self._get_cached_attribute(name, source).shape
-
     def get_attribute(self, name: str, source: Model | State | Control, copy=False):
         attrib = self._get_cached_attribute(name, source)
         if copy:

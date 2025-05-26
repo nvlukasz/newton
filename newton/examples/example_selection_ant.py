@@ -83,12 +83,12 @@ class Example:
         print(f"joint_count:        {self.ants.joint_count}")
         print(f"joint_axis_count:   {self.ants.joint_axis_count}")
 
-        print(f"joint_q shape:      {self.ants.get_attribute_shape('joint_q')}")
-        print(f"joint_qd shape:     {self.ants.get_attribute_shape('joint_qd')}")
-        print(f"joint_f shape:      {self.ants.get_attribute_shape('joint_f')}")
-        print(f"joint_target shape: {self.ants.get_attribute_shape('joint_target')}")
-        print(f"body_q shape:       {self.ants.get_attribute_shape('body_q')}")
-        print(f"body_qd shape:      {self.ants.get_attribute_shape('body_qd')}")
+        print(f"joint_q shape:      {self.ants.get_attribute('joint_q', self.model).shape}")
+        print(f"joint_qd shape:     {self.ants.get_attribute('joint_qd', self.model).shape}")
+        print(f"joint_f shape:      {self.ants.get_attribute('joint_f', self.model).shape}")
+        print(f"joint_target shape: {self.ants.get_attribute('joint_target', self.model).shape}")
+        print(f"body_q shape:       {self.ants.get_attribute('body_q', self.model).shape}")
+        print(f"body_qd shape:      {self.ants.get_attribute('body_qd', self.model).shape}")
 
         # set all dofs to the middle of their range by default
         dof_limit_lower = wp.to_torch(self.ants.get_attribute("joint_limit_lower", self.model))
