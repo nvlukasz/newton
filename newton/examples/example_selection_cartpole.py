@@ -29,7 +29,7 @@ class Example:
     def __init__(self, stage_path=None, num_envs=8):
         self.num_envs = num_envs
 
-        builder, stage_info, env_offsets = replicate_environment(
+        builder, stage_info = replicate_environment(
             newton.examples.get_asset("envs/cartpole_env.usda"),
             "/World/envs/env_0",
             "/World/envs/env_{}",

@@ -13,13 +13,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Any
+
 import warp as wp
 
 import newton
 from newton.examples import compute_env_offsets
 
 
-def replicate_environment(source, prototype_path, path_pattern, num_envs, env_spacing, up_axis="Z", **usd_kwargs):
+def replicate_environment(
+    source,
+    prototype_path: str,
+    path_pattern: str,
+    num_envs: int,
+    env_spacing: tuple[float],
+    up_axis: newton.AxisType = "Z",
+    **usd_kwargs,
+) -> tuple[newton.ModelBuilder, dict[str:Any]]:
     """
     Replicates a prototype USD environment in Newton.
 
@@ -29,11 +39,11 @@ def replicate_environment(source, prototype_path, path_pattern, num_envs, env_sp
         path_pattern (str): The USD path pattern for replicated envs, e.g., "/World/envs/env_{}".
         num_envs (int): Number of replicas to create.
         env_spacing (tuple[float]): Environment spacing vector.
-        up_vector (tuple[float]): The desired up-vector (should match the USD stage).
+        up_axis (AxisType): The desired up-vector (should match the USD stage).
         **usd_kwargs: Keyword arguments to pass to the USD importer (see `newton.utils.parse_usd()`).
 
     Returns:
-        (ModelBuilder, dict, np.array): The resulting ModelBuilder containing all replicated environments, a dictionary with USD stage information, and a NumPy array of env offsets.
+        (ModelBuilder, dict): The resulting ModelBuilder containing all replicated environments and a dictionary with USD stage information.
     """
 
     builder = newton.ModelBuilder(up_axis=up_axis)
@@ -82,7 +92,7 @@ def replicate_environment(source, prototype_path, path_pattern, num_envs, env_sp
                 articulation_start=articulation_start,
             )
 
-    return builder, stage_info, env_offsets
+    return builder, stage_info
 
 
 def update_paths(
