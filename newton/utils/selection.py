@@ -488,4 +488,4 @@ class ArticulationView:
         else:
             mask = self.articulation_mask
 
-        newton.core.articulation.eval_fk(self.model, target.joint_q, target.joint_qd, mask, target)
+        newton.core.articulation.eval_fk(self.model, target.joint_q, target.joint_qd, target, mask=mask)
