@@ -267,7 +267,7 @@ class ArticulationView:
         self.articulation_indices = wp.array(articulation_ids, dtype=int, device=self.device)
 
         # create articulation mask
-        self.articulation_mask = wp.zeros(model.articulation_count, dtype=bool)
+        self.articulation_mask = wp.zeros(model.articulation_count, dtype=bool, device=self.device)
         wp.launch(
             set_mask_kernel, dim=count, inputs=[self.articulation_indices, self.articulation_mask], device=self.device
         )
