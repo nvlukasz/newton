@@ -27,6 +27,7 @@ from newton.utils.selection import ArticulationView
 USE_HELPER_API = True
 COLLAPSE_FIXED_JOINTS = True
 VERBOSE = False
+USE_MASKS = True  # use masks instead of indices
 
 
 class Example:
@@ -38,7 +39,7 @@ class Example:
             "/World/envs/env_0",
             "/World/envs/env_{}",
             num_envs,
-            (5.0, 5.0, 0.0),
+            (4.0, 4.0, 0.0),
             # USD importer args
             collapse_fixed_joints=COLLAPSE_FIXED_JOINTS,
             joint_ordering="dfs",
@@ -119,10 +120,22 @@ class Example:
             self.default_velocities[:, 2] = 0.5 * math.pi  # rotate about z-axis
             self.default_velocities[:, 5] = 5.0  # move up z-axis
 
-        # create disjoint index groups to alternate between
+        # create disjoint subsets to alternate resets
         all_indices = torch.arange(num_envs, dtype=torch.int32)
-        self.indices_0 = all_indices[::2].contiguous()
-        self.indices_1 = all_indices[1::2].contiguous()
+        indices_0 = all_indices[::2]
+        indices_1 = all_indices[1::2]
+        if USE_MASKS:
+            self.mask_0 = torch.zeros(num_envs, dtype=bool)
+            self.mask_1 = torch.zeros(num_envs, dtype=bool)
+            self.mask_0[indices_0] = True
+            self.mask_1[indices_1] = True
+            self.indices_0 = None
+            self.indices_1 = None
+        else:
+            self.indices_0 = indices_0
+            self.indices_1 = indices_1
+            self.mask_0 = None
+            self.mask_1 = None
 
         # reset all
         self.reset()
@@ -147,9 +160,14 @@ class Example:
 
     def step(self):
         if self.sim_time >= self.next_reset:
-            self.reset(self.indices_0)
+            # choose whether to use indices or masks
+            if USE_MASKS:
+                self.reset(mask=self.mask_0)
+                self.mask_0, self.mask_1 = self.mask_1, self.mask_0
+            else:
+                self.reset(indices=self.indices_0)
+                self.indices_0, self.indices_1 = self.indices_1, self.indices_0
             self.next_reset = self.sim_time + 2.0
-            self.indices_0, self.indices_1 = self.indices_1, self.indices_0
 
         # =========================
         # apply random controls
@@ -169,20 +187,20 @@ class Example:
                 self.simulate()
         self.sim_time += self.frame_dt
 
-    def reset(self, indices=None):
+    def reset(self, mask=None, indices=None):
         # ==============================
         # set transforms and velocities
         # ==============================
         if USE_HELPER_API:
             # set root and axis states separately
-            self.ants.set_root_transforms(self.state_0, self.default_root_transforms, indices=indices)
-            self.ants.set_axis_transforms(self.state_0, self.default_axis_transforms, indices=indices)
-            self.ants.set_root_velocities(self.state_0, self.default_root_velocities, indices=indices)
-            self.ants.set_axis_velocities(self.state_0, self.default_axis_velocities, indices=indices)
+            self.ants.set_root_transforms(self.state_0, self.default_root_transforms, mask=mask, indices=indices)
+            self.ants.set_axis_transforms(self.state_0, self.default_axis_transforms, mask=mask, indices=indices)
+            self.ants.set_root_velocities(self.state_0, self.default_root_velocities, mask=mask, indices=indices)
+            self.ants.set_axis_velocities(self.state_0, self.default_axis_velocities, mask=mask, indices=indices)
         else:
             # set root and axis states together
-            self.ants.set_attribute("joint_q", self.state_0, self.default_transforms, indices=indices)
-            self.ants.set_attribute("joint_qd", self.state_0, self.default_velocities, indices=indices)
+            self.ants.set_attribute("joint_q", self.state_0, self.default_transforms, mask=mask, indices=indices)
+            self.ants.set_attribute("joint_qd", self.state_0, self.default_velocities, mask=mask, indices=indices)
 
         if not isinstance(self.solver, newton.solvers.MuJoCoSolver):
             self.ants.eval_fk(self.state_0, indices=indices)
