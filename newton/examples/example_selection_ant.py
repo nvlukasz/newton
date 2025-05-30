@@ -202,8 +202,8 @@ class Example:
             self.ants.set_attribute("joint_q", self.state_0, self.default_transforms, mask=mask, indices=indices)
             self.ants.set_attribute("joint_qd", self.state_0, self.default_velocities, mask=mask, indices=indices)
 
-        if not isinstance(self.solver, newton.solvers.MuJoCoSolver):
-            self.ants.eval_fk(self.state_0, indices=indices)
+        if True or not isinstance(self.solver, newton.solvers.MuJoCoSolver):
+            self.ants.eval_fk(self.state_0, mask=mask, indices=indices)
 
     def render(self):
         if self.renderer is None:
