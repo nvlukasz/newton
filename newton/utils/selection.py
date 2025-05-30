@@ -227,16 +227,17 @@ class ArticulationView:
         for body_id in range(body_begin, body_end):
             self.body_names.append(get_name_from_key(model.body_key[body_id]))
 
-        print("Link names:")
-        print(self.body_names)
-        print("Joint names:")
-        print(self.joint_names)
-        print("Joint axis names:")
-        print(self.joint_axis_names)
-        # print("Joint coord names:")
-        # print(self.joint_coord_names)
-        # print("Joint dof names:")
-        # print(self.joint_dof_names)
+        if verbose:
+            print("Link names:")
+            print(self.body_names)
+            print("Joint names:")
+            print(self.joint_names)
+            print("Joint axis names:")
+            print(self.joint_axis_names)
+            # print("Joint coord names:")
+            # print(self.joint_coord_names)
+            # print("Joint dof names:")
+            # print(self.joint_dof_names)
 
         # slices by indexing mode
         self._slices = {
