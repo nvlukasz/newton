@@ -83,17 +83,31 @@ attribute_registry = AttributeRegistry()
 
 
 @wp.kernel
-def set_mask_kernel(indices: wp.array(dtype=int), mask: wp.array(dtype=bool)):
+def get_articulation_indices_kernel(
+    selection_indices: wp.array(dtype=int),  # indices in ArticulationView
+    selection_to_model_map: wp.array(dtype=int),  # maps index in ArticulationView to articulation index in Model
+    articulation_indices: wp.array(dtype=int),  # output: articulation indices in Model
+):
+    """Translate selection indices in an ArticulationView to articulation indices in the Model."""
     tid = wp.tid()
-    mask[indices[tid]] = True
+    articulation_indices[tid] = selection_to_model_map[selection_indices[tid]]
 
 
 @wp.kernel
-def set_mask_indexed_kernel(
-    indices: wp.array(dtype=int), indices_indices: wp.array(dtype=int), mask: wp.array(dtype=bool)
+def set_articulation_mask_kernel(
+    selection_indices: wp.array(dtype=int),  # indices in ArticulationView (can be None)
+    selection_to_model_map: wp.array(dtype=int),  # maps index in ArticulationView to articulation index in Model
+    articulation_mask: wp.array(dtype=bool),  # output: mask of Model articulation indices
 ):
+    """
+    Get articulation mask from selection indices in an ArticulationView.
+    If selection_indices is None, use all indices in selection_to_model_map.
+    """
     tid = wp.tid()
-    mask[indices[indices_indices[tid]]] = True
+    if selection_indices:
+        articulation_mask[selection_to_model_map[selection_indices[tid]]] = True
+    else:
+        articulation_mask[selection_to_model_map[tid]] = True
 
 
 class ArticulationView:
@@ -170,7 +184,7 @@ class ArticulationView:
         # create articulation mask
         self.articulation_mask = wp.zeros(model.articulation_count, dtype=bool, device=self.device)
         wp.launch(
-            set_mask_kernel, dim=count, inputs=[self.articulation_indices, self.articulation_mask], device=self.device
+            set_articulation_mask_kernel, dim=count, inputs=[None, self.articulation_indices, self.articulation_mask], device=self.device
         )
 
         self.all_indices = wp.array(np.arange(count, dtype=np.int32), device=self.device)
@@ -547,15 +561,33 @@ class ArticulationView:
     # ========================================================================================
     # Utilities
 
-    def eval_fk(self, target: Model | State, indices=None):
-        if indices is not None:
-            # create a custom mask for builtin eval_fk()
-            # TODO: something more efficient?
+    def get_articulation_indices(self, indices=None):
+        """Translate selection indices in this ArticulationView to articulation indices in the Model."""
+        if indices is None:
+            return self.articulation_indices
+        else:
+            if not is_array(indices):
+                indices = wp.array(indices, dtype=int, device=self.device)
+            articulation_indices = wp.empty_like(indices, device=self.device)
+            wp.launch(get_articulation_indices_kernel, dim=indices.size, inputs=[indices, self.articulation_indices, articulation_indices])
+            return articulation_indices
+
+    def get_articulation_mask(self, indices=None):
+        """Get articulation mask from selection indices in this ArticulationView."""
+        if indices is None:
+            return self.articulation_mask
+        else:
             if not is_array(indices):
                 indices = wp.array(indices, dtype=int, device=self.device)
             mask = wp.zeros(self.model.articulation_count, dtype=bool, device=self.device)
-            wp.launch(set_mask_indexed_kernel, dim=indices.size, inputs=[self.articulation_indices, indices, mask])
+            wp.launch(set_articulation_mask_kernel, dim=indices.size, inputs=[indices, self.articulation_indices, mask])
+            return mask
+
+    def eval_fk(self, target: Model | State, mask=None, indices=None):
+        if mask is not None:
+            if not isinstance(mask, wp.array):
+                mask = wp.array(mask, dtype=bool, device=self.device)
         else:
-            mask = self.articulation_mask
+            mask = self.get_articulation_mask(indices=indices)
 
         newton.core.articulation.eval_fk(self.model, target.joint_q, target.joint_qd, target, mask=mask)
