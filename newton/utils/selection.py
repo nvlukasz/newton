@@ -479,7 +479,8 @@ class ArticulationView:
         if self.is_floating_base:
             attrib = self._get_cached_attribute("joint_qd", source)[:, :6]
         else:
-            attrib = self._get_cached_attribute("body_qd", source)[:, 0]
+            # Non-floating articulations have no root velocities.
+            return None
 
         if attrib.dtype is wp.spatial_vector:
             return attrib
@@ -514,8 +515,9 @@ class ArticulationView:
         if self.is_floating_base:
             return self._get_cached_attribute("joint_armature", source)[:, :6]
         else:
-            # For non-floating articulations, root joint armatures are set using `set_axis_armatures()`
-            # This is consistent with how we handle root/axis transforms and velocities.
+            # Fixed-base articulations have no root armature.
+            # For articulations that are neither fixed nor floating, root joint armatures
+            # can be accessed using `get_axis_armatures()`
             return None
 
     def set_root_armatures(self, target: Model | State, values: wp.array, mask=None, indices=None):
