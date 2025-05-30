@@ -24,6 +24,10 @@ import newton.utils
 from newton.utils.isaaclab import replicate_environment
 from newton.utils.selection import ArticulationView
 
+USE_HELPER_API = True
+COLLAPSE_FIXED_JOINTS = True
+VERBOSE = False
+
 
 class Example:
     def __init__(self, stage_path=None, num_envs=8):
@@ -36,7 +40,7 @@ class Example:
             num_envs,
             (2.0, 3.0, 0.0),
             # USD importer args
-            collapse_fixed_joints=True,
+            collapse_fixed_joints=COLLAPSE_FIXED_JOINTS,
             joint_ordering="dfs",
         )
 
@@ -62,7 +66,7 @@ class Example:
         # =======================
         # get cartpole view
         # =======================
-        self.cartpoles = ArticulationView(self.model, "/World/envs/*/Robot")
+        self.cartpoles = ArticulationView(self.model, "/World/envs/*/Robot", verbose=VERBOSE)
 
         # print(self.cartpoles.get_attribute("body_q", self.state_0))
         # print(self.cartpoles.get_attribute("body_qd", self.state_0))
@@ -75,8 +79,22 @@ class Example:
         # =========================
         cart_positions = 2.0 - 4.0 * torch.rand(num_envs)
         pole_angles = math.pi / 16.0 - math.pi / 8.0 * torch.rand(num_envs)
-        joint_states = torch.stack([cart_positions, pole_angles], dim=1)
-        self.cartpoles.set_attribute("joint_q", self.state_0, joint_states)
+        axis_transforms = torch.stack([cart_positions, pole_angles], dim=1)
+        height = 2.0
+        if USE_HELPER_API:
+            # root transforms
+            root_transforms = wp.to_torch(self.cartpoles.get_root_transforms(self.state_0))
+            root_transforms[:, 2] = height
+            self.cartpoles.set_root_transforms(self.state_0, root_transforms)
+            # axis transforms
+            self.cartpoles.set_axis_transforms(self.state_0, axis_transforms)
+        else:
+            # root transforms (we need to use joint_X_p for fixed joints)
+            root_transforms = wp.to_torch(self.cartpoles.get_attribute("joint_X_p", self.model))
+            root_transforms[:, 0, 2] = height
+            self.cartpoles.set_attribute("joint_X_p", self.model, root_transforms)
+            # axis transforms
+            self.cartpoles.set_attribute("joint_q", self.state_0, axis_transforms)
 
         if not isinstance(self.solver, newton.solvers.MuJoCoSolver):
             self.cartpoles.eval_fk(self.state_0)
@@ -109,14 +127,20 @@ class Example:
         # =========================
         # get observations
         # =========================
-        joint_states = wp.to_torch(self.cartpoles.get_attribute("joint_q", self.state_0))
+        if USE_HELPER_API:
+            axis_transforms = wp.to_torch(self.cartpoles.get_axis_transforms(self.state_0))
+        else:
+            axis_transforms = wp.to_torch(self.cartpoles.get_attribute("joint_q", self.state_0))
 
         # =========================
         # apply controls
         # =========================
-        joint_forces = torch.zeros((self.num_envs, 2))
-        joint_forces[:, 0] = torch.where(joint_states[:, 0] > 0, -100, 100)
-        self.cartpoles.set_attribute("joint_f", self.control, joint_forces)
+        axis_forces = torch.zeros((self.num_envs, self.cartpoles.joint_axis_count))
+        axis_forces[:, 0] = torch.where(axis_transforms[:, 0] > 0, -100, 100)
+        if USE_HELPER_API:
+            self.cartpoles.set_axis_forces(self.control, axis_forces)
+        else:
+            self.cartpoles.set_attribute("joint_f", self.control, axis_forces)
 
         # simulate
         with wp.ScopedTimer("step", active=False):
@@ -152,7 +176,7 @@ if __name__ == "__main__":
 
     args = parser.parse_known_args()[0]
 
-    with wp.ScopedDevice(args.device):
+    with wp.ScopedDevice(args.device), torch.device(wp.device_to_torch(args.device)):
         example = Example(stage_path=args.stage_path, num_envs=args.num_envs)
 
         for _ in range(args.num_frames):
