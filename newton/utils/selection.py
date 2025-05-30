@@ -385,6 +385,51 @@ class ArticulationView:
 
         wp.copy(attrib, values)
 
+    def get_root_armatures(self, source: Model | State):
+        """
+        Get the root joint armatures of the articulations.
+
+        Args:
+            source (Model | State): Where to get the armatures (Model or State).
+
+        Returns:
+            array: The root armatures (dtype=wp.float32).
+        """
+        if self.is_floating_base:
+            return self._get_cached_attribute("joint_armature", source)[:, :6]
+        else:
+            # For non-floating articulations, root joint armatures are set using `set_axis_armatures()`
+            # This is consistent with how we handle root/axis transforms and velocities.
+            return None
+
+    def set_root_armatures(self, target: Model | State, values: wp.array, indices=None):
+        """
+        Set the root joint armatures of the articulations.
+
+        Args:
+            target (Model | State): Where to set the root armatures (Model or State).
+            values (array): The root armatures to set (dtype=wp.float32).
+        """
+        if self.is_floating_base:
+            attrib = self._get_cached_attribute("joint_armature", target)[:, :6]
+        else:
+            return  # no-op
+
+        if not is_array(values):
+            values = wp.array(values, dtype=float, shape=attrib.shape, device=self.device, copy=False)
+
+        # early out for in-place modifications
+        if values.ptr == attrib.ptr:
+            return
+
+        if indices is not None:
+            if not is_array(indices):
+                indices = wp.array(indices, dtype=int, device=self.device)
+            attrib = wp.indexedarray(attrib, [indices])
+            values = wp.indexedarray(values, [indices])
+
+        wp.copy(attrib, values)
+
     def get_link_transforms(self, source: Model | State):
         return self._get_cached_attribute("body_q", source)
 
@@ -456,6 +501,33 @@ class ArticulationView:
             attrib = self._get_cached_attribute("joint_f", target)[:, 6:]
         else:
             attrib = self._get_cached_attribute("joint_f", target)
+
+        if not is_array(values):
+            values = wp.array(values, dtype=float, shape=attrib.shape, device=self.device, copy=False)
+
+        # early out for in-place modifications
+        if values.ptr == attrib.ptr:
+            return
+
+        if indices is not None:
+            if not is_array(indices):
+                indices = wp.array(indices, dtype=int, device=self.device)
+            attrib = wp.indexedarray(attrib, [indices])
+            values = wp.indexedarray(values, [indices])
+
+        wp.copy(attrib, values)
+
+    def get_axis_armatures(self, source: Model | State):
+        if self.is_floating_base:
+            return self._get_cached_attribute("joint_armature", source)[:, 6:]
+        else:
+            return self._get_cached_attribute("joint_armature", source)
+
+    def set_axis_armatures(self, target: Model | State, values, indices=None):
+        if self.is_floating_base:
+            attrib = self._get_cached_attribute("joint_armature", target)[:, 6:]
+        else:
+            attrib = self._get_cached_attribute("joint_armature", target)
 
         if not is_array(values):
             values = wp.array(values, dtype=float, shape=attrib.shape, device=self.device, copy=False)
