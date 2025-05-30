@@ -539,13 +539,13 @@ class ArticulationView:
     def get_link_velocities(self, source: Model | State):
         return self._get_cached_attribute("body_qd", source)
 
-    def get_axis_transforms(self, source: Model | State):
+    def get_axis_positions(self, source: Model | State):
         if self.is_floating_base:
             return self._get_cached_attribute("joint_q", source)[:, 7:]
         else:
             return self._get_cached_attribute("joint_q", source)
 
-    def set_axis_transforms(self, target: Model | State, values, mask=None, indices=None):
+    def set_axis_positions(self, target: Model | State, values, mask=None, indices=None):
         if self.is_floating_base:
             attrib = self._get_cached_attribute("joint_q", target)[:, 7:]
         else:

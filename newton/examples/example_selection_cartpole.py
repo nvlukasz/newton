@@ -87,7 +87,7 @@ class Example:
             root_transforms[:, 2] = height
             self.cartpoles.set_root_transforms(self.state_0, root_transforms)
             # axis transforms
-            self.cartpoles.set_axis_transforms(self.state_0, axis_transforms)
+            self.cartpoles.set_axis_positions(self.state_0, axis_transforms)
         else:
             # root transforms (we need to use joint_X_p for fixed joints)
             root_transforms = wp.to_torch(self.cartpoles.get_attribute("joint_X_p", self.model))
@@ -128,7 +128,7 @@ class Example:
         # get observations
         # =========================
         if USE_HELPER_API:
-            axis_transforms = wp.to_torch(self.cartpoles.get_axis_transforms(self.state_0))
+            axis_transforms = wp.to_torch(self.cartpoles.get_axis_positions(self.state_0))
         else:
             axis_transforms = wp.to_torch(self.cartpoles.get_attribute("joint_q", self.state_0))
 

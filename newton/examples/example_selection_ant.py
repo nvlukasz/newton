@@ -194,8 +194,8 @@ class Example:
         if USE_HELPER_API:
             # set root and axis states separately
             self.ants.set_root_transforms(self.state_0, self.default_root_transforms, mask=mask, indices=indices)
-            self.ants.set_axis_transforms(self.state_0, self.default_axis_transforms, mask=mask, indices=indices)
             self.ants.set_root_velocities(self.state_0, self.default_root_velocities, mask=mask, indices=indices)
+            self.ants.set_axis_positions(self.state_0, self.default_axis_transforms, mask=mask, indices=indices)
             self.ants.set_axis_velocities(self.state_0, self.default_axis_velocities, mask=mask, indices=indices)
         else:
             # set root and axis states together
