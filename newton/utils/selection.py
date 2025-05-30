@@ -178,15 +178,35 @@ def set_articulation_attribute_masked_3d(
 
 
 # explicit overloads to avoid module reloading
-wp.overload(set_articulation_attribute_indexed_2d, {"values": wp.array2d(dtype=float), "attrib": wp.array2d(dtype=float)})
-wp.overload(set_articulation_attribute_indexed_2d, {"values": wp.array2d(dtype=wp.transform), "attrib": wp.array2d(dtype=wp.transform)})
-wp.overload(set_articulation_attribute_indexed_2d, {"values": wp.array2d(dtype=wp.spatial_vector), "attrib": wp.array2d(dtype=wp.spatial_vector)})
-wp.overload(set_articulation_attribute_indexed_3d, {"values": wp.array3d(dtype=float), "attrib": wp.array3d(dtype=float)})
+wp.overload(
+    set_articulation_attribute_indexed_2d, {"values": wp.array2d(dtype=float), "attrib": wp.array2d(dtype=float)}
+)
+wp.overload(
+    set_articulation_attribute_indexed_2d,
+    {"values": wp.array2d(dtype=wp.transform), "attrib": wp.array2d(dtype=wp.transform)},
+)
+wp.overload(
+    set_articulation_attribute_indexed_2d,
+    {"values": wp.array2d(dtype=wp.spatial_vector), "attrib": wp.array2d(dtype=wp.spatial_vector)},
+)
+wp.overload(
+    set_articulation_attribute_indexed_3d, {"values": wp.array3d(dtype=float), "attrib": wp.array3d(dtype=float)}
+)
 
-wp.overload(set_articulation_attribute_masked_2d, {"values": wp.array2d(dtype=float), "attrib": wp.array2d(dtype=float)})
-wp.overload(set_articulation_attribute_masked_2d, {"values": wp.array2d(dtype=wp.transform), "attrib": wp.array2d(dtype=wp.transform)})
-wp.overload(set_articulation_attribute_masked_2d, {"values": wp.array2d(dtype=wp.spatial_vector), "attrib": wp.array2d(dtype=wp.spatial_vector)})
-wp.overload(set_articulation_attribute_masked_3d, {"values": wp.array3d(dtype=float), "attrib": wp.array3d(dtype=float)})
+wp.overload(
+    set_articulation_attribute_masked_2d, {"values": wp.array2d(dtype=float), "attrib": wp.array2d(dtype=float)}
+)
+wp.overload(
+    set_articulation_attribute_masked_2d,
+    {"values": wp.array2d(dtype=wp.transform), "attrib": wp.array2d(dtype=wp.transform)},
+)
+wp.overload(
+    set_articulation_attribute_masked_2d,
+    {"values": wp.array2d(dtype=wp.spatial_vector), "attrib": wp.array2d(dtype=wp.spatial_vector)},
+)
+wp.overload(
+    set_articulation_attribute_masked_3d, {"values": wp.array3d(dtype=float), "attrib": wp.array3d(dtype=float)}
+)
 
 
 class ArticulationView:
@@ -263,7 +283,10 @@ class ArticulationView:
         # create articulation mask
         self.articulation_mask = wp.zeros(model.articulation_count, dtype=bool, device=self.device)
         wp.launch(
-            set_model_articulation_mask_kernel, dim=count, inputs=[self.articulation_indices, self.articulation_mask], device=self.device
+            set_model_articulation_mask_kernel,
+            dim=count,
+            inputs=[self.articulation_indices, self.articulation_mask],
+            device=self.device,
         )
 
         self.all_indices = wp.array(np.arange(count, dtype=np.int32), device=self.device)
@@ -583,7 +606,11 @@ class ArticulationView:
             if not isinstance(indices, wp.array):
                 indices = wp.array(indices, dtype=int, device=self.device)
             articulation_indices = wp.empty_like(indices, device=self.device)
-            wp.launch(get_model_articulation_indices_kernel, dim=indices.size, inputs=[indices, self.articulation_indices, articulation_indices])
+            wp.launch(
+                get_model_articulation_indices_kernel,
+                dim=indices.size,
+                inputs=[indices, self.articulation_indices, articulation_indices],
+            )
             return articulation_indices
 
     def get_model_articulation_mask(self, mask=None, indices=None):
@@ -593,13 +620,21 @@ class ArticulationView:
                 mask = wp.array(mask, dtype=bool, device=self.device)
             assert mask.shape == (self.count,)
             articulation_mask = wp.zeros(self.model.articulation_count, dtype=bool, device=self.device)
-            wp.launch(set_model_articulation_mask_from_view_mask_kernel, dim=mask.size, inputs=[mask, self.articulation_indices, articulation_mask])
+            wp.launch(
+                set_model_articulation_mask_from_view_mask_kernel,
+                dim=mask.size,
+                inputs=[mask, self.articulation_indices, articulation_mask],
+            )
             return articulation_mask
         elif indices is not None:
             if not isinstance(indices, wp.array):
                 indices = wp.array(indices, dtype=int, device=self.device)
             articulation_mask = wp.zeros(self.model.articulation_count, dtype=bool, device=self.device)
-            wp.launch(set_model_articulation_mask_from_view_indices_kernel, dim=indices.size, inputs=[indices, self.articulation_indices, articulation_mask])
+            wp.launch(
+                set_model_articulation_mask_from_view_indices_kernel,
+                dim=indices.size,
+                inputs=[indices, self.articulation_indices, articulation_mask],
+            )
             return articulation_mask
         else:
             return self.articulation_mask
