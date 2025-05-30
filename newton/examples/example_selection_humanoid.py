@@ -93,7 +93,7 @@ class Example:
             # separate root and axis transforms
             self.default_root_transforms = wp.to_torch(self.humanoids.get_root_transforms(self.model)).clone()
             self.default_root_transforms[:, 2] = 1.5
-            self.default_axis_transforms = wp.to_torch(self.humanoids.get_axis_transforms(self.model)).clone()
+            self.default_axis_transforms = wp.to_torch(self.humanoids.get_axis_positions(self.model)).clone()
             # separate root and axis velocities
             self.default_root_velocities = wp.to_torch(self.humanoids.get_root_velocities(self.model)).clone()
             # self.default_root_velocities[:, 2] = 1.0 * math.pi  # rotate about z-axis
@@ -166,8 +166,8 @@ class Example:
         if USE_HELPER_API:
             # set root and axis states separately
             self.humanoids.set_root_transforms(self.state_0, self.default_root_transforms, indices=indices)
-            self.humanoids.set_axis_transforms(self.state_0, self.default_axis_transforms, indices=indices)
             self.humanoids.set_root_velocities(self.state_0, self.default_root_velocities, indices=indices)
+            self.humanoids.set_axis_positions(self.state_0, self.default_axis_transforms, indices=indices)
             self.humanoids.set_axis_velocities(self.state_0, self.default_axis_velocities, indices=indices)
         else:
             # set root and axis states together
