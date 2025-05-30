@@ -24,6 +24,10 @@ import newton.utils
 from newton.utils.isaaclab import replicate_environment
 from newton.utils.selection import ArticulationView
 
+USE_HELPER_API = True
+COLLAPSE_FIXED_JOINTS = True
+VERBOSE = False
+
 
 class Example:
     def __init__(self, stage_path=None, num_envs=8):
@@ -78,7 +82,7 @@ class Example:
         # ===========================================================
         # create articulation view
         # ===========================================================
-        self.anymals = ArticulationView(self.model, "/World/envs/*/Robot/base", include_free_joint=False)
+        self.anymals = ArticulationView(self.model, "/World/envs/*/Robot/base", verbose=VERBOSE)
 
         print(f"articulation count: {self.anymals.count}")
         print(f"link_count:         {self.anymals.link_count}")
@@ -97,30 +101,27 @@ class Example:
         # set all dofs to the middle of their range by default
         # dof_limit_lower = wp.to_torch(self.anymals.get_attribute("joint_limit_lower", self.model))
         # dof_limit_upper = wp.to_torch(self.anymals.get_attribute("joint_limit_upper", self.model))
-        # default_dof_transforms = 0.5 * (dof_limit_lower + dof_limit_upper)
+        # default_axis_transforms = 0.5 * (dof_limit_lower + dof_limit_upper)
 
-        if self.anymals.include_free_joint:
-            # combined root and dof transforms
-            self.default_transforms = wp.to_torch(self.anymals.get_attribute("joint_q", self.model)).clone()
-            self.default_transforms[:, 2] = 1.5  # z-coordinate of articulation root
-            # self.default_transforms[:, 7:] = default_dof_transforms
-            # combined root and dof velocities
-            self.default_velocities = wp.to_torch(self.anymals.get_attribute("joint_qd", self.model)).clone()
-            # self.default_velocities[:, 2] = 1.0 * math.pi  # rotate about z-axis
-            # self.default_velocities[:, 5] = 5.0  # move up z-axis
-        else:
-            # root transforms
+        if USE_HELPER_API:
+            # separate root and axis transforms
             self.default_root_transforms = wp.to_torch(self.anymals.get_root_transforms(self.model)).clone()
             self.default_root_transforms[:, 2] = 1.5
-            # dof transforms
-            # self.default_dof_transforms = default_dof_transforms
-            self.default_dof_transforms = wp.to_torch(self.anymals.get_attribute("joint_q", self.model)).clone()
-            # root velocities
+            self.default_axis_transforms = wp.to_torch(self.anymals.get_axis_transforms(self.model)).clone()
+            # separate root and axis velocities
             self.default_root_velocities = wp.to_torch(self.anymals.get_root_velocities(self.model)).clone()
             # self.default_root_velocities[:, 2] = 1.0 * math.pi  # rotate about z-axis
             # self.default_root_velocities[:, 5] = 5.0  # move up z-axis
-            # dof velocities
-            self.default_dof_velocities = wp.to_torch(self.anymals.get_attribute("joint_qd", self.model)).clone()
+            self.default_axis_velocities = wp.to_torch(self.anymals.get_axis_velocities(self.model)).clone()
+        else:
+            # combined root and axis transforms
+            self.default_transforms = wp.to_torch(self.anymals.get_attribute("joint_q", self.model)).clone()
+            self.default_transforms[:, 2] = 1.5  # z-coordinate of articulation root
+            # self.default_transforms[:, 7:] = default_axis_transforms
+            # combined root and axis velocities
+            self.default_velocities = wp.to_torch(self.anymals.get_attribute("joint_qd", self.model)).clone()
+            # self.default_velocities[:, 2] = 1.0 * math.pi  # rotate about z-axis
+            # self.default_velocities[:, 5] = 5.0  # move up z-axis
 
         # create disjoint index groups to alternate between
         all_indices = torch.arange(num_envs, dtype=torch.int32)
@@ -154,14 +155,16 @@ class Example:
             self.next_reset = self.sim_time + 2.0
             self.indices_0, self.indices_1 = self.indices_1, self.indices_0
 
-        # # =========================
-        # # apply random controls
-        # # =========================
-        # joint_forces = 20.0 - 40.0 * torch.rand((self.num_envs, self.anymals.joint_dof_count))
-        # if self.anymals.include_free_joint:
-        #     # include the leading root joint (pad with zeros)
-        #     joint_forces = torch.cat([torch.zeros((self.num_envs, 6)), joint_forces], axis=1)
-        # self.anymals.set_attribute("joint_f", self.control, joint_forces)
+        # =========================
+        # apply random controls
+        # =========================
+        # axis_forces = 20.0 - 40.0 * torch.rand((self.num_envs, self.anymals.joint_axis_count))
+        # if USE_HELPER_API:
+        #     self.anymals.set_axis_forces(self.control, axis_forces)
+        # else:
+        #     # include the root free joint
+        #     forces = torch.cat([torch.zeros((self.num_envs, 6)), axis_forces], axis=1)
+        #     self.anymals.set_attribute("joint_f", self.control, forces)
 
         with wp.ScopedTimer("step", active=False):
             if self.use_cuda_graph:
@@ -174,18 +177,16 @@ class Example:
         # ==============================
         # set transforms and velocities
         # ==============================
-        if self.anymals.include_free_joint:
-            # set root and dof transforms together
-            self.anymals.set_attribute("joint_q", self.state_0, self.default_transforms, indices=indices)
-            # set root and dof velocities together
-            self.anymals.set_attribute("joint_qd", self.state_0, self.default_velocities, indices=indices)
-        else:
-            # set root and dof transforms separately
+        if USE_HELPER_API:
+            # set root and axis states separately
             self.anymals.set_root_transforms(self.state_0, self.default_root_transforms, indices=indices)
-            self.anymals.set_attribute("joint_q", self.state_0, self.default_dof_transforms, indices=indices)
-            # set root and dof velocities separately
+            self.anymals.set_axis_transforms(self.state_0, self.default_axis_transforms, indices=indices)
             self.anymals.set_root_velocities(self.state_0, self.default_root_velocities, indices=indices)
-            self.anymals.set_attribute("joint_qd", self.state_0, self.default_dof_velocities, indices=indices)
+            self.anymals.set_axis_velocities(self.state_0, self.default_axis_velocities, indices=indices)
+        else:
+            # set root and axis states together
+            self.anymals.set_attribute("joint_q", self.state_0, self.default_transforms, indices=indices)
+            self.anymals.set_attribute("joint_qd", self.state_0, self.default_velocities, indices=indices)
 
         if not isinstance(self.solver, newton.solvers.MuJoCoSolver):
             self.anymals.eval_fk(self.state_0, indices=indices)
@@ -216,7 +217,7 @@ if __name__ == "__main__":
 
     args = parser.parse_known_args()[0]
 
-    with wp.ScopedDevice(args.device):
+    with wp.ScopedDevice(args.device), torch.device(wp.device_to_torch(args.device)):
         example = Example(stage_path=args.stage_path, num_envs=args.num_envs)
 
         for _ in range(args.num_frames):
