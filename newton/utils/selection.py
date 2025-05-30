@@ -303,8 +303,10 @@ class ArticulationView:
         else:
             attrib = self._get_cached_attribute("joint_X_p", self.model)[:, 0]
 
-        # TODO: always cast to wp.transform
-        return attrib
+        if attrib.dtype is wp.transform:
+            return attrib
+        else:
+            return wp.array(attrib, dtype=wp.transform, device=self.device)
 
     def set_root_transforms(self, target: Model | State, values: wp.array, indices=None):
         """
@@ -348,10 +350,12 @@ class ArticulationView:
         if self.is_floating_base:
             attrib = self._get_cached_attribute("joint_qd", source)[:, :6]
         else:
-            attrib = self._get_cached_attribute("body_qd")[:, 0]
+            attrib = self._get_cached_attribute("body_qd", source)[:, 0]
 
-        # TODO: always cast to wp.spatial_vector
-        return attrib
+        if attrib.dtype is wp.spatial_vector:
+            return attrib
+        else:
+            return wp.array(attrib, dtype=wp.spatial_vector, device=self.device)
 
     def set_root_velocities(self, target: Model | State, values: wp.array, indices=None):
         """
