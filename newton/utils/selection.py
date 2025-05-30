@@ -22,7 +22,7 @@ from warp.types import is_array
 
 import newton.core.articulation
 from newton import Control, Model, State
-from newton.core.types import get_joint_dof_count, JOINT_FREE, JOINT_FIXED, JOINT_DISTANCE
+from newton.core.types import JOINT_DISTANCE, JOINT_FIXED, JOINT_FREE, get_joint_dof_count
 
 
 class AttributeRegistry:
