@@ -96,25 +96,25 @@ class Example:
         print(f"body_qd shape:      {self.ants.get_attribute('body_qd', self.model).shape}")
 
         # set all axes to the middle of their range by default
-        axis_limit_lower = wp.to_torch(self.ants.get_attribute("joint_limit_lower", self.model))
-        axis_limit_upper = wp.to_torch(self.ants.get_attribute("joint_limit_upper", self.model))
-        default_axis_transforms = 0.5 * (axis_limit_lower + axis_limit_upper)
+        dof_limit_lower = wp.to_torch(self.ants.get_attribute("joint_limit_lower", self.model))
+        dof_limit_upper = wp.to_torch(self.ants.get_attribute("joint_limit_upper", self.model))
+        default_dof_positions = 0.5 * (dof_limit_lower + dof_limit_upper)
 
         if USE_HELPER_API:
             # separate root and axis transforms
             self.default_root_transforms = wp.to_torch(self.ants.get_root_transforms(self.model)).clone()
             self.default_root_transforms[:, 2] = 0.8
-            self.default_axis_transforms = default_axis_transforms
+            self.default_dof_positions = default_dof_positions
             # separate root and axis velocities
             self.default_root_velocities = wp.to_torch(self.ants.get_root_velocities(self.model)).clone()
             self.default_root_velocities[:, 2] = 0.5 * math.pi  # rotate about z-axis
             self.default_root_velocities[:, 5] = 5.0  # move up z-axis
-            self.default_axis_velocities = wp.to_torch(self.ants.get_axis_velocities(self.model)).clone()
+            self.default_dof_velocities = wp.to_torch(self.ants.get_dof_velocities(self.model)).clone()
         else:
             # combined root and axis transforms
             self.default_transforms = wp.to_torch(self.ants.get_attribute("joint_q", self.model)).clone()
             self.default_transforms[:, 2] = 0.8  # z-coordinate of articulation root
-            self.default_transforms[:, 7:] = default_axis_transforms
+            self.default_transforms[:, 7:] = default_dof_positions
             # combined root and axis velocities
             self.default_velocities = wp.to_torch(self.ants.get_attribute("joint_qd", self.model)).clone()
             self.default_velocities[:, 2] = 0.5 * math.pi  # rotate about z-axis
@@ -172,12 +172,12 @@ class Example:
         # =========================
         # apply random controls
         # =========================
-        axis_forces = 300.0 - 600.0 * torch.rand((self.num_envs, self.ants.joint_axis_count))
+        dof_forces = 300.0 - 600.0 * torch.rand((self.num_envs, self.ants.joint_axis_count))
         if USE_HELPER_API:
-            self.ants.set_axis_forces(self.control, axis_forces)
+            self.ants.set_dof_forces(self.control, dof_forces)
         else:
             # include the root free joint
-            forces = torch.cat([torch.zeros((self.num_envs, 6)), axis_forces], axis=1)
+            forces = torch.cat([torch.zeros((self.num_envs, 6)), dof_forces], axis=1)
             self.ants.set_attribute("joint_f", self.control, forces)
 
         with wp.ScopedTimer("step", active=False):
@@ -192,13 +192,13 @@ class Example:
         # set transforms and velocities
         # ==============================
         if USE_HELPER_API:
-            # set root and axis states separately
+            # set root and dof states separately
             self.ants.set_root_transforms(self.state_0, self.default_root_transforms, mask=mask, indices=indices)
             self.ants.set_root_velocities(self.state_0, self.default_root_velocities, mask=mask, indices=indices)
-            self.ants.set_axis_positions(self.state_0, self.default_axis_transforms, mask=mask, indices=indices)
-            self.ants.set_axis_velocities(self.state_0, self.default_axis_velocities, mask=mask, indices=indices)
+            self.ants.set_dof_positions(self.state_0, self.default_dof_positions, mask=mask, indices=indices)
+            self.ants.set_dof_velocities(self.state_0, self.default_dof_velocities, mask=mask, indices=indices)
         else:
-            # set root and axis states together
+            # set root and dof states together
             self.ants.set_attribute("joint_q", self.state_0, self.default_transforms, mask=mask, indices=indices)
             self.ants.set_attribute("joint_qd", self.state_0, self.default_velocities, mask=mask, indices=indices)
 

@@ -38,7 +38,7 @@ class Example:
             "/World/envs/env_0",
             "/World/envs/env_{}",
             num_envs,
-            (5.0, 5.0, 0.0),
+            (4.0, 4.0, 0.0),
             # USD importer args
             collapse_fixed_joints=True,
             joint_ordering="dfs",
@@ -90,29 +90,28 @@ class Example:
         print(f"joint_dof_count:    {self.humanoids.joint_dof_count}")
 
         if USE_HELPER_API:
-            # separate root and axis transforms
+            # separate root and dof transforms
             self.default_root_transforms = wp.to_torch(self.humanoids.get_root_transforms(self.model)).clone()
             self.default_root_transforms[:, 2] = 1.5
-            self.default_axis_transforms = wp.to_torch(self.humanoids.get_axis_positions(self.model)).clone()
-            # separate root and axis velocities
+            self.default_dof_positions = wp.to_torch(self.humanoids.get_dof_positions(self.model)).clone()
+            # separate root and dof velocities
             self.default_root_velocities = wp.to_torch(self.humanoids.get_root_velocities(self.model)).clone()
             # self.default_root_velocities[:, 2] = 1.0 * math.pi  # rotate about z-axis
             # self.default_root_velocities[:, 5] = 5.0  # move up z-axis
-            self.default_axis_velocities = wp.to_torch(self.humanoids.get_axis_velocities(self.model)).clone()
+            self.default_dof_velocities = wp.to_torch(self.humanoids.get_dof_velocities(self.model)).clone()
         else:
-            # combined root and axis transforms
+            # combined root and dof transforms
             self.default_transforms = wp.to_torch(self.humanoids.get_attribute("joint_q", self.model)).clone()
             self.default_transforms[:, 2] = 1.5  # z-coordinate of articulation root
-            # self.default_transforms[:, 7:] = default_axis_transforms
-            # combined root and axis velocities
+            # combined root and dof velocities
             self.default_velocities = wp.to_torch(self.humanoids.get_attribute("joint_qd", self.model)).clone()
             # self.default_velocities[:, 2] = 1.0 * math.pi  # rotate about z-axis
             # self.default_velocities[:, 5] = 5.0  # move up z-axis
 
         # create disjoint index groups to alternate between
         all_indices = torch.arange(num_envs, dtype=torch.int32)
-        self.indices_0 = all_indices[::2].contiguous()
-        self.indices_1 = all_indices[1::2].contiguous()
+        self.indices_0 = all_indices[::2]
+        self.indices_1 = all_indices[1::2]
 
         # reset all
         self.reset()
@@ -144,12 +143,12 @@ class Example:
         # =========================
         # apply random controls
         # =========================
-        axis_forces = 20.0 - 40.0 * torch.rand((self.num_envs, self.humanoids.joint_axis_count))
+        dof_forces = 20.0 - 40.0 * torch.rand((self.num_envs, self.humanoids.joint_axis_count))
         if USE_HELPER_API:
-            self.humanoids.set_axis_forces(self.control, axis_forces)
+            self.humanoids.set_dof_forces(self.control, dof_forces)
         else:
             # include the root free joint
-            forces = torch.cat([torch.zeros((self.num_envs, 6)), axis_forces], axis=1)
+            forces = torch.cat([torch.zeros((self.num_envs, 6)), dof_forces], axis=1)
             self.humanoids.set_attribute("joint_f", self.control, forces)
 
         with wp.ScopedTimer("step", active=False):
@@ -164,13 +163,13 @@ class Example:
         # set transforms and velocities
         # ==============================
         if USE_HELPER_API:
-            # set root and axis states separately
+            # set root and dof states separately
             self.humanoids.set_root_transforms(self.state_0, self.default_root_transforms, indices=indices)
             self.humanoids.set_root_velocities(self.state_0, self.default_root_velocities, indices=indices)
-            self.humanoids.set_axis_positions(self.state_0, self.default_axis_transforms, indices=indices)
-            self.humanoids.set_axis_velocities(self.state_0, self.default_axis_velocities, indices=indices)
+            self.humanoids.set_dof_positions(self.state_0, self.default_dof_positions, indices=indices)
+            self.humanoids.set_dof_velocities(self.state_0, self.default_dof_velocities, indices=indices)
         else:
-            # set root and axis states together
+            # set root and dof states together
             self.humanoids.set_attribute("joint_q", self.state_0, self.default_transforms, indices=indices)
             self.humanoids.set_attribute("joint_qd", self.state_0, self.default_velocities, indices=indices)
 
