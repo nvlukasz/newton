@@ -517,7 +517,7 @@ class ArticulationView:
         else:
             # Fixed-base articulations have no root armature.
             # For articulations that are neither fixed nor floating, root joint armatures
-            # can be accessed using `get_axis_armatures()`
+            # can be accessed using `get_dof_armatures()`
             return None
 
     def set_root_armatures(self, target: Model | State, values: wp.array, mask=None, indices=None):
@@ -541,13 +541,13 @@ class ArticulationView:
     def get_link_velocities(self, source: Model | State):
         return self._get_cached_attribute("body_qd", source)
 
-    def get_axis_positions(self, source: Model | State):
+    def get_dof_positions(self, source: Model | State):
         if self.is_floating_base:
             return self._get_cached_attribute("joint_q", source)[:, 7:]
         else:
             return self._get_cached_attribute("joint_q", source)
 
-    def set_axis_positions(self, target: Model | State, values, mask=None, indices=None):
+    def set_dof_positions(self, target: Model | State, values, mask=None, indices=None):
         if self.is_floating_base:
             attrib = self._get_cached_attribute("joint_q", target)[:, 7:]
         else:
@@ -555,13 +555,13 @@ class ArticulationView:
 
         self._set_attribute_values(attrib, values, mask=mask, indices=indices)
 
-    def get_axis_velocities(self, source: Model | State):
+    def get_dof_velocities(self, source: Model | State):
         if self.is_floating_base:
             return self._get_cached_attribute("joint_qd", source)[:, 6:]
         else:
             return self._get_cached_attribute("joint_qd", source)
 
-    def set_axis_velocities(self, target: Model | State, values, mask=None, indices=None):
+    def set_dof_velocities(self, target: Model | State, values, mask=None, indices=None):
         if self.is_floating_base:
             attrib = self._get_cached_attribute("joint_qd", target)[:, 6:]
         else:
@@ -569,13 +569,13 @@ class ArticulationView:
 
         self._set_attribute_values(attrib, values, mask=mask, indices=indices)
 
-    def get_axis_forces(self, source: Control):
+    def get_dof_forces(self, source: Control):
         if self.is_floating_base:
             return self._get_cached_attribute("joint_f", source)[:, 6:]
         else:
             return self._get_cached_attribute("joint_f", source)
 
-    def set_axis_forces(self, target: Control, values, mask=None, indices=None):
+    def set_dof_forces(self, target: Control, values, mask=None, indices=None):
         if self.is_floating_base:
             attrib = self._get_cached_attribute("joint_f", target)[:, 6:]
         else:
@@ -583,13 +583,13 @@ class ArticulationView:
 
         self._set_attribute_values(attrib, values, mask=mask, indices=indices)
 
-    def get_axis_armatures(self, source: Model | State):
+    def get_dof_armatures(self, source: Model | State):
         if self.is_floating_base:
             return self._get_cached_attribute("joint_armature", source)[:, 6:]
         else:
             return self._get_cached_attribute("joint_armature", source)
 
-    def set_axis_armatures(self, target: Model | State, values, mask=None, indices=None):
+    def set_dof_armatures(self, target: Model | State, values, mask=None, indices=None):
         if self.is_floating_base:
             attrib = self._get_cached_attribute("joint_armature", target)[:, 6:]
         else:

@@ -86,14 +86,14 @@ class Example:
             root_transforms = wp.to_torch(self.cartpoles.get_root_transforms(self.state_0))
             root_transforms[:, 2] = height
             self.cartpoles.set_root_transforms(self.state_0, root_transforms)
-            # axis transforms
-            self.cartpoles.set_axis_positions(self.state_0, axis_transforms)
+            # dof transforms
+            self.cartpoles.set_dof_positions(self.state_0, axis_transforms)
         else:
             # root transforms (we need to use joint_X_p for fixed joints)
             root_transforms = wp.to_torch(self.cartpoles.get_attribute("joint_X_p", self.model))
             root_transforms[:, 0, 2] = height
             self.cartpoles.set_attribute("joint_X_p", self.model, root_transforms)
-            # axis transforms
+            # dof transforms
             self.cartpoles.set_attribute("joint_q", self.state_0, axis_transforms)
 
         if not isinstance(self.solver, newton.solvers.MuJoCoSolver):
@@ -128,19 +128,19 @@ class Example:
         # get observations
         # =========================
         if USE_HELPER_API:
-            axis_transforms = wp.to_torch(self.cartpoles.get_axis_positions(self.state_0))
+            dof_positions = wp.to_torch(self.cartpoles.get_dof_positions(self.state_0))
         else:
-            axis_transforms = wp.to_torch(self.cartpoles.get_attribute("joint_q", self.state_0))
+            dof_positions = wp.to_torch(self.cartpoles.get_attribute("joint_q", self.state_0))
 
         # =========================
         # apply controls
         # =========================
-        axis_forces = torch.zeros((self.num_envs, self.cartpoles.joint_axis_count))
-        axis_forces[:, 0] = torch.where(axis_transforms[:, 0] > 0, -100, 100)
+        dof_forces = torch.zeros((self.num_envs, self.cartpoles.joint_axis_count))
+        dof_forces[:, 0] = torch.where(dof_positions[:, 0] > 0, -100, 100)
         if USE_HELPER_API:
-            self.cartpoles.set_axis_forces(self.control, axis_forces)
+            self.cartpoles.set_dof_forces(self.control, dof_forces)
         else:
-            self.cartpoles.set_attribute("joint_f", self.control, axis_forces)
+            self.cartpoles.set_attribute("joint_f", self.control, dof_forces)
 
         # simulate
         with wp.ScopedTimer("step", active=False):
