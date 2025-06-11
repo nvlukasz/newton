@@ -108,10 +108,12 @@ class Example:
             # self.default_velocities[:, 2] = 1.0 * math.pi  # rotate about z-axis
             # self.default_velocities[:, 5] = 5.0  # move up z-axis
 
-        # create disjoint index groups to alternate between
+        # create disjoint subsets to alternate between
         all_indices = torch.arange(num_envs, dtype=torch.int32)
-        self.indices_0 = all_indices[::2]
-        self.indices_1 = all_indices[1::2]
+        self.mask_0 = torch.zeros(num_envs, dtype=bool)
+        self.mask_0[all_indices[::2]] = True
+        self.mask_1 = torch.zeros(num_envs, dtype=bool)
+        self.mask_1[all_indices[1::2]] = True
 
         # reset all
         self.reset()
@@ -136,9 +138,9 @@ class Example:
 
     def step(self):
         if self.sim_time >= self.next_reset:
-            self.reset(self.indices_0)
+            self.reset(mask=self.mask_0)
+            self.mask_0, self.mask_1 = self.mask_1, self.mask_0
             self.next_reset = self.sim_time + 2.0
-            self.indices_0, self.indices_1 = self.indices_1, self.indices_0
 
         # =========================
         # apply random controls
@@ -158,23 +160,23 @@ class Example:
                 self.simulate()
         self.sim_time += self.frame_dt
 
-    def reset(self, indices=None):
+    def reset(self, mask=None):
         # ==============================
         # set transforms and velocities
         # ==============================
         if USE_HELPER_API:
             # set root and dof states separately
-            self.humanoids.set_root_transforms(self.state_0, self.default_root_transforms, indices=indices)
-            self.humanoids.set_root_velocities(self.state_0, self.default_root_velocities, indices=indices)
-            self.humanoids.set_dof_positions(self.state_0, self.default_dof_positions, indices=indices)
-            self.humanoids.set_dof_velocities(self.state_0, self.default_dof_velocities, indices=indices)
+            self.humanoids.set_root_transforms(self.state_0, self.default_root_transforms, mask=mask)
+            self.humanoids.set_root_velocities(self.state_0, self.default_root_velocities, mask=mask)
+            self.humanoids.set_dof_positions(self.state_0, self.default_dof_positions, mask=mask)
+            self.humanoids.set_dof_velocities(self.state_0, self.default_dof_velocities, mask=mask)
         else:
             # set root and dof states together
-            self.humanoids.set_attribute("joint_q", self.state_0, self.default_transforms, indices=indices)
-            self.humanoids.set_attribute("joint_qd", self.state_0, self.default_velocities, indices=indices)
+            self.humanoids.set_attribute("joint_q", self.state_0, self.default_transforms, mask=mask)
+            self.humanoids.set_attribute("joint_qd", self.state_0, self.default_velocities, mask=mask)
 
         if not isinstance(self.solver, newton.solvers.MuJoCoSolver):
-            self.humanoids.eval_fk(self.state_0, indices=indices)
+            self.humanoids.eval_fk(self.state_0, mask=mask)
 
     def render(self):
         if self.renderer is None:

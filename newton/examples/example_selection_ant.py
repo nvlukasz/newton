@@ -27,7 +27,6 @@ from newton.utils.selection import ArticulationView
 USE_HELPER_API = True
 COLLAPSE_FIXED_JOINTS = True
 VERBOSE = False
-USE_MASKS = True  # use masks instead of indices
 
 
 class Example:
@@ -122,20 +121,10 @@ class Example:
 
         # create disjoint subsets to alternate resets
         all_indices = torch.arange(num_envs, dtype=torch.int32)
-        indices_0 = all_indices[::2]
-        indices_1 = all_indices[1::2]
-        if USE_MASKS:
-            self.mask_0 = torch.zeros(num_envs, dtype=bool)
-            self.mask_1 = torch.zeros(num_envs, dtype=bool)
-            self.mask_0[indices_0] = True
-            self.mask_1[indices_1] = True
-            self.indices_0 = None
-            self.indices_1 = None
-        else:
-            self.indices_0 = indices_0
-            self.indices_1 = indices_1
-            self.mask_0 = None
-            self.mask_1 = None
+        self.mask_0 = torch.zeros(num_envs, dtype=bool)
+        self.mask_0[all_indices[::2]] = True
+        self.mask_1 = torch.zeros(num_envs, dtype=bool)
+        self.mask_1[all_indices[1::2]] = True
 
         # reset all
         self.reset()
@@ -160,13 +149,8 @@ class Example:
 
     def step(self):
         if self.sim_time >= self.next_reset:
-            # choose whether to use indices or masks
-            if USE_MASKS:
-                self.reset(mask=self.mask_0)
-                self.mask_0, self.mask_1 = self.mask_1, self.mask_0
-            else:
-                self.reset(indices=self.indices_0)
-                self.indices_0, self.indices_1 = self.indices_1, self.indices_0
+            self.reset(mask=self.mask_0)
+            self.mask_0, self.mask_1 = self.mask_1, self.mask_0
             self.next_reset = self.sim_time + 2.0
 
         # =========================
@@ -187,23 +171,23 @@ class Example:
                 self.simulate()
         self.sim_time += self.frame_dt
 
-    def reset(self, mask=None, indices=None):
+    def reset(self, mask=None):
         # ==============================
         # set transforms and velocities
         # ==============================
         if USE_HELPER_API:
             # set root and dof states separately
-            self.ants.set_root_transforms(self.state_0, self.default_root_transforms, mask=mask, indices=indices)
-            self.ants.set_root_velocities(self.state_0, self.default_root_velocities, mask=mask, indices=indices)
-            self.ants.set_dof_positions(self.state_0, self.default_dof_positions, mask=mask, indices=indices)
-            self.ants.set_dof_velocities(self.state_0, self.default_dof_velocities, mask=mask, indices=indices)
+            self.ants.set_root_transforms(self.state_0, self.default_root_transforms, mask=mask)
+            self.ants.set_root_velocities(self.state_0, self.default_root_velocities, mask=mask)
+            self.ants.set_dof_positions(self.state_0, self.default_dof_positions, mask=mask)
+            self.ants.set_dof_velocities(self.state_0, self.default_dof_velocities, mask=mask)
         else:
             # set root and dof states together
-            self.ants.set_attribute("joint_q", self.state_0, self.default_transforms, mask=mask, indices=indices)
-            self.ants.set_attribute("joint_qd", self.state_0, self.default_velocities, mask=mask, indices=indices)
+            self.ants.set_attribute("joint_q", self.state_0, self.default_transforms, mask=mask)
+            self.ants.set_attribute("joint_qd", self.state_0, self.default_velocities, mask=mask)
 
         if True or not isinstance(self.solver, newton.solvers.MuJoCoSolver):
-            self.ants.eval_fk(self.state_0, mask=mask, indices=indices)
+            self.ants.eval_fk(self.state_0, mask=mask)
 
     def render(self):
         if self.renderer is None:
