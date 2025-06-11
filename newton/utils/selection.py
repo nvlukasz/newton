@@ -17,7 +17,6 @@ import functools
 from fnmatch import fnmatch
 from typing import Any
 
-import numpy as np
 import warp as wp
 from warp.types import is_array
 
@@ -27,43 +26,7 @@ from newton.core.types import JOINT_DISTANCE, JOINT_FIXED, JOINT_FREE, get_joint
 
 
 @wp.kernel
-def get_model_articulation_indices_kernel(
-    view_indices: wp.array(dtype=int),  # indices in ArticulationView
-    view_to_model_map: wp.array(dtype=int),  # maps index in ArticulationView to articulation index in Model
-    articulation_indices: wp.array(dtype=int),  # output: articulation indices in Model
-):
-    """Translate indices in an ArticulationView to articulation indices in the Model."""
-    tid = wp.tid()
-    articulation_indices[tid] = view_to_model_map[view_indices[tid]]
-
-
-@wp.kernel
 def set_model_articulation_mask_kernel(
-    view_to_model_map: wp.array(dtype=int),  # maps index in ArticulationView to articulation index in Model
-    articulation_mask: wp.array(dtype=bool),  # output: mask of Model articulation indices
-):
-    """
-    Set Model articulation mask from all articulations in an ArticulationView.
-    """
-    tid = wp.tid()
-    articulation_mask[view_to_model_map[tid]] = True
-
-
-@wp.kernel
-def set_model_articulation_mask_from_view_indices_kernel(
-    view_indices: wp.array(dtype=int),  # indices in ArticulationView
-    view_to_model_map: wp.array(dtype=int),  # maps index in ArticulationView to articulation index in Model
-    articulation_mask: wp.array(dtype=bool),  # output: mask of Model articulation indices
-):
-    """
-    Set Model articulation mask from indices in an ArticulationView.
-    """
-    tid = wp.tid()
-    articulation_mask[view_to_model_map[view_indices[tid]]] = True
-
-
-@wp.kernel
-def set_model_articulation_mask_from_view_mask_kernel(
     view_mask: wp.array(dtype=bool),  # mask in ArticulationView
     view_to_model_map: wp.array(dtype=int),  # maps index in ArticulationView to articulation index in Model
     articulation_mask: wp.array(dtype=bool),  # output: mask of Model articulation indices
@@ -77,29 +40,7 @@ def set_model_articulation_mask_from_view_mask_kernel(
 
 
 @wp.kernel
-def set_articulation_attribute_indexed_2d(
-    view_indices: wp.array(dtype=int),  # indices in ArticulationView
-    values: wp.array2d(dtype=Any),
-    attrib: wp.array2d(dtype=Any),
-):
-    i, j = wp.tid()
-    arti = view_indices[i]
-    attrib[arti, j] = values[arti, j]
-
-
-@wp.kernel
-def set_articulation_attribute_indexed_3d(
-    view_indices: wp.array(dtype=int),  # indices in ArticulationView
-    values: wp.array3d(dtype=Any),
-    attrib: wp.array3d(dtype=Any),
-):
-    i, j, k = wp.tid()
-    arti = view_indices[i]
-    attrib[arti, j, k] = values[arti, j, k]
-
-
-@wp.kernel
-def set_articulation_attribute_masked_2d(
+def set_articulation_attribute_2d_kernel(
     view_mask: wp.array(dtype=bool),  # mask in ArticulationView
     values: wp.array2d(dtype=Any),
     attrib: wp.array2d(dtype=Any),
@@ -110,7 +51,7 @@ def set_articulation_attribute_masked_2d(
 
 
 @wp.kernel
-def set_articulation_attribute_masked_3d(
+def set_articulation_attribute_3d_kernel(
     view_mask: wp.array(dtype=bool),  # mask in ArticulationView
     values: wp.array3d(dtype=Any),
     attrib: wp.array3d(dtype=Any),
@@ -120,36 +61,40 @@ def set_articulation_attribute_masked_3d(
         attrib[i, j, k] = values[i, j, k]
 
 
+@wp.kernel
+def set_articulation_attribute_4d_kernel(
+    view_mask: wp.array(dtype=bool),  # mask in ArticulationView
+    values: wp.array4d(dtype=Any),
+    attrib: wp.array4d(dtype=Any),
+):
+    i, j, k, l = wp.tid()
+    if view_mask[i]:
+        attrib[i, j, k, l] = values[i, j, k, l]
+
+
 # explicit overloads to avoid module reloading
 wp.overload(
-    set_articulation_attribute_indexed_2d, {"values": wp.array2d(dtype=float), "attrib": wp.array2d(dtype=float)}
+    set_articulation_attribute_2d_kernel, {"values": wp.array2d(dtype=float), "attrib": wp.array2d(dtype=float)}
 )
+wp.overload(set_articulation_attribute_2d_kernel, {"values": wp.array2d(dtype=int), "attrib": wp.array2d(dtype=int)})
 wp.overload(
-    set_articulation_attribute_indexed_2d,
+    set_articulation_attribute_2d_kernel,
     {"values": wp.array2d(dtype=wp.transform), "attrib": wp.array2d(dtype=wp.transform)},
 )
 wp.overload(
-    set_articulation_attribute_indexed_2d,
+    set_articulation_attribute_2d_kernel,
     {"values": wp.array2d(dtype=wp.spatial_vector), "attrib": wp.array2d(dtype=wp.spatial_vector)},
-)
-wp.overload(
-    set_articulation_attribute_indexed_3d, {"values": wp.array3d(dtype=float), "attrib": wp.array3d(dtype=float)}
 )
 
 wp.overload(
-    set_articulation_attribute_masked_2d, {"values": wp.array2d(dtype=float), "attrib": wp.array2d(dtype=float)}
+    set_articulation_attribute_3d_kernel, {"values": wp.array3d(dtype=float), "attrib": wp.array3d(dtype=float)}
 )
+wp.overload(set_articulation_attribute_3d_kernel, {"values": wp.array3d(dtype=int), "attrib": wp.array3d(dtype=int)})
+
 wp.overload(
-    set_articulation_attribute_masked_2d,
-    {"values": wp.array2d(dtype=wp.transform), "attrib": wp.array2d(dtype=wp.transform)},
+    set_articulation_attribute_4d_kernel, {"values": wp.array4d(dtype=float), "attrib": wp.array4d(dtype=float)}
 )
-wp.overload(
-    set_articulation_attribute_masked_2d,
-    {"values": wp.array2d(dtype=wp.spatial_vector), "attrib": wp.array2d(dtype=wp.spatial_vector)},
-)
-wp.overload(
-    set_articulation_attribute_masked_3d, {"values": wp.array3d(dtype=float), "attrib": wp.array3d(dtype=float)}
-)
+wp.overload(set_articulation_attribute_4d_kernel, {"values": wp.array4d(dtype=int), "attrib": wp.array4d(dtype=int)})
 
 
 class ArticulationView:
@@ -223,16 +168,17 @@ class ArticulationView:
 
         self.articulation_indices = wp.array(articulation_ids, dtype=int, device=self.device)
 
+        # TODO: zero-stride mask would use less memory
+        self.full_mask = wp.full(count, True, dtype=bool, device=self.device)
+
         # create articulation mask
         self.articulation_mask = wp.zeros(model.articulation_count, dtype=bool, device=self.device)
         wp.launch(
             set_model_articulation_mask_kernel,
             dim=count,
-            inputs=[self.articulation_indices, self.articulation_mask],
+            inputs=[self.full_mask, self.articulation_indices, self.articulation_mask],
             device=self.device,
         )
-
-        self.all_indices = wp.array(np.arange(count, dtype=np.int32), device=self.device)
 
         # set some counting properties
         self.count = count
@@ -330,45 +276,41 @@ class ArticulationView:
 
         return attrib
 
-    def _set_attribute_values(self, attrib, values, mask=None, indices=None):
+    def _set_attribute_values(self, attrib, values, mask=None):
         if not is_array(values):
             values = wp.array(values, dtype=attrib.dtype, shape=attrib.shape, device=self.device, copy=False)
+        assert values.shape == attrib.shape
+        assert values.dtype == attrib.dtype
 
         # early out for in-place modifications
         if values.ptr == attrib.ptr:
             return
 
-        if mask is not None:
-            if not isinstance(mask, wp.array):
-                mask = wp.array(mask, dtype=bool, device=self.device)
-            # print(f"~!~!~! mask {mask}")
-            launch_dim = (self.count, *attrib.shape[1:])
-            if attrib.ndim == 2:
-                wp.launch(set_articulation_attribute_masked_2d, dim=launch_dim, inputs=[mask, values, attrib])
-            elif attrib.ndim == 3:
-                wp.launch(set_articulation_attribute_masked_3d, dim=launch_dim, inputs=[indices, values, attrib])
-            else:
-                raise NotImplementedError()
-        elif indices is not None:
-            if not isinstance(indices, wp.array):
-                indices = wp.array(indices, dtype=int, device=self.device)
-            # print(f"~!~!~! indices {indices}")
-            launch_dim = (indices.size, *attrib.shape[1:])
-            if attrib.ndim == 2:
-                wp.launch(set_articulation_attribute_indexed_2d, dim=launch_dim, inputs=[indices, values, attrib])
-            elif attrib.ndim == 3:
-                wp.launch(set_articulation_attribute_indexed_3d, dim=launch_dim, inputs=[indices, values, attrib])
-            else:
-                raise NotImplementedError()
+        # get mask
+        if mask is None:
+            mask = self.full_mask
         else:
-            wp.copy(attrib, values)
+            if not isinstance(mask, wp.array):
+                mask = wp.array(mask, dtype=bool, shape=(self.count,), device=self.device, copy=False)
+            assert mask.shape == (self.count,)
+
+        # launch appropriate kernel based on attribute dimensionality
+        # TODO: cache concrete overload per attribute?
+        if attrib.ndim == 2:
+            wp.launch(set_articulation_attribute_2d_kernel, dim=attrib.shape, inputs=[mask, values, attrib])
+        elif attrib.ndim == 3:
+            wp.launch(set_articulation_attribute_3d_kernel, dim=attrib.shape, inputs=[mask, values, attrib])
+        elif attrib.ndim == 4:
+            wp.launch(set_articulation_attribute_4d_kernel, dim=attrib.shape, inputs=[mask, values, attrib])
+        else:
+            raise NotImplementedError(f"Unsupported attribute with ndim={attrib.ndim}")
 
     def get_attribute(self, name: str, source: Model | State | Control):
         return self._get_cached_attribute(name, source)
 
-    def set_attribute(self, name: str, target: Model | State | Control, values, mask=None, indices=None):
+    def set_attribute(self, name: str, target: Model | State | Control, values, mask=None):
         attrib = self._get_cached_attribute(name, target)
-        self._set_attribute_values(attrib, values, mask=mask, indices=indices)
+        self._set_attribute_values(attrib, values, mask=mask)
 
     # ========================================================================================
     # Convenience wrappers to align with legacy tensor API
@@ -391,9 +333,9 @@ class ArticulationView:
         if attrib.dtype is wp.transform:
             return attrib
         else:
-            return wp.array(attrib, dtype=wp.transform, device=self.device)
+            return wp.array(attrib, dtype=wp.transform, device=self.device, copy=False)
 
-    def set_root_transforms(self, target: Model | State, values: wp.array, mask=None, indices=None):
+    def set_root_transforms(self, target: Model | State, values: wp.array, mask=None):
         """
         Set the root transforms of the articulations.
         Call `eval_fk()` to apply changes to all articulation links.
@@ -401,13 +343,14 @@ class ArticulationView:
         Args:
             target (Model | State): Where to set the root transforms (Model or State).
             values (array): The root transforms to set (dtype=wp.transform).
+            mask (array): Mask of articulations in this ArticulationView (all by default).
         """
         if self.is_floating_base:
             attrib = self._get_cached_attribute("joint_q", target)[:, :7]
         else:
             attrib = self._get_cached_attribute("joint_X_p", self.model)[:, 0]
 
-        self._set_attribute_values(attrib, values, mask=mask, indices=indices)
+        self._set_attribute_values(attrib, values, mask=mask)
 
     def get_root_velocities(self, source: Model | State):
         """
@@ -428,22 +371,23 @@ class ArticulationView:
         if attrib.dtype is wp.spatial_vector:
             return attrib
         else:
-            return wp.array(attrib, dtype=wp.spatial_vector, device=self.device)
+            return wp.array(attrib, dtype=wp.spatial_vector, device=self.device, copy=False)
 
-    def set_root_velocities(self, target: Model | State, values: wp.array, mask=None, indices=None):
+    def set_root_velocities(self, target: Model | State, values: wp.array, mask=None):
         """
         Set the root velocities of the articulations.
 
         Args:
             target (Model | State): Where to set the root velocities (Model or State).
             values (array): The root velocities to set (dtype=wp.spatial_vector).
+            mask (array): Mask of articulations in this ArticulationView (all by default).
         """
         if self.is_floating_base:
             attrib = self._get_cached_attribute("joint_qd", target)[:, :6]
         else:
             return  # no-op
 
-        self._set_attribute_values(attrib, values, mask=mask, indices=indices)
+        self._set_attribute_values(attrib, values, mask=mask)
 
     def get_root_armatures(self, source: Model | State):
         """
@@ -463,20 +407,21 @@ class ArticulationView:
             # can be accessed using `get_dof_armatures()`
             return None
 
-    def set_root_armatures(self, target: Model | State, values: wp.array, mask=None, indices=None):
+    def set_root_armatures(self, target: Model | State, values: wp.array, mask=None):
         """
         Set the root joint armatures of the articulations.
 
         Args:
             target (Model | State): Where to set the root armatures (Model or State).
             values (array): The root armatures to set (dtype=wp.float32).
+            mask (array): Mask of articulations in this ArticulationView (all by default).
         """
         if self.is_floating_base:
             attrib = self._get_cached_attribute("joint_armature", target)[:, :6]
         else:
             return  # no-op
 
-        self._set_attribute_values(attrib, values, mask=mask, indices=indices)
+        self._set_attribute_values(attrib, values, mask=mask)
 
     def get_link_transforms(self, source: Model | State):
         return self._get_cached_attribute("body_q", source)
@@ -490,13 +435,13 @@ class ArticulationView:
         else:
             return self._get_cached_attribute("joint_q", source)
 
-    def set_dof_positions(self, target: Model | State, values, mask=None, indices=None):
+    def set_dof_positions(self, target: Model | State, values, mask=None):
         if self.is_floating_base:
             attrib = self._get_cached_attribute("joint_q", target)[:, 7:]
         else:
             attrib = self._get_cached_attribute("joint_q", target)
 
-        self._set_attribute_values(attrib, values, mask=mask, indices=indices)
+        self._set_attribute_values(attrib, values, mask=mask)
 
     def get_dof_velocities(self, source: Model | State):
         if self.is_floating_base:
@@ -504,13 +449,13 @@ class ArticulationView:
         else:
             return self._get_cached_attribute("joint_qd", source)
 
-    def set_dof_velocities(self, target: Model | State, values, mask=None, indices=None):
+    def set_dof_velocities(self, target: Model | State, values, mask=None):
         if self.is_floating_base:
             attrib = self._get_cached_attribute("joint_qd", target)[:, 6:]
         else:
             attrib = self._get_cached_attribute("joint_qd", target)
 
-        self._set_attribute_values(attrib, values, mask=mask, indices=indices)
+        self._set_attribute_values(attrib, values, mask=mask)
 
     def get_dof_forces(self, source: Control):
         if self.is_floating_base:
@@ -518,13 +463,13 @@ class ArticulationView:
         else:
             return self._get_cached_attribute("joint_f", source)
 
-    def set_dof_forces(self, target: Control, values, mask=None, indices=None):
+    def set_dof_forces(self, target: Control, values, mask=None):
         if self.is_floating_base:
             attrib = self._get_cached_attribute("joint_f", target)[:, 6:]
         else:
             attrib = self._get_cached_attribute("joint_f", target)
 
-        self._set_attribute_values(attrib, values, mask=mask, indices=indices)
+        self._set_attribute_values(attrib, values, mask=mask)
 
     def get_dof_armatures(self, source: Model | State):
         if self.is_floating_base:
@@ -532,58 +477,45 @@ class ArticulationView:
         else:
             return self._get_cached_attribute("joint_armature", source)
 
-    def set_dof_armatures(self, target: Model | State, values, mask=None, indices=None):
+    def set_dof_armatures(self, target: Model | State, values, mask=None):
         if self.is_floating_base:
             attrib = self._get_cached_attribute("joint_armature", target)[:, 6:]
         else:
             attrib = self._get_cached_attribute("joint_armature", target)
 
-        self._set_attribute_values(attrib, values, mask=mask, indices=indices)
+        self._set_attribute_values(attrib, values, mask=mask)
 
     # ========================================================================================
     # Utilities
 
-    def get_model_articulation_indices(self, indices=None):
-        """Translate indices in this ArticulationView to articulation indices in the Model."""
-        if indices is None:
-            return self.articulation_indices
-        else:
-            if not isinstance(indices, wp.array):
-                indices = wp.array(indices, dtype=int, device=self.device)
-            articulation_indices = wp.empty_like(indices, device=self.device)
-            wp.launch(
-                get_model_articulation_indices_kernel,
-                dim=indices.size,
-                inputs=[indices, self.articulation_indices, articulation_indices],
-            )
-            return articulation_indices
+    def get_model_articulation_mask(self, mask=None):
+        """
+        Get Model articulation mask from a mask in this ArticulationView.
 
-    def get_model_articulation_mask(self, mask=None, indices=None):
-        """Get Model articulation mask from indices or mask in this ArticulationView."""
-        if mask is not None:
+        Args:
+            mask (array): Mask of articulations in this ArticulationView (all by default).
+        """
+        if mask is None:
+            return self.articulation_mask
+        else:
             if not isinstance(mask, wp.array):
-                mask = wp.array(mask, dtype=bool, device=self.device)
+                mask = wp.array(mask, dtype=bool, device=self.device, copy=False)
             assert mask.shape == (self.count,)
             articulation_mask = wp.zeros(self.model.articulation_count, dtype=bool, device=self.device)
             wp.launch(
-                set_model_articulation_mask_from_view_mask_kernel,
+                set_model_articulation_mask_kernel,
                 dim=mask.size,
                 inputs=[mask, self.articulation_indices, articulation_mask],
             )
             return articulation_mask
-        elif indices is not None:
-            if not isinstance(indices, wp.array):
-                indices = wp.array(indices, dtype=int, device=self.device)
-            articulation_mask = wp.zeros(self.model.articulation_count, dtype=bool, device=self.device)
-            wp.launch(
-                set_model_articulation_mask_from_view_indices_kernel,
-                dim=indices.size,
-                inputs=[indices, self.articulation_indices, articulation_mask],
-            )
-            return articulation_mask
-        else:
-            return self.articulation_mask
 
-    def eval_fk(self, target: Model | State, mask=None, indices=None):
-        articulation_mask = self.get_model_articulation_mask(mask=mask, indices=indices)
+    def eval_fk(self, target: Model | State, mask=None):
+        """
+        Evaluates forward kinematics given the joint coordinates and updates the body information.
+
+        Args:
+            mask (array): Mask of articulations in this ArticulationView (all by default).
+        """
+        # translate view mask to Model articulation mask
+        articulation_mask = self.get_model_articulation_mask(mask=mask)
         newton.core.articulation.eval_fk(self.model, target.joint_q, target.joint_qd, target, mask=articulation_mask)
