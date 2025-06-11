@@ -307,6 +307,51 @@ class Model:
         self.device = wp.get_device(device)
         """Device on which the Model was allocated."""
 
+        self.attribute_frequency = {}
+        """Classify each attribute as per body, per joint, per DOF, etc."""
+
+        # attributes per body
+        self.attribute_frequency["body_q"] = "body"
+        self.attribute_frequency["body_qd"] = "body"
+        self.attribute_frequency["body_com"] = "body"
+        self.attribute_frequency["body_inertia"] = "body"
+        self.attribute_frequency["body_inv_inertia"] = "body"
+        self.attribute_frequency["body_mass"] = "body"
+        self.attribute_frequency["body_inv_mass"] = "body"
+        self.attribute_frequency["body_f"] = "body"
+
+        # attributes per joint
+        self.attribute_frequency["joint_type"] = "joint"
+        self.attribute_frequency["joint_parent"] = "joint"
+        self.attribute_frequency["joint_child"] = "joint"
+        self.attribute_frequency["joint_ancestor"] = "joint"
+        self.attribute_frequency["joint_X_p"] = "joint"
+        self.attribute_frequency["joint_X_c"] = "joint"
+        self.attribute_frequency["joint_axis_start"] = "joint"
+        self.attribute_frequency["joint_axis_dim"] = "joint"
+        self.attribute_frequency["joint_enabled"] = "joint"
+        self.attribute_frequency["joint_twist_lower"] = "joint"
+        self.attribute_frequency["joint_twist_upper"] = "joint"
+
+        # attributes per joint coord
+        self.attribute_frequency["joint_q"] = "joint_coord"
+
+        # attributes per joint dof
+        self.attribute_frequency["joint_qd"] = "joint_dof"
+        self.attribute_frequency["joint_f"] = "joint_dof"
+        self.attribute_frequency["joint_armature"] = "joint_dof"
+
+        # attributes per joint axis
+        self.attribute_frequency["joint_target"] = "joint_axis"
+        self.attribute_frequency["joint_axis"] = "joint_axis"
+        self.attribute_frequency["joint_target_ke"] = "joint_axis"
+        self.attribute_frequency["joint_target_kd"] = "joint_axis"
+        self.attribute_frequency["joint_axis_mode"] = "joint_axis"
+        self.attribute_frequency["joint_limit_lower"] = "joint_axis"
+        self.attribute_frequency["joint_limit_upper"] = "joint_axis"
+        self.attribute_frequency["joint_limit_ke"] = "joint_axis"
+        self.attribute_frequency["joint_limit_kd"] = "joint_axis"
+
     def state(self, requires_grad: bool | None = None) -> State:
         """Returns a state object for the model
 

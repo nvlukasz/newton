@@ -26,63 +26,6 @@ from newton import Control, Model, State
 from newton.core.types import JOINT_DISTANCE, JOINT_FIXED, JOINT_FREE, get_joint_dof_count
 
 
-class AttributeRegistry:
-    def __init__(self):
-        # look up indexing mode for known attributes
-        self._indexing_mode: dict[str:str] = {}
-
-        # addressable by joint id
-        self.register_attribute("joint_type", "joint")
-        self.register_attribute("joint_parent", "joint")
-        self.register_attribute("joint_child", "joint")
-        self.register_attribute("joint_ancestor", "joint")
-        self.register_attribute("joint_X_p", "joint")
-        self.register_attribute("joint_X_c", "joint")
-        self.register_attribute("joint_axis_start", "joint")
-        self.register_attribute("joint_axis_dim", "joint")
-        self.register_attribute("joint_enabled", "joint")
-        self.register_attribute("joint_twist_lower", "joint")
-        self.register_attribute("joint_twist_upper", "joint")
-
-        # addressable by joint coord offset
-        self.register_attribute("joint_q", "joint_coord")
-
-        # addressable by joint dof offset
-        self.register_attribute("joint_qd", "joint_dof")
-        self.register_attribute("joint_f", "joint_dof")
-        self.register_attribute("joint_armature", "joint_dof")
-
-        # addressable by joint axis offset
-        self.register_attribute("joint_target", "joint_axis")
-        self.register_attribute("joint_axis", "joint_axis")
-        self.register_attribute("joint_target_ke", "joint_axis")
-        self.register_attribute("joint_target_kd", "joint_axis")
-        self.register_attribute("joint_axis_mode", "joint_axis")
-        self.register_attribute("joint_limit_lower", "joint_axis")
-        self.register_attribute("joint_limit_upper", "joint_axis")
-        self.register_attribute("joint_limit_ke", "joint_axis")
-        self.register_attribute("joint_limit_kd", "joint_axis")
-
-        # addressable by body id
-        self.register_attribute("body_q", "body")
-        self.register_attribute("body_qd", "body")
-        self.register_attribute("body_com", "body")
-        self.register_attribute("body_inertia", "body")
-        self.register_attribute("body_inv_inertia", "body")
-        self.register_attribute("body_mass", "body")
-        self.register_attribute("body_inv_mass", "body")
-        self.register_attribute("body_f", "body")
-
-    def register_attribute(self, name: str, mode: str):
-        self._indexing_mode[name] = mode
-
-    def get_indexing_mode(self, attribute_name: str):
-        return self._indexing_mode[attribute_name]
-
-
-attribute_registry = AttributeRegistry()
-
-
 @wp.kernel
 def get_model_articulation_indices_kernel(
     view_indices: wp.array(dtype=int),  # indices in ArticulationView
@@ -355,7 +298,7 @@ class ArticulationView:
             # print("Joint dof names:")
             # print(self.joint_dof_names)
 
-        # slices by indexing mode
+        # slices by attribute frequency
         self._slices = {
             "joint": slice(int(joint_begin), int(joint_end)),
             "joint_coord": slice(int(joint_coord_begin), int(joint_coord_end)),
@@ -378,8 +321,8 @@ class ArticulationView:
         batched_shape = (self.count, attrib.shape[0] // self.count, *attrib.shape[1:])
 
         # get attribute slice
-        indexing_mode = attribute_registry.get_indexing_mode(name)
-        attrib_slice = self._slices[indexing_mode]
+        frequency = self.model.get_attribute_frequency(name)
+        attrib_slice = self._slices[frequency]
 
         # create strided array
         attrib = attrib.reshape(batched_shape)
