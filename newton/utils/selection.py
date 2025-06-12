@@ -20,7 +20,7 @@ from typing import Any
 import warp as wp
 from warp.types import is_array
 
-import newton.core.articulation
+import newton.sim
 from newton import Control, Model, State
 from newton.core.types import JOINT_DISTANCE, JOINT_FIXED, JOINT_FREE, get_joint_dof_count
 
