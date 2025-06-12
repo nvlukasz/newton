@@ -20,9 +20,9 @@ from typing import Any
 import warp as wp
 from warp.types import is_array
 
-import newton.core.articulation
+import newton.sim
 from newton import Control, Model, State
-from newton.core.types import JOINT_DISTANCE, JOINT_FIXED, JOINT_FREE, get_joint_dof_count
+from newton.sim import JOINT_DISTANCE, JOINT_FIXED, JOINT_FREE, get_joint_dof_count
 
 
 @wp.kernel
@@ -518,4 +518,4 @@ class ArticulationView:
         """
         # translate view mask to Model articulation mask
         articulation_mask = self.get_model_articulation_mask(mask=mask)
-        newton.core.articulation.eval_fk(self.model, target.joint_q, target.joint_qd, target, mask=articulation_mask)
+        newton.sim.eval_fk(self.model, target.joint_q, target.joint_qd, target, mask=articulation_mask)
