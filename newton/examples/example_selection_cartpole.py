@@ -21,30 +21,36 @@ import warp as wp
 import newton
 import newton.examples
 import newton.utils
-from newton.utils.isaaclab import replicate_environment
+from newton.examples import compute_env_offsets
 from newton.utils.selection import ArticulationView
 
 USE_HELPER_API = True
-COLLAPSE_FIXED_JOINTS = True
-VERBOSE = False
+COLLAPSE_FIXED_JOINTS = False
+VERBOSE = True
 
 
 class Example:
     def __init__(self, stage_path=None, num_envs=8):
         self.num_envs = num_envs
 
-        builder, stage_info = replicate_environment(
-            newton.examples.get_asset("envs/cartpole_env.usda"),
-            "/World/envs/env_0",
-            "/World/envs/env_{}",
-            num_envs,
-            (2.0, 3.0, 0.0),
-            # USD importer args
+        up_axis = newton.Axis.Z
+
+        articulation_builder = newton.ModelBuilder(up_axis=up_axis)
+        newton.utils.parse_urdf(
+            newton.examples.get_asset("cartpole.urdf"),
+            articulation_builder,
+            up_axis=up_axis,
+            xform=wp.transform((0.0, 0.0, 2.0), wp.quat_identity()),
             collapse_fixed_joints=COLLAPSE_FIXED_JOINTS,
-            joint_ordering="dfs",
+            enable_self_collisions=False,
+            floating=False,
         )
 
-        up_axis = stage_info.get("up_axis") or newton.Axis.Z
+        env_offsets = compute_env_offsets(num_envs, env_offset=(4.0, 4.0, 0.0), up_axis=up_axis)
+
+        builder = newton.ModelBuilder()
+        for i in range(self.num_envs):
+            builder.add_builder(articulation_builder, xform=wp.transform(env_offsets[i], wp.quat_identity()))
 
         # finalize model
         self.model = builder.finalize()
@@ -56,7 +62,7 @@ class Example:
         self.sim_substeps = 10
         self.sim_dt = self.frame_dt / self.sim_substeps
 
-        self.solver = newton.solvers.MuJoCoSolver(self.model)
+        self.solver = newton.solvers.MuJoCoSolver(self.model, disable_contacts=True)
 
         self.state_0 = self.model.state()
         self.state_1 = self.model.state()
@@ -65,7 +71,7 @@ class Example:
         # =======================
         # get cartpole view
         # =======================
-        self.cartpoles = ArticulationView(self.model, "/World/envs/*/Robot", verbose=VERBOSE)
+        self.cartpoles = ArticulationView(self.model, "cartpole", verbose=VERBOSE)
 
         # print(self.cartpoles.get_attribute("body_q", self.state_0))
         # print(self.cartpoles.get_attribute("body_qd", self.state_0))
@@ -77,23 +83,21 @@ class Example:
         # randomize initial state
         # =========================
         cart_positions = 2.0 - 4.0 * torch.rand(num_envs)
-        pole_angles = math.pi / 16.0 - math.pi / 8.0 * torch.rand(num_envs)
-        axis_transforms = torch.stack([cart_positions, pole_angles], dim=1)
-        height = 2.0
+        pole1_angles = math.pi / 16.0 - math.pi / 8.0 * torch.rand(num_envs)
+        pole2_angles = math.pi / 16.0 - math.pi / 8.0 * torch.rand(num_envs)
+        dof_positions = torch.stack([cart_positions, pole1_angles, pole2_angles], dim=1)
         if USE_HELPER_API:
             # root transforms
             root_transforms = wp.to_torch(self.cartpoles.get_root_transforms(self.state_0))
-            root_transforms[:, 2] = height
             self.cartpoles.set_root_transforms(self.state_0, root_transforms)
-            # dof transforms
-            self.cartpoles.set_dof_positions(self.state_0, axis_transforms)
+            # dof positions
+            self.cartpoles.set_dof_positions(self.state_0, dof_positions)
         else:
             # root transforms (we need to use joint_X_p for fixed joints)
             root_transforms = wp.to_torch(self.cartpoles.get_attribute("joint_X_p", self.model))
-            root_transforms[:, 0, 2] = height
             self.cartpoles.set_attribute("joint_X_p", self.model, root_transforms)
-            # dof transforms
-            self.cartpoles.set_attribute("joint_q", self.state_0, axis_transforms)
+            # dof positions
+            self.cartpoles.set_attribute("joint_q", self.state_0, dof_positions)
 
         if not isinstance(self.solver, newton.solvers.MuJoCoSolver):
             self.cartpoles.eval_fk(self.state_0)

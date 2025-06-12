@@ -21,30 +21,37 @@ import warp as wp
 import newton
 import newton.examples
 import newton.utils
-from newton.utils.isaaclab import replicate_environment
+from newton.examples import compute_env_offsets
 from newton.utils.selection import ArticulationView
 
 USE_HELPER_API = True
 COLLAPSE_FIXED_JOINTS = True
-VERBOSE = False
+VERBOSE = True
 
 
 class Example:
     def __init__(self, stage_path=None, num_envs=8):
         self.num_envs = num_envs
 
-        builder, stage_info = replicate_environment(
-            newton.examples.get_asset("envs/ant_env.usda"),
-            "/World/envs/env_0",
-            "/World/envs/env_{}",
-            num_envs,
-            (4.0, 4.0, 0.0),
-            # USD importer args
+        up_axis = newton.Axis.Z
+
+        articulation_builder = newton.ModelBuilder(up_axis=up_axis)
+        newton.utils.parse_mjcf(
+            newton.examples.get_asset("nv_ant.xml"),
+            articulation_builder,
+            ignore_names=["floor", "ground"],
+            up_axis=up_axis,
+            xform=wp.transform((0.0, 0.0, 1.0), wp.quat_identity()),
             collapse_fixed_joints=COLLAPSE_FIXED_JOINTS,
-            joint_ordering="dfs",
         )
 
-        up_axis = stage_info.get("up_axis") or newton.Axis.Z
+        env_offsets = compute_env_offsets(num_envs, env_offset=(4.0, 4.0, 0.0), up_axis=up_axis)
+
+        builder = newton.ModelBuilder()
+        for i in range(self.num_envs):
+            builder.add_builder(articulation_builder, xform=wp.transform(env_offsets[i], wp.quat_identity()))
+
+        builder.add_ground_plane()
 
         # finalize model
         self.model = builder.finalize()
@@ -79,7 +86,7 @@ class Example:
         # ===========================================================
         # create articulation view
         # ===========================================================
-        self.ants = ArticulationView(self.model, "/World/envs/*/Robot/torso", verbose=VERBOSE)
+        self.ants = ArticulationView(self.model, "ant", verbose=VERBOSE)
 
         print(f"articulation count: {self.ants.count}")
         print(f"link_count:         {self.ants.link_count}")
@@ -101,7 +108,6 @@ class Example:
         if USE_HELPER_API:
             # separate root and axis transforms
             self.default_root_transforms = wp.to_torch(self.ants.get_root_transforms(self.model)).clone()
-            self.default_root_transforms[:, 2] = 0.8
             self.default_dof_positions = default_dof_positions
             # separate root and axis velocities
             self.default_root_velocities = wp.to_torch(self.ants.get_root_velocities(self.model)).clone()
@@ -111,7 +117,6 @@ class Example:
         else:
             # combined root and axis transforms
             self.default_transforms = wp.to_torch(self.ants.get_attribute("joint_q", self.model)).clone()
-            self.default_transforms[:, 2] = 0.8  # z-coordinate of articulation root
             self.default_transforms[:, 7:] = default_dof_positions
             # combined root and axis velocities
             self.default_velocities = wp.to_torch(self.ants.get_attribute("joint_qd", self.model)).clone()
@@ -155,7 +160,7 @@ class Example:
         # =========================
         # apply random controls
         # =========================
-        dof_forces = 300.0 - 600.0 * torch.rand((self.num_envs, self.ants.joint_axis_count))
+        dof_forces = 20.0 - 40.0 * torch.rand((self.num_envs, self.ants.joint_axis_count))
         if USE_HELPER_API:
             self.ants.set_dof_forces(self.control, dof_forces)
         else:

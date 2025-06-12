@@ -21,30 +21,37 @@ import warp as wp
 import newton
 import newton.examples
 import newton.utils
-from newton.utils.isaaclab import replicate_environment
+from newton.examples import compute_env_offsets
 from newton.utils.selection import ArticulationView
 
 USE_HELPER_API = True
 COLLAPSE_FIXED_JOINTS = True
-VERBOSE = False
+VERBOSE = True
 
 
 class Example:
     def __init__(self, stage_path=None, num_envs=8):
         self.num_envs = num_envs
 
-        builder, stage_info = replicate_environment(
-            newton.examples.get_asset("envs/humanoid_env.usd"),
-            "/World/envs/env_0",
-            "/World/envs/env_{}",
-            num_envs,
-            (4.0, 4.0, 0.0),
-            # USD importer args
-            collapse_fixed_joints=True,
-            joint_ordering="dfs",
+        up_axis = newton.Axis.Z
+
+        articulation_builder = newton.ModelBuilder(up_axis=up_axis)
+        newton.utils.parse_mjcf(
+            newton.examples.get_asset("nv_humanoid.xml"),
+            articulation_builder,
+            ignore_names=["floor", "ground"],
+            up_axis=up_axis,
+            xform=wp.transform((0.0, 0.0, 1.5), wp.quat_identity()),
+            collapse_fixed_joints=COLLAPSE_FIXED_JOINTS,
         )
 
-        up_axis = stage_info.get("up_axis") or newton.Axis.Z
+        env_offsets = compute_env_offsets(num_envs, env_offset=(4.0, 4.0, 0.0), up_axis=up_axis)
+
+        builder = newton.ModelBuilder()
+        for i in range(self.num_envs):
+            builder.add_builder(articulation_builder, xform=wp.transform(env_offsets[i], wp.quat_identity()))
+
+        builder.add_ground_plane()
 
         # finalize model
         self.model = builder.finalize()
@@ -79,7 +86,7 @@ class Example:
         # ===========================================================
         # create articulation view
         # ===========================================================
-        self.humanoids = ArticulationView(self.model, "/World/envs/*/Robot/torso", verbose=VERBOSE)
+        self.humanoids = ArticulationView(self.model, "humanoid", verbose=VERBOSE)
 
         print(f"articulation count: {self.humanoids.count}")
         print(f"link_count:         {self.humanoids.link_count}")
@@ -91,21 +98,15 @@ class Example:
         if USE_HELPER_API:
             # separate root and dof transforms
             self.default_root_transforms = wp.to_torch(self.humanoids.get_root_transforms(self.model)).clone()
-            self.default_root_transforms[:, 2] = 1.5
             self.default_dof_positions = wp.to_torch(self.humanoids.get_dof_positions(self.model)).clone()
             # separate root and dof velocities
             self.default_root_velocities = wp.to_torch(self.humanoids.get_root_velocities(self.model)).clone()
-            # self.default_root_velocities[:, 2] = 1.0 * math.pi  # rotate about z-axis
-            # self.default_root_velocities[:, 5] = 5.0  # move up z-axis
             self.default_dof_velocities = wp.to_torch(self.humanoids.get_dof_velocities(self.model)).clone()
         else:
             # combined root and dof transforms
             self.default_transforms = wp.to_torch(self.humanoids.get_attribute("joint_q", self.model)).clone()
-            self.default_transforms[:, 2] = 1.5  # z-coordinate of articulation root
             # combined root and dof velocities
             self.default_velocities = wp.to_torch(self.humanoids.get_attribute("joint_qd", self.model)).clone()
-            # self.default_velocities[:, 2] = 1.0 * math.pi  # rotate about z-axis
-            # self.default_velocities[:, 5] = 5.0  # move up z-axis
 
         # create disjoint subsets to alternate between
         all_indices = torch.arange(num_envs, dtype=torch.int32)

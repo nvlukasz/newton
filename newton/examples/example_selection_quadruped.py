@@ -13,40 +13,51 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# import math
-
 import torch
 import warp as wp
 
 import newton
 import newton.examples
 import newton.utils
-from newton.utils.isaaclab import replicate_environment
+from newton.examples import compute_env_offsets
 from newton.utils.selection import ArticulationView
 
 USE_HELPER_API = True
 COLLAPSE_FIXED_JOINTS = True
-VERBOSE = False
+VERBOSE = True
 
 
 class Example:
     def __init__(self, stage_path=None, num_envs=8):
         self.num_envs = num_envs
 
-        builder, stage_info = replicate_environment(
-            newton.examples.get_asset("envs/anymal.usd"),
-            "/World/envs/env_0",
-            "/World/envs/env_{}",
-            num_envs,
-            (4.0, 4.0, 0.0),
-            # USD importer args
-            collapse_fixed_joints=True,
-            joint_ordering="dfs",
+        up_axis = newton.Axis.Z
+
+        articulation_builder = newton.ModelBuilder(up_axis=up_axis)
+        articulation_builder.default_body_armature = 0.01
+        articulation_builder.default_joint_cfg.armature = 0.01
+        articulation_builder.default_joint_cfg.mode = newton.JOINT_MODE_TARGET_POSITION
+        articulation_builder.default_joint_cfg.target_ke = 2000.0
+        articulation_builder.default_joint_cfg.target_kd = 1.0
+        articulation_builder.default_shape_cfg.ke = 1.0e4
+        articulation_builder.default_shape_cfg.kd = 1.0e2
+        articulation_builder.default_shape_cfg.kf = 1.0e2
+        articulation_builder.default_shape_cfg.mu = 1.0
+        newton.utils.parse_urdf(
+            newton.examples.get_asset("quadruped.urdf"),
+            articulation_builder,
+            up_axis=up_axis,
+            xform=wp.transform((0.0, 0.0, 1.0), wp.quat_identity()),
+            collapse_fixed_joints=COLLAPSE_FIXED_JOINTS,
+            floating=True,
         )
 
-        up_axis = stage_info.get("up_axis") or newton.Axis.Z
+        env_offsets = compute_env_offsets(num_envs, env_offset=(4.0, 4.0, 0.0), up_axis=up_axis)
 
-        # !!! asset has no ground plane
+        builder = newton.ModelBuilder()
+        for i in range(self.num_envs):
+            builder.add_builder(articulation_builder, xform=wp.transform(env_offsets[i], wp.quat_identity()))
+
         builder.add_ground_plane()
 
         # finalize model
@@ -82,33 +93,27 @@ class Example:
         # ===========================================================
         # create articulation view
         # ===========================================================
-        self.anymals = ArticulationView(self.model, "/World/envs/*/Robot/base", verbose=VERBOSE)
+        self.quadrupeds = ArticulationView(self.model, "quadruped", verbose=VERBOSE)
 
-        print(f"articulation count: {self.anymals.count}")
-        print(f"link_count:         {self.anymals.link_count}")
-        print(f"joint_count:        {self.anymals.joint_count}")
-        print(f"joint_axis_count:   {self.anymals.joint_axis_count}")
-        print(f"joint_coord_count:  {self.anymals.joint_coord_count}")
-        print(f"joint_dof_count:    {self.anymals.joint_dof_count}")
+        print(f"articulation count: {self.quadrupeds.count}")
+        print(f"link_count:         {self.quadrupeds.link_count}")
+        print(f"joint_count:        {self.quadrupeds.joint_count}")
+        print(f"joint_axis_count:   {self.quadrupeds.joint_axis_count}")
+        print(f"joint_coord_count:  {self.quadrupeds.joint_coord_count}")
+        print(f"joint_dof_count:    {self.quadrupeds.joint_dof_count}")
 
         if USE_HELPER_API:
             # separate root and dof transforms
-            self.default_root_transforms = wp.to_torch(self.anymals.get_root_transforms(self.model)).clone()
-            self.default_root_transforms[:, 2] = 1.5
-            self.default_dof_positions = wp.to_torch(self.anymals.get_dof_positions(self.model)).clone()
+            self.default_root_transforms = wp.to_torch(self.quadrupeds.get_root_transforms(self.model)).clone()
+            self.default_dof_positions = wp.to_torch(self.quadrupeds.get_dof_positions(self.model)).clone()
             # separate root and dof velocities
-            self.default_root_velocities = wp.to_torch(self.anymals.get_root_velocities(self.model)).clone()
-            # self.default_root_velocities[:, 2] = 1.0 * math.pi  # rotate about z-axis
-            # self.default_root_velocities[:, 5] = 5.0  # move up z-axis
-            self.default_dof_velocities = wp.to_torch(self.anymals.get_dof_velocities(self.model)).clone()
+            self.default_root_velocities = wp.to_torch(self.quadrupeds.get_root_velocities(self.model)).clone()
+            self.default_dof_velocities = wp.to_torch(self.quadrupeds.get_dof_velocities(self.model)).clone()
         else:
             # combined root and dof transforms
-            self.default_transforms = wp.to_torch(self.anymals.get_attribute("joint_q", self.model)).clone()
-            self.default_transforms[:, 2] = 1.5  # z-coordinate of articulation root
+            self.default_transforms = wp.to_torch(self.quadrupeds.get_attribute("joint_q", self.model)).clone()
             # combined root and dof velocities
-            self.default_velocities = wp.to_torch(self.anymals.get_attribute("joint_qd", self.model)).clone()
-            # self.default_velocities[:, 2] = 1.0 * math.pi  # rotate about z-axis
-            # self.default_velocities[:, 5] = 5.0  # move up z-axis
+            self.default_velocities = wp.to_torch(self.quadrupeds.get_attribute("joint_qd", self.model)).clone()
 
         # create disjoint subsets to alternate between
         all_indices = torch.arange(num_envs, dtype=torch.int32)
@@ -147,13 +152,13 @@ class Example:
         # =========================
         # apply random controls
         # =========================
-        # dof_forces = 20.0 - 40.0 * torch.rand((self.num_envs, self.anymals.joint_axis_count))
-        # if USE_HELPER_API:
-        #     self.anymals.set_dof_forces(self.control, dof_forces)
-        # else:
-        #     # include the root free joint
-        #     forces = torch.cat([torch.zeros((self.num_envs, 6)), dof_forces], axis=1)
-        #     self.anymals.set_attribute("joint_f", self.control, forces)
+        dof_forces = 20.0 - 40.0 * torch.rand((self.num_envs, self.quadrupeds.joint_axis_count))
+        if USE_HELPER_API:
+            self.quadrupeds.set_dof_forces(self.control, dof_forces)
+        else:
+            # include the root free joint
+            forces = torch.cat([torch.zeros((self.num_envs, 6)), dof_forces], axis=1)
+            self.quadrupeds.set_attribute("joint_f", self.control, forces)
 
         with wp.ScopedTimer("step", active=False):
             if self.use_cuda_graph:
@@ -168,17 +173,17 @@ class Example:
         # ==============================
         if USE_HELPER_API:
             # set root and dof states separately
-            self.anymals.set_root_transforms(self.state_0, self.default_root_transforms, mask=mask)
-            self.anymals.set_root_velocities(self.state_0, self.default_root_velocities, mask=mask)
-            self.anymals.set_dof_positions(self.state_0, self.default_dof_positions, mask=mask)
-            self.anymals.set_dof_velocities(self.state_0, self.default_dof_velocities, mask=mask)
+            self.quadrupeds.set_root_transforms(self.state_0, self.default_root_transforms, mask=mask)
+            self.quadrupeds.set_root_velocities(self.state_0, self.default_root_velocities, mask=mask)
+            self.quadrupeds.set_dof_positions(self.state_0, self.default_dof_positions, mask=mask)
+            self.quadrupeds.set_dof_velocities(self.state_0, self.default_dof_velocities, mask=mask)
         else:
             # set root and dof states together
-            self.anymals.set_attribute("joint_q", self.state_0, self.default_transforms, mask=mask)
-            self.anymals.set_attribute("joint_qd", self.state_0, self.default_velocities, mask=mask)
+            self.quadrupeds.set_attribute("joint_q", self.state_0, self.default_transforms, mask=mask)
+            self.quadrupeds.set_attribute("joint_qd", self.state_0, self.default_velocities, mask=mask)
 
         if not isinstance(self.solver, newton.solvers.MuJoCoSolver):
-            self.anymals.eval_fk(self.state_0, mask=mask)
+            self.quadrupeds.eval_fk(self.state_0, mask=mask)
 
     def render(self):
         if self.renderer is None:
@@ -198,7 +203,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--stage_path",
         type=lambda x: None if x == "None" else str(x),
-        default="example_selection_humanoid.usd",
+        default="example_selection_quadruped.usd",
         help="Path to the output USD file.",
     )
     parser.add_argument("--num_frames", type=int, default=1200, help="Total number of frames.")
