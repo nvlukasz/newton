@@ -44,7 +44,6 @@ class Example:
 
         # finalize model
         self.model = builder.finalize()
-        self.model.ground = False
 
         self.sim_time = 0.0
         fps = 60

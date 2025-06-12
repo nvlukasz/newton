@@ -42,11 +42,11 @@ class Example:
 
         up_axis = stage_info.get("up_axis") or newton.Axis.Z
 
+        # !!! asset has no ground plane
+        builder.add_ground_plane()
+
         # finalize model
         self.model = builder.finalize()
-
-        # !!! asset has no ground plane
-        self.model.ground = True
 
         self.solver = newton.solvers.MuJoCoSolver(self.model)
 

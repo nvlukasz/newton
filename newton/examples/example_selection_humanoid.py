@@ -44,7 +44,6 @@ class Example:
 
         # finalize model
         self.model = builder.finalize()
-        self.model.ground = False
 
         self.solver = newton.solvers.MuJoCoSolver(self.model)
 

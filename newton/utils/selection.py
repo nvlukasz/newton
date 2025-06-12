@@ -20,7 +20,7 @@ import numpy as np
 import warp as wp
 from warp.types import is_array
 
-import newton.core.articulation
+import newton.sim
 from newton import Control, Model, State
 
 
@@ -533,4 +533,4 @@ class ArticulationView:
         else:
             mask = self.articulation_mask
 
-        newton.core.articulation.eval_fk(self.model, target.joint_q, target.joint_qd, target, mask=mask)
+        newton.sim.eval_fk(self.model, target.joint_q, target.joint_qd, target, mask=mask)
