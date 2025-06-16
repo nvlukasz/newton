@@ -40,6 +40,17 @@ def set_model_articulation_mask_kernel(
 
 
 @wp.kernel
+def set_articulation_attribute_1d_kernel(
+    view_mask: wp.array(dtype=bool),  # mask in ArticulationView
+    values: wp.array1d(dtype=Any),
+    attrib: wp.array1d(dtype=Any),
+):
+    i = wp.tid()
+    if view_mask[i]:
+        attrib[i] = values[i]
+
+
+@wp.kernel
 def set_articulation_attribute_2d_kernel(
     view_mask: wp.array(dtype=bool),  # mask in ArticulationView
     values: wp.array2d(dtype=Any),
@@ -73,28 +84,19 @@ def set_articulation_attribute_4d_kernel(
 
 
 # explicit overloads to avoid module reloading
-wp.overload(
-    set_articulation_attribute_2d_kernel, {"values": wp.array2d(dtype=float), "attrib": wp.array2d(dtype=float)}
-)
-wp.overload(set_articulation_attribute_2d_kernel, {"values": wp.array2d(dtype=int), "attrib": wp.array2d(dtype=int)})
-wp.overload(
-    set_articulation_attribute_2d_kernel,
-    {"values": wp.array2d(dtype=wp.transform), "attrib": wp.array2d(dtype=wp.transform)},
-)
-wp.overload(
-    set_articulation_attribute_2d_kernel,
-    {"values": wp.array2d(dtype=wp.spatial_vector), "attrib": wp.array2d(dtype=wp.spatial_vector)},
-)
-
-wp.overload(
-    set_articulation_attribute_3d_kernel, {"values": wp.array3d(dtype=float), "attrib": wp.array3d(dtype=float)}
-)
-wp.overload(set_articulation_attribute_3d_kernel, {"values": wp.array3d(dtype=int), "attrib": wp.array3d(dtype=int)})
-
-wp.overload(
-    set_articulation_attribute_4d_kernel, {"values": wp.array4d(dtype=float), "attrib": wp.array4d(dtype=float)}
-)
-wp.overload(set_articulation_attribute_4d_kernel, {"values": wp.array4d(dtype=int), "attrib": wp.array4d(dtype=int)})
+for dtype in [float, int, wp.transform, wp.spatial_vector]:
+    wp.overload(
+        set_articulation_attribute_1d_kernel, {"values": wp.array1d(dtype=dtype), "attrib": wp.array1d(dtype=dtype)}
+    )
+    wp.overload(
+        set_articulation_attribute_2d_kernel, {"values": wp.array2d(dtype=dtype), "attrib": wp.array2d(dtype=dtype)}
+    )
+    wp.overload(
+        set_articulation_attribute_3d_kernel, {"values": wp.array3d(dtype=dtype), "attrib": wp.array3d(dtype=dtype)}
+    )
+    wp.overload(
+        set_articulation_attribute_4d_kernel, {"values": wp.array4d(dtype=dtype), "attrib": wp.array4d(dtype=dtype)}
+    )
 
 
 class ArticulationView:
@@ -296,7 +298,9 @@ class ArticulationView:
 
         # launch appropriate kernel based on attribute dimensionality
         # TODO: cache concrete overload per attribute?
-        if attrib.ndim == 2:
+        if attrib.ndim == 1:
+            wp.launch(set_articulation_attribute_1d_kernel, dim=attrib.shape, inputs=[mask, values, attrib])
+        elif attrib.ndim == 2:
             wp.launch(set_articulation_attribute_2d_kernel, dim=attrib.shape, inputs=[mask, values, attrib])
         elif attrib.ndim == 3:
             wp.launch(set_articulation_attribute_3d_kernel, dim=attrib.shape, inputs=[mask, values, attrib])
