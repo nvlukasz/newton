@@ -121,10 +121,9 @@ class ArticulationView:
         joint_type = model.joint_type.numpy()
         joint_parent = model.joint_parent.numpy()
         joint_child = model.joint_child.numpy()
-        joint_axis_start = model.joint_axis_start.numpy()
-        joint_axis_dim = model.joint_axis_dim.numpy()
         joint_q_start = model.joint_q_start.numpy()
         joint_qd_start = model.joint_qd_start.numpy()
+        joint_dof_dim = model.joint_dof_dim.numpy()
 
         # FIXME:
         # - this assumes homogeneous envs with one selected articulation per env
@@ -134,7 +133,6 @@ class ArticulationView:
 
         joint_begin = articulation_start[arti_0]
         joint_end = articulation_start[arti_0 + 1]  # FIXME: is this always correct?
-        joint_last = joint_end - 1
 
         links = {}
         for joint_id in range(joint_begin, joint_end):
@@ -152,8 +150,8 @@ class ArticulationView:
                 joint_name = model.joint_key[joint_id]
                 print(f"  joint {joint_name}:")
                 print(f"    bodies: {joint_parent[joint_id]} -> {joint_child[joint_id]}")
-                print(f"    axis_start: {joint_axis_start[joint_id]}")
-                print(f"    axis_dim: {joint_axis_dim[joint_id]}")
+                print(f"    dof_start: {joint_qd_start[joint_id]}")
+                print(f"    dof_dim: {joint_dof_dim[joint_id]}")
             num_links = len(links)
             print(f"num_links: {num_links}, {links}")
             for body_id in links:
@@ -163,8 +161,6 @@ class ArticulationView:
         joint_coord_end = joint_q_start[joint_end]
         joint_dof_begin = joint_qd_start[joint_begin]
         joint_dof_end = joint_qd_start[joint_end]
-        joint_axis_begin = joint_axis_start[joint_begin]
-        joint_axis_end = joint_axis_start[joint_last] + joint_axis_dim[joint_last][0] + joint_axis_dim[joint_last][1]
         body_begin = links[0]
         body_end = links[-1] + 1
 
@@ -188,17 +184,22 @@ class ArticulationView:
         self.joint_count = joint_end - joint_begin
         self.joint_coord_count = joint_coord_end - joint_coord_begin
         self.joint_dof_count = joint_dof_end - joint_dof_begin
-        self.joint_axis_count = joint_axis_end - joint_axis_begin
 
         # root joint properties
         self.root_type = int(joint_type[joint_begin])
-        self.root_axis_count = int(joint_axis_dim[joint_begin][0] + joint_axis_dim[joint_begin][1])
-        self.root_dof_count, self.root_coord_count = get_joint_dof_count(self.root_type, self.root_axis_count)
+        self.root_coord_count = int(joint_q_start[joint_begin + 1] - joint_coord_begin)
+        self.root_dof_count = int(joint_qd_start[joint_begin + 1] - joint_dof_begin)
 
         self.is_fixed_base = self.root_type == JOINT_FIXED
         # floating base means that all linear and angular degrees of freedom are unlocked
         # (though there might be constraints like distance)
         self.is_floating_base = self.root_type == JOINT_FREE or self.root_type == JOINT_DISTANCE
+
+        # FIXME: backward compatibility: joint_axis_count excludes the DOFs of floating root joints
+        if self.is_floating_base:
+            self.joint_axis_count = self.joint_dof_count - self.root_dof_count
+        else:
+            self.joint_axis_count = self.joint_dof_count
 
         self.joint_names = []
         self.joint_coord_names = []
@@ -224,12 +225,13 @@ class ArticulationView:
             elif num_dofs > 1:
                 for dof in range(num_dofs):
                     self.joint_dof_names.append(f"{joint_name}:{dof}")
-            num_axes = joint_axis_dim[joint_id][0] + joint_axis_dim[joint_id][1]
-            if num_axes == 1:
-                self.joint_axis_names.append(joint_name)
-            elif num_axes > 1:
-                for axis in range(num_axes):
-                    self.joint_axis_names.append(f"{joint_name}:{axis}")
+            if joint_type[joint_id] not in (JOINT_FREE, JOINT_DISTANCE):
+                num_axes = joint_dof_dim[joint_id][0] + joint_dof_dim[joint_id][1]
+                if num_axes == 1:
+                    self.joint_axis_names.append(joint_name)
+                elif num_axes > 1:
+                    for axis in range(num_axes):
+                        self.joint_axis_names.append(f"{joint_name}:{axis}")
 
         for body_id in range(body_begin, body_end):
             self.body_names.append(get_name_from_key(model.body_key[body_id]))
@@ -243,15 +245,14 @@ class ArticulationView:
             print(self.joint_axis_names)
             # print("Joint coord names:")
             # print(self.joint_coord_names)
-            # print("Joint dof names:")
-            # print(self.joint_dof_names)
+            print("Joint dof names:")
+            print(self.joint_dof_names)
 
         # slices by attribute frequency
         self._slices = {
             "joint": slice(int(joint_begin), int(joint_end)),
             "joint_coord": slice(int(joint_coord_begin), int(joint_coord_end)),
             "joint_dof": slice(int(joint_dof_begin), int(joint_dof_end)),
-            "joint_axis": slice(int(joint_axis_begin), int(joint_axis_end)),
             "body": slice(int(body_begin), int(body_end)),
         }
 

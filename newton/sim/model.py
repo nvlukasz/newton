@@ -327,8 +327,7 @@ class Model:
         self.attribute_frequency["joint_ancestor"] = "joint"
         self.attribute_frequency["joint_X_p"] = "joint"
         self.attribute_frequency["joint_X_c"] = "joint"
-        self.attribute_frequency["joint_axis_start"] = "joint"
-        self.attribute_frequency["joint_axis_dim"] = "joint"
+        self.attribute_frequency["joint_dof_dim"] = "joint"
         self.attribute_frequency["joint_enabled"] = "joint"
         self.attribute_frequency["joint_twist_lower"] = "joint"
         self.attribute_frequency["joint_twist_upper"] = "joint"
@@ -340,17 +339,15 @@ class Model:
         self.attribute_frequency["joint_qd"] = "joint_dof"
         self.attribute_frequency["joint_f"] = "joint_dof"
         self.attribute_frequency["joint_armature"] = "joint_dof"
-
-        # attributes per joint axis
-        self.attribute_frequency["joint_target"] = "joint_axis"
-        self.attribute_frequency["joint_axis"] = "joint_axis"
-        self.attribute_frequency["joint_target_ke"] = "joint_axis"
-        self.attribute_frequency["joint_target_kd"] = "joint_axis"
-        self.attribute_frequency["joint_axis_mode"] = "joint_axis"
-        self.attribute_frequency["joint_limit_lower"] = "joint_axis"
-        self.attribute_frequency["joint_limit_upper"] = "joint_axis"
-        self.attribute_frequency["joint_limit_ke"] = "joint_axis"
-        self.attribute_frequency["joint_limit_kd"] = "joint_axis"
+        self.attribute_frequency["joint_target"] = "joint_dof"
+        self.attribute_frequency["joint_axis"] = "joint_dof"
+        self.attribute_frequency["joint_target_ke"] = "joint_dof"
+        self.attribute_frequency["joint_target_kd"] = "joint_dof"
+        self.attribute_frequency["joint_dof_mode"] = "joint_dof"
+        self.attribute_frequency["joint_limit_lower"] = "joint_dof"
+        self.attribute_frequency["joint_limit_upper"] = "joint_dof"
+        self.attribute_frequency["joint_limit_ke"] = "joint_dof"
+        self.attribute_frequency["joint_limit_kd"] = "joint_dof"
 
     def state(self, requires_grad: bool | None = None) -> State:
         """Returns a state object for the model
