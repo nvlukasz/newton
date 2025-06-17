@@ -101,8 +101,9 @@ class Example:
         print(f"body_qd shape:      {self.ants.get_attribute('body_qd', self.model).shape}")
 
         # set all axes to the middle of their range by default
-        dof_limit_lower = wp.to_torch(self.ants.get_attribute("joint_limit_lower", self.model))
-        dof_limit_upper = wp.to_torch(self.ants.get_attribute("joint_limit_upper", self.model))
+        # FIXME?
+        dof_limit_lower = wp.to_torch(self.ants.get_attribute("joint_limit_lower", self.model))[:, 6:]
+        dof_limit_upper = wp.to_torch(self.ants.get_attribute("joint_limit_upper", self.model))[:, 6:]
         default_dof_positions = 0.5 * (dof_limit_lower + dof_limit_upper)
 
         if USE_HELPER_API:
@@ -160,7 +161,7 @@ class Example:
         # =========================
         # apply random controls
         # =========================
-        dof_forces = 20.0 - 40.0 * torch.rand((self.num_envs, self.ants.joint_axis_count))
+        dof_forces = 5.0 - 10.0 * torch.rand((self.num_envs, self.ants.joint_axis_count))
         if USE_HELPER_API:
             self.ants.set_dof_forces(self.control, dof_forces)
         else:
