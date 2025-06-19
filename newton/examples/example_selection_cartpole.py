@@ -139,7 +139,7 @@ class Example:
         # apply controls
         # =========================
         dof_forces = torch.zeros((self.num_envs, self.cartpoles.joint_axis_count))
-        dof_forces[:, 0] = torch.where(dof_positions[:, 0] > 0, -100, 100)
+        dof_forces[:, 0] = torch.where(dof_positions[:, 0] > 0, -10, 10)
         if USE_HELPER_API:
             self.cartpoles.set_dof_forces(self.control, dof_forces)
         else:
