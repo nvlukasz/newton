@@ -22,7 +22,7 @@ from warp.types import is_array
 
 import newton.sim
 from newton import Control, Model, State
-from newton.core.types import JOINT_DISTANCE, JOINT_FIXED, JOINT_FREE, get_joint_dof_count
+from newton.sim.joints import JOINT_DISTANCE, JOINT_FIXED, JOINT_FREE, get_joint_dof_count
 
 
 @wp.kernel
@@ -270,7 +270,7 @@ class ArticulationView:
         batched_shape = (self.count, attrib.shape[0] // self.count, *attrib.shape[1:])
 
         # get attribute slice
-        frequency = self.model.get_attribute_frequency(name)
+        frequency = self.model.attribute_frequency.get(name)
         attrib_slice = self._slices[frequency]
 
         # create strided array
