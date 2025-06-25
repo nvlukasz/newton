@@ -131,7 +131,7 @@ class Example:
 
             # explicit collisions needed without MuJoCo solver
             if not isinstance(self.solver, newton.solvers.MuJoCoSolver):
-                newton.collision.collide(self.model, self.state_0)
+                self.model.collide(self.state_0)
 
             self.solver.step(self.model, self.state_0, self.state_1, self.control, None, self.sim_dt)
             self.state_0, self.state_1 = self.state_1, self.state_0
