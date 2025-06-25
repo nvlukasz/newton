@@ -523,4 +523,4 @@ class ArticulationView:
         """
         # translate view mask to Model articulation mask
         articulation_mask = self.get_model_articulation_mask(mask=mask)
-        newton.core.articulation.eval_fk(self.model, target.joint_q, target.joint_qd, target, mask=articulation_mask)
+        newton.sim.articulation.eval_fk(self.model, target.joint_q, target.joint_qd, target, mask=articulation_mask)
