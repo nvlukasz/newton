@@ -300,20 +300,13 @@ class ArticulationView:
         self._arti_joint_coord_begin = int(model_joint_q_start[arti_joint_begin])
         self._arti_joint_coord_end = int(model_joint_q_start[arti_joint_end])
 
-        if verbose:
-            print(f"Articulation count: {self.count}")
-            print(f"Link count:         {self.link_count}")
-            print(f"Joint count:        {self.joint_count}")
-            print(f"Joint DOF count:    {self.joint_dof_count}")
-
-            print("Link names:")
-            print(f"  {self.body_names}")
-            print("Joint names:")
-            print(f"  {self.joint_names}")
-            print("Joint DOF names:")
-            print(f"  {self.joint_dof_names}")
-            # print("Joint coord names:")
-            # print(f"  {self.joint_coord_names}")
+        root_joint_type = arti_joint_types[0]
+        print(f"{arti_joint_begin}, {root_joint_type}")
+        # fixed base means that all linear and angular degrees of freedom are locked at the root
+        self.is_fixed_base = root_joint_type == JOINT_FIXED
+        # floating base means that all linear and angular degrees of freedom are unlocked at the root
+        # (though there might be constraints like distance)
+        self.is_floating_base = root_joint_type in (JOINT_FREE, JOINT_DISTANCE)
 
         def is_contiguous_slice(indices):
             n = len(indices)
@@ -361,12 +354,24 @@ class ArticulationView:
             device=self.device,
         )
 
-        root_joint_type = arti_joint_types[arti_joint_begin]
-        # fixed base means that all linear and angular degrees of freedom are locked at the root
-        self.is_fixed_base = root_joint_type == JOINT_FIXED
-        # floating base means that all linear and angular degrees of freedom are unlocked at the root
-        # (though there might be constraints like distance)
-        self.is_floating_base = root_joint_type in (JOINT_FREE, JOINT_DISTANCE)
+        if verbose:
+            print(f"Articulation '{pattern}':")
+            print(f"  Articulation count: {self.count}")
+            print(f"  Link count:         {self.link_count}")
+            print(f"  Joint count:        {self.joint_count}")
+            print(f"  Joint DOF count:    {self.joint_dof_count}")
+
+            print(f"  Fixed base?         {self.is_fixed_base}")
+            print(f"  Floating base?      {self.is_floating_base}")
+
+            print("Link names:")
+            print(f"  {self.body_names}")
+            print("Joint names:")
+            print(f"  {self.joint_names}")
+            print("Joint DOF names:")
+            print(f"  {self.joint_dof_names}")
+            # print("Joint coord names:")
+            # print(f"  {self.joint_coord_names}")
 
     # ========================================================================================
     # Generic attribute API
