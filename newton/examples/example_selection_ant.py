@@ -87,11 +87,6 @@ class Example:
         # ===========================================================
         self.ants = ArticulationView(self.model, "ant", verbose=VERBOSE, exclude_joint_types=[newton.JOINT_FREE])
 
-        print(f"articulation count: {self.ants.count}")
-        print(f"link_count:         {self.ants.link_count}")
-        print(f"joint_count:        {self.ants.joint_count}")
-        print(f"joint_dof_count:    {self.ants.joint_dof_count}")
-
         print(f"joint_q shape:      {self.ants.get_attribute('joint_q', self.model).shape}")
         print(f"joint_qd shape:     {self.ants.get_attribute('joint_qd', self.model).shape}")
         print(f"joint_f shape:      {self.ants.get_attribute('joint_f', self.model).shape}")
@@ -99,16 +94,16 @@ class Example:
         print(f"body_q shape:       {self.ants.get_attribute('body_q', self.model).shape}")
         print(f"body_qd shape:      {self.ants.get_attribute('body_qd', self.model).shape}")
 
+        # default root states
         self.default_root_transforms = wp.to_torch(self.ants.get_root_transforms(self.model)).clone()
         self.default_root_velocities = wp.to_torch(self.ants.get_root_velocities(self.model)).clone()
         self.default_root_velocities[:, 2] = 0.5 * math.pi  # rotate about z-axis
         self.default_root_velocities[:, 5] = 5.0  # move up z-axis
 
-        # set all axes to the middle of their range by default
+        # set all DOFs to the middle of their range by default
         dof_limit_lower = wp.to_torch(self.ants.get_attribute("joint_limit_lower", self.model))
         dof_limit_upper = wp.to_torch(self.ants.get_attribute("joint_limit_upper", self.model))
         self.default_dof_positions = 0.5 * (dof_limit_lower + dof_limit_upper)
-
         self.default_dof_velocities = wp.to_torch(self.ants.get_dof_velocities(self.model)).clone()
 
         # create disjoint subsets to alternate resets

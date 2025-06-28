@@ -96,11 +96,6 @@ class Example:
             self.model, "quadruped", verbose=VERBOSE, exclude_joint_types=[newton.JOINT_FREE]
         )
 
-        print(f"articulation count: {self.quadrupeds.count}")
-        print(f"link_count:         {self.quadrupeds.link_count}")
-        print(f"joint_count:        {self.quadrupeds.joint_count}")
-        print(f"joint_dof_count:    {self.quadrupeds.joint_dof_count}")
-
         # default states
         self.default_root_transforms = wp.to_torch(self.quadrupeds.get_root_transforms(self.model)).clone()
         self.default_root_velocities = wp.to_torch(self.quadrupeds.get_root_velocities(self.model)).clone()

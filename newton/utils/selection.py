@@ -301,14 +301,19 @@ class ArticulationView:
         self._arti_joint_coord_end = int(model_joint_q_start[arti_joint_end])
 
         if verbose:
+            print(f"Articulation count: {self.count}")
+            print(f"Link count:         {self.link_count}")
+            print(f"Joint count:        {self.joint_count}")
+            print(f"Joint DOF count:    {self.joint_dof_count}")
+
             print("Link names:")
-            print(self.body_names)
+            print(f"  {self.body_names}")
             print("Joint names:")
-            print(self.joint_names)
-            print("Joint dof names:")
-            print(self.joint_dof_names)
+            print(f"  {self.joint_names}")
+            print("Joint DOF names:")
+            print(f"  {self.joint_dof_names}")
             # print("Joint coord names:")
-            # print(self.joint_coord_names)
+            # print(f"  {self.joint_coord_names}")
 
         def is_contiguous_slice(indices):
             n = len(indices)
@@ -341,8 +346,6 @@ class ArticulationView:
             begin = selected_link_ids[0]
             end = selected_link_ids[-1] + 1
             self._contiguous_slices["body"] = slice(int(begin), int(end))
-
-        print(self._contiguous_slices)
 
         self.articulation_indices = wp.array(articulation_ids, dtype=int, device=self.device)
 

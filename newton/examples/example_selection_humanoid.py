@@ -89,11 +89,6 @@ class Example:
             self.model, "humanoid", verbose=VERBOSE, exclude_joint_types=[newton.JOINT_FREE]
         )
 
-        print(f"articulation count: {self.humanoids.count}")
-        print(f"link_count:         {self.humanoids.link_count}")
-        print(f"joint_count:        {self.humanoids.joint_count}")
-        print(f"joint_dof_count:    {self.humanoids.joint_dof_count}")
-
         # default states
         self.default_root_transforms = wp.to_torch(self.humanoids.get_root_transforms(self.model)).clone()
         self.default_root_velocities = wp.to_torch(self.humanoids.get_root_velocities(self.model)).clone()
