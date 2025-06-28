@@ -24,7 +24,6 @@ import newton.utils
 from newton.examples import compute_env_offsets
 from newton.utils.selection import ArticulationView
 
-USE_HELPER_API = True
 COLLAPSE_FIXED_JOINTS = False
 VERBOSE = True
 
@@ -82,22 +81,17 @@ class Example:
         # =========================
         # randomize initial state
         # =========================
+
+        # root transforms
+        root_transforms = wp.to_torch(self.cartpoles.get_root_transforms(self.state_0))
+        self.cartpoles.set_root_transforms(self.state_0, root_transforms)
+
+        # dof positions
         cart_positions = 2.0 - 4.0 * torch.rand(num_envs)
         pole1_angles = math.pi / 16.0 - math.pi / 8.0 * torch.rand(num_envs)
         pole2_angles = math.pi / 16.0 - math.pi / 8.0 * torch.rand(num_envs)
         dof_positions = torch.stack([cart_positions, pole1_angles, pole2_angles], dim=1)
-        if USE_HELPER_API:
-            # root transforms
-            root_transforms = wp.to_torch(self.cartpoles.get_root_transforms(self.state_0))
-            self.cartpoles.set_root_transforms(self.state_0, root_transforms)
-            # dof positions
-            self.cartpoles.set_dof_positions(self.state_0, dof_positions)
-        else:
-            # root transforms (we need to use joint_X_p for fixed joints)
-            root_transforms = wp.to_torch(self.cartpoles.get_attribute("joint_X_p", self.model))
-            self.cartpoles.set_attribute("joint_X_p", self.model, root_transforms)
-            # dof positions
-            self.cartpoles.set_attribute("joint_q", self.state_0, dof_positions)
+        self.cartpoles.set_dof_positions(self.state_0, dof_positions)
 
         if not isinstance(self.solver, newton.solvers.MuJoCoSolver):
             self.cartpoles.eval_fk(self.state_0)
@@ -130,20 +124,14 @@ class Example:
         # =========================
         # get observations
         # =========================
-        if USE_HELPER_API:
-            dof_positions = wp.to_torch(self.cartpoles.get_dof_positions(self.state_0))
-        else:
-            dof_positions = wp.to_torch(self.cartpoles.get_attribute("joint_q", self.state_0))
+        dof_positions = wp.to_torch(self.cartpoles.get_dof_positions(self.state_0))
 
         # =========================
         # apply controls
         # =========================
-        dof_forces = torch.zeros((self.num_envs, self.cartpoles.joint_axis_count))
-        dof_forces[:, 0] = torch.where(dof_positions[:, 0] > 0, -10, 10)
-        if USE_HELPER_API:
-            self.cartpoles.set_dof_forces(self.control, dof_forces)
-        else:
-            self.cartpoles.set_attribute("joint_f", self.control, dof_forces)
+        dof_forces = torch.zeros((self.num_envs, self.cartpoles.joint_dof_count))
+        dof_forces[:, 0] = torch.where(dof_positions[:, 0] > 0, -20, 20)
+        self.cartpoles.set_dof_forces(self.control, dof_forces)
 
         # simulate
         with wp.ScopedTimer("step", active=False):

@@ -100,7 +100,18 @@ for dtype in [float, int, wp.transform, wp.spatial_vector]:
 
 
 class ArticulationView:
-    def __init__(self, model: Model, pattern: str, verbose: bool | None = None):
+    def __init__(
+        self,
+        model: Model,
+        pattern: str,
+        include_joints: list[str | int] | None = None,
+        exclude_joints: list[str | int] | None = None,
+        include_links: list[str | int] | None = None,
+        exclude_links: list[str | int] | None = None,
+        include_joint_types: list[int] | None = None,
+        exclude_joint_types: list[int] | None = None,
+        verbose: bool | None = None,
+    ):
         self.model = model
         self.device = model.device
 
@@ -112,18 +123,16 @@ class ArticulationView:
             if fnmatch(key, pattern):
                 articulation_ids.append(id)
 
-        count = len(articulation_ids)
-        if count == 0:
+        articulation_count = len(articulation_ids)
+        if articulation_count == 0:
             raise KeyError("No matching articulations")
 
-        # FIXME: avoid this readback?
-        articulation_start = model.articulation_start.numpy()
-        joint_type = model.joint_type.numpy()
-        joint_parent = model.joint_parent.numpy()
-        joint_child = model.joint_child.numpy()
-        joint_q_start = model.joint_q_start.numpy()
-        joint_qd_start = model.joint_qd_start.numpy()
-        joint_dof_dim = model.joint_dof_dim.numpy()
+        # FIXME: avoid/reduce this readback?
+        model_articulation_start = model.articulation_start.numpy()
+        model_joint_type = model.joint_type.numpy()
+        model_joint_child = model.joint_child.numpy()
+        model_joint_q_start = model.joint_q_start.numpy()
+        model_joint_qd_start = model.joint_qd_start.numpy()
 
         # FIXME:
         # - this assumes homogeneous envs with one selected articulation per env
@@ -131,136 +140,236 @@ class ArticulationView:
 
         arti_0 = articulation_ids[0]
 
-        joint_begin = articulation_start[arti_0]
-        joint_end = articulation_start[arti_0 + 1]  # FIXME: is this always correct?
+        arti_joint_begin = model_articulation_start[arti_0]
+        arti_joint_end = model_articulation_start[arti_0 + 1]  # FIXME: is this always correct?
+        arti_joint_count = arti_joint_end - arti_joint_begin
+        arti_link_count = arti_joint_count
 
-        links = {}
-        for joint_id in range(joint_begin, joint_end):
-            if joint_parent[joint_id] != -1:
-                links[int(joint_parent[joint_id])] = None
-            if joint_child[joint_id] != -1:
-                links[int(joint_child[joint_id])] = None
-
-        links = sorted(links.keys())
-
-        # print stuff for debugging
-        if verbose:
-            print(f"num_joints: {joint_end - joint_begin}")
-            for joint_id in range(joint_begin, joint_end):
-                joint_name = model.joint_key[joint_id]
-                print(f"  joint {joint_name}:")
-                print(f"    bodies: {joint_parent[joint_id]} -> {joint_child[joint_id]}")
-                print(f"    dof_start: {joint_qd_start[joint_id]}")
-                print(f"    dof_dim: {joint_dof_dim[joint_id]}")
-            num_links = len(links)
-            print(f"num_links: {num_links}, {links}")
-            for body_id in links:
-                print(f"  {model.body_key[body_id]}")
-
-        joint_coord_begin = joint_q_start[joint_begin]
-        joint_coord_end = joint_q_start[joint_end]
-        joint_dof_begin = joint_qd_start[joint_begin]
-        joint_dof_end = joint_qd_start[joint_end]
-        body_begin = links[0]
-        body_end = links[-1] + 1
-
-        self.articulation_indices = wp.array(articulation_ids, dtype=int, device=self.device)
-
-        # TODO: zero-stride mask would use less memory
-        self.full_mask = wp.full(count, True, dtype=bool, device=self.device)
-
-        # create articulation mask
-        self.articulation_mask = wp.zeros(model.articulation_count, dtype=bool, device=self.device)
-        wp.launch(
-            set_model_articulation_mask_kernel,
-            dim=count,
-            inputs=[self.full_mask, self.articulation_indices, self.articulation_mask],
-            device=self.device,
-        )
-
-        # set some counting properties
-        self.count = count
-        self.link_count = len(links)
-        self.joint_count = joint_end - joint_begin
-        self.joint_coord_count = joint_coord_end - joint_coord_begin
-        self.joint_dof_count = joint_dof_end - joint_dof_begin
-
-        # root joint properties
-        self.root_type = int(joint_type[joint_begin])
-        self.root_coord_count = int(joint_q_start[joint_begin + 1] - joint_coord_begin)
-        self.root_dof_count = int(joint_qd_start[joint_begin + 1] - joint_dof_begin)
-
-        self.is_fixed_base = self.root_type == JOINT_FIXED
-        # floating base means that all linear and angular degrees of freedom are unlocked
-        # (though there might be constraints like distance)
-        self.is_floating_base = self.root_type == JOINT_FREE or self.root_type == JOINT_DISTANCE
-
-        # FIXME: backward compatibility: joint_axis_count excludes the DOFs of floating root joints
-        if self.is_floating_base:
-            self.joint_axis_count = self.joint_dof_count - self.root_dof_count
-        else:
-            self.joint_axis_count = self.joint_dof_count
-
-        self.joint_names = []
-        self.joint_coord_names = []
-        self.joint_dof_names = []
-        self.joint_axis_names = []
-        self.body_names = []
+        arti_joint_ids = []
+        arti_joint_names = []
+        arti_joint_types = []
+        arti_link_ids = []
+        arti_link_names = []
 
         def get_name_from_key(key):
             return key.split("/")[-1]
 
-        for joint_id in range(joint_begin, joint_end):
+        for idx in range(arti_joint_count):
+            joint_id = arti_joint_begin + idx
+            arti_joint_ids.append(int(joint_id))
+            arti_joint_names.append(get_name_from_key(model.joint_key[joint_id]))
+            arti_joint_types.append(int(model_joint_type[joint_id]))
+            link_id = model_joint_child[joint_id]
+            arti_link_ids.append(int(link_id))
+            arti_link_names.append(get_name_from_key(model.body_key[link_id]))
+
+        # create joint inclusion set
+        if include_joints is None and include_joint_types is None:
+            joint_include_indices = set(range(arti_joint_count))
+        else:
+            joint_include_indices = set()
+            if include_joints is not None:
+                for id in include_joints:
+                    if isinstance(id, str):
+                        for idx, name in enumerate(arti_joint_names):
+                            if fnmatch(name, id):
+                                joint_include_indices.add(idx)
+                    elif isinstance(id, int):
+                        if id >= 0 and id < arti_joint_count:
+                            joint_include_indices.add(id)
+                    else:
+                        raise TypeError(f"Joint ids must be strings or integers, got {id} of type {type(id)}")
+            if include_joint_types is not None:
+                for idx in range(arti_joint_count):
+                    if arti_joint_types[idx] in include_joint_types:
+                        joint_include_indices.add(idx)
+
+        # create joint exclusion set
+        joint_exclude_indices = set()
+        if exclude_joints is not None:
+            for id in exclude_joints:
+                if isinstance(id, str):
+                    for idx, name in enumerate(arti_joint_names):
+                        if fnmatch(name, id):
+                            joint_exclude_indices.add(idx)
+                elif isinstance(id, int):
+                    if id >= 0 and id < arti_joint_count:
+                        joint_exclude_indices.add(id)
+                else:
+                    raise TypeError(f"Joint ids must be strings or integers, got {id} of type {type(id)}")
+        if exclude_joint_types is not None:
+            for idx in range(arti_joint_count):
+                if arti_joint_types[idx] in exclude_joint_types:
+                    joint_exclude_indices.add(idx)
+
+        # create link inclusion set
+        if include_links is None:
+            link_include_indices = set(range(arti_link_count))
+        else:
+            link_include_indices = set()
+            if include_links is not None:
+                for id in include_links:
+                    if isinstance(id, str):
+                        for idx, name in enumerate(arti_link_names):
+                            if fnmatch(name, id):
+                                link_include_indices.add(idx)
+                    elif isinstance(id, int):
+                        if id >= 0 and id < arti_link_count:
+                            link_include_indices.add(id)
+                    else:
+                        raise TypeError(f"Link ids must be strings or integers, got {id} of type {type(id)}")
+
+        # create link exclusion set
+        link_exclude_indices = set()
+        if exclude_links is not None:
+            for id in exclude_links:
+                if isinstance(id, str):
+                    for idx, name in enumerate(arti_link_names):
+                        if fnmatch(name, id):
+                            link_exclude_indices.add(idx)
+                elif isinstance(id, int):
+                    if id >= 0 and id < arti_link_count:
+                        link_exclude_indices.add(id)
+                else:
+                    raise TypeError(f"Link ids must be strings or integers, got {id} of type {type(id)}")
+
+        # compute selected indices
+        selected_joint_indices = sorted(joint_include_indices - joint_exclude_indices)
+        selected_link_indices = sorted(link_include_indices - link_exclude_indices)
+
+        selected_joint_ids = []
+        selected_joint_dof_ids = []
+        selected_joint_coord_ids = []
+        selected_link_ids = []
+
+        self.joint_names = []
+        self.joint_dof_names = []
+        self.joint_dof_counts = []
+        self.joint_coord_names = []
+        self.joint_coord_counts = []
+        self.body_names = []
+
+        # populate info for selected joints and dofs
+        for idx in selected_joint_indices:
+            # joint
+            joint_id = arti_joint_ids[idx]
+            selected_joint_ids.append(joint_id)
             joint_name = get_name_from_key(model.joint_key[joint_id])
             self.joint_names.append(joint_name)
-            num_coords = joint_q_start[joint_id + 1] - joint_q_start[joint_id]
-            if num_coords == 1:
-                self.joint_coord_names.append(joint_name)
-            elif num_coords > 1:
-                for coord in range(num_coords):
-                    self.joint_coord_names.append(f"{joint_name}:{coord}")
-            num_dofs = joint_qd_start[joint_id + 1] - joint_qd_start[joint_id]
-            if num_dofs == 1:
+            # joint dofs
+            dof_begin = model_joint_qd_start[joint_id]
+            dof_end = model_joint_qd_start[joint_id + 1]
+            dof_count = dof_end - dof_begin
+            if dof_count == 1:
                 self.joint_dof_names.append(joint_name)
-            elif num_dofs > 1:
-                for dof in range(num_dofs):
+                selected_joint_dof_ids.append(dof_begin)
+            elif dof_count > 1:
+                for dof in range(dof_count):
                     self.joint_dof_names.append(f"{joint_name}:{dof}")
-            if joint_type[joint_id] not in (JOINT_FREE, JOINT_DISTANCE):
-                num_axes = joint_dof_dim[joint_id][0] + joint_dof_dim[joint_id][1]
-                if num_axes == 1:
-                    self.joint_axis_names.append(joint_name)
-                elif num_axes > 1:
-                    for axis in range(num_axes):
-                        self.joint_axis_names.append(f"{joint_name}:{axis}")
+                    selected_joint_dof_ids.append(dof_begin + dof)
+            # joint coords
+            coord_begin = model_joint_q_start[joint_id]
+            coord_end = model_joint_q_start[joint_id + 1]
+            coord_count = coord_end - coord_begin
+            if coord_count == 1:
+                self.joint_coord_names.append(joint_name)
+                selected_joint_coord_ids.append(coord_begin)
+            elif coord_count > 1:
+                for coord in range(coord_count):
+                    self.joint_coord_names.append(f"{joint_name}:{coord}")
+                    selected_joint_coord_ids.append(coord_begin + coord)
 
-        for body_id in range(body_begin, body_end):
+        # populate info for selected links
+        for idx in selected_link_indices:
+            body_id = arti_link_ids[idx]
+            selected_link_ids.append(body_id)
             self.body_names.append(get_name_from_key(model.body_key[body_id]))
+
+        # selected counts
+        self.count = articulation_count
+        self.joint_count = len(selected_joint_ids)
+        self.joint_dof_count = len(selected_joint_dof_ids)
+        self.joint_coord_count = len(selected_joint_coord_ids)
+        self.link_count = len(selected_link_ids)
+
+        # support custom slicing and indexing
+        self._arti_joint_begin = int(arti_joint_begin)
+        self._arti_joint_end = int(arti_joint_end)
+        self._arti_joint_dof_begin = int(model_joint_qd_start[arti_joint_begin])
+        self._arti_joint_dof_end = int(model_joint_qd_start[arti_joint_end])
+        self._arti_joint_coord_begin = int(model_joint_q_start[arti_joint_begin])
+        self._arti_joint_coord_end = int(model_joint_q_start[arti_joint_end])
 
         if verbose:
             print("Link names:")
             print(self.body_names)
             print("Joint names:")
             print(self.joint_names)
-            print("Joint axis names:")
-            print(self.joint_axis_names)
-            # print("Joint coord names:")
-            # print(self.joint_coord_names)
             print("Joint dof names:")
             print(self.joint_dof_names)
+            # print("Joint coord names:")
+            # print(self.joint_coord_names)
 
-        # slices by attribute frequency
-        self._slices = {
-            "joint": slice(int(joint_begin), int(joint_end)),
-            "joint_coord": slice(int(joint_coord_begin), int(joint_coord_end)),
-            "joint_dof": slice(int(joint_dof_begin), int(joint_dof_end)),
-            "body": slice(int(body_begin), int(body_end)),
-        }
+        def is_contiguous_slice(indices):
+            n = len(indices)
+            if n > 1:
+                for i in range(1, n):
+                    if indices[i] != indices[i - 1] + 1:
+                        return False
+            return True
+
+        # contiguous slices by attribute frequency
+        #
+        # FIXME: guard against empty selections
+        #
+        # TODO: set up indexed arrays for non-contiguous attributes
+        #
+        self._contiguous_slices = {}
+        if is_contiguous_slice(selected_joint_ids):
+            begin = selected_joint_ids[0]
+            end = selected_joint_ids[-1] + 1
+            self._contiguous_slices["joint"] = slice(int(begin), int(end))
+        if is_contiguous_slice(selected_joint_dof_ids):
+            begin = selected_joint_dof_ids[0]
+            end = selected_joint_dof_ids[-1] + 1
+            self._contiguous_slices["joint_dof"] = slice(int(begin), int(end))
+        if is_contiguous_slice(selected_joint_coord_ids):
+            begin = selected_joint_coord_ids[0]
+            end = selected_joint_coord_ids[-1] + 1
+            self._contiguous_slices["joint_coord"] = slice(int(begin), int(end))
+        if is_contiguous_slice(selected_link_ids):
+            begin = selected_link_ids[0]
+            end = selected_link_ids[-1] + 1
+            self._contiguous_slices["body"] = slice(int(begin), int(end))
+
+        print(self._contiguous_slices)
+
+        self.articulation_indices = wp.array(articulation_ids, dtype=int, device=self.device)
+
+        # TODO: zero-stride mask would use less memory
+        self.full_mask = wp.full(articulation_count, True, dtype=bool, device=self.device)
+
+        # create articulation mask
+        self.articulation_mask = wp.zeros(model.articulation_count, dtype=bool, device=self.device)
+        wp.launch(
+            set_model_articulation_mask_kernel,
+            dim=articulation_count,
+            inputs=[self.full_mask, self.articulation_indices, self.articulation_mask],
+            device=self.device,
+        )
+
+        root_joint_type = arti_joint_types[arti_joint_begin]
+        # fixed base means that all linear and angular degrees of freedom are locked at the root
+        self.is_fixed_base = root_joint_type == JOINT_FIXED
+        # floating base means that all linear and angular degrees of freedom are unlocked at the root
+        # (though there might be constraints like distance)
+        self.is_floating_base = root_joint_type in (JOINT_FREE, JOINT_DISTANCE)
 
     # ========================================================================================
     # Generic attribute API
 
     @functools.lru_cache(maxsize=None)  # noqa
-    def _get_cached_attribute(self, name: str, source: Model | State | Control):
+    def _get_cached_attribute(self, name: str, source: Model | State | Control, _slice=None):
         # get the attribute array
         attrib = getattr(source, name)
         assert isinstance(attrib, wp.array)
@@ -270,8 +379,14 @@ class ArticulationView:
         batched_shape = (self.count, attrib.shape[0] // self.count, *attrib.shape[1:])
 
         # get attribute slice
-        frequency = self.model.get_attribute_frequency(name)
-        attrib_slice = self._slices[frequency]
+        if _slice is not None:
+            attrib_slice = _slice
+        else:
+            frequency = self.model.get_attribute_frequency(name)
+            attrib_slice = self._contiguous_slices.get(frequency)
+            if attrib_slice is None:
+                # TODO
+                raise NotImplementedError("Non-contiguous selections not supported yet")
 
         # create strided array
         attrib = attrib.reshape(batched_shape)
@@ -331,9 +446,11 @@ class ArticulationView:
             array: The root transforms (dtype=wp.transform).
         """
         if self.is_floating_base:
-            attrib = self._get_cached_attribute("joint_q", source)[:, :7]
+            attrib_slice = slice(self._arti_joint_coord_begin, self._arti_joint_coord_begin + 7)
+            attrib = self._get_cached_attribute("joint_q", source, _slice=attrib_slice)
         else:
-            attrib = self._get_cached_attribute("joint_X_p", self.model)[:, 0]
+            attrib_slice = slice(self._arti_joint_begin, self._arti_joint_begin + 1)
+            attrib = self._get_cached_attribute("joint_X_p", self.model, _slice=attrib_slice)
 
         if attrib.dtype is wp.transform:
             return attrib
@@ -351,9 +468,11 @@ class ArticulationView:
             mask (array): Mask of articulations in this ArticulationView (all by default).
         """
         if self.is_floating_base:
-            attrib = self._get_cached_attribute("joint_q", target)[:, :7]
+            attrib_slice = slice(self._arti_joint_coord_begin, self._arti_joint_coord_begin + 7)
+            attrib = self._get_cached_attribute("joint_q", target, _slice=attrib_slice)
         else:
-            attrib = self._get_cached_attribute("joint_X_p", self.model)[:, 0]
+            attrib_slice = slice(self._arti_joint_begin, self._arti_joint_begin + 1)
+            attrib = self._get_cached_attribute("joint_X_p", self.model, _slice=attrib_slice)
 
         self._set_attribute_values(attrib, values, mask=mask)
 
@@ -368,9 +487,10 @@ class ArticulationView:
             array: The root velocities (dtype=wp.spatial_vector).
         """
         if self.is_floating_base:
-            attrib = self._get_cached_attribute("joint_qd", source)[:, :6]
+            attrib_slice = slice(self._arti_joint_dof_begin, self._arti_joint_dof_begin + 6)
+            attrib = self._get_cached_attribute("joint_qd", source, _slice=attrib_slice)
         else:
-            # Non-floating articulations have no root velocities.
+            # FIXME? Non-floating articulations have no root velocities.
             return None
 
         if attrib.dtype is wp.spatial_vector:
@@ -388,41 +508,8 @@ class ArticulationView:
             mask (array): Mask of articulations in this ArticulationView (all by default).
         """
         if self.is_floating_base:
-            attrib = self._get_cached_attribute("joint_qd", target)[:, :6]
-        else:
-            return  # no-op
-
-        self._set_attribute_values(attrib, values, mask=mask)
-
-    def get_root_armatures(self, source: Model | State):
-        """
-        Get the root joint armatures of the articulations.
-
-        Args:
-            source (Model | State): Where to get the armatures (Model or State).
-
-        Returns:
-            array: The root armatures (dtype=wp.float32).
-        """
-        if self.is_floating_base:
-            return self._get_cached_attribute("joint_armature", source)[:, :6]
-        else:
-            # Fixed-base articulations have no root armature.
-            # For articulations that are neither fixed nor floating, root joint armatures
-            # can be accessed using `get_dof_armatures()`
-            return None
-
-    def set_root_armatures(self, target: Model | State, values: wp.array, mask=None):
-        """
-        Set the root joint armatures of the articulations.
-
-        Args:
-            target (Model | State): Where to set the root armatures (Model or State).
-            values (array): The root armatures to set (dtype=wp.float32).
-            mask (array): Mask of articulations in this ArticulationView (all by default).
-        """
-        if self.is_floating_base:
-            attrib = self._get_cached_attribute("joint_armature", target)[:, :6]
+            attrib_slice = slice(self._arti_joint_dof_begin, self._arti_joint_dof_begin + 6)
+            attrib = self._get_cached_attribute("joint_qd", target, _slice=attrib_slice)
         else:
             return  # no-op
 
@@ -435,59 +522,24 @@ class ArticulationView:
         return self._get_cached_attribute("body_qd", source)
 
     def get_dof_positions(self, source: Model | State):
-        if self.is_floating_base:
-            return self._get_cached_attribute("joint_q", source)[:, 7:]
-        else:
-            return self._get_cached_attribute("joint_q", source)
+        return self._get_cached_attribute("joint_q", source)
 
     def set_dof_positions(self, target: Model | State, values, mask=None):
-        if self.is_floating_base:
-            attrib = self._get_cached_attribute("joint_q", target)[:, 7:]
-        else:
-            attrib = self._get_cached_attribute("joint_q", target)
-
+        attrib = self._get_cached_attribute("joint_q", target)
         self._set_attribute_values(attrib, values, mask=mask)
 
     def get_dof_velocities(self, source: Model | State):
-        if self.is_floating_base:
-            return self._get_cached_attribute("joint_qd", source)[:, 6:]
-        else:
-            return self._get_cached_attribute("joint_qd", source)
+        return self._get_cached_attribute("joint_qd", source)
 
     def set_dof_velocities(self, target: Model | State, values, mask=None):
-        if self.is_floating_base:
-            attrib = self._get_cached_attribute("joint_qd", target)[:, 6:]
-        else:
-            attrib = self._get_cached_attribute("joint_qd", target)
-
+        attrib = self._get_cached_attribute("joint_qd", target)
         self._set_attribute_values(attrib, values, mask=mask)
 
     def get_dof_forces(self, source: Control):
-        if self.is_floating_base:
-            return self._get_cached_attribute("joint_f", source)[:, 6:]
-        else:
-            return self._get_cached_attribute("joint_f", source)
+        return self._get_cached_attribute("joint_f", source)
 
     def set_dof_forces(self, target: Control, values, mask=None):
-        if self.is_floating_base:
-            attrib = self._get_cached_attribute("joint_f", target)[:, 6:]
-        else:
-            attrib = self._get_cached_attribute("joint_f", target)
-
-        self._set_attribute_values(attrib, values, mask=mask)
-
-    def get_dof_armatures(self, source: Model | State):
-        if self.is_floating_base:
-            return self._get_cached_attribute("joint_armature", source)[:, 6:]
-        else:
-            return self._get_cached_attribute("joint_armature", source)
-
-    def set_dof_armatures(self, target: Model | State, values, mask=None):
-        if self.is_floating_base:
-            attrib = self._get_cached_attribute("joint_armature", target)[:, 6:]
-        else:
-            attrib = self._get_cached_attribute("joint_armature", target)
-
+        attrib = self._get_cached_attribute("joint_f", target)
         self._set_attribute_values(attrib, values, mask=mask)
 
     # ========================================================================================
