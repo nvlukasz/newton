@@ -372,7 +372,7 @@ class ArticulationView:
     # Generic attribute API
 
     @functools.lru_cache(maxsize=None)  # noqa
-    def _get_cached_attribute(self, name: str, source: Model | State | Control, _slice=None):
+    def _get_cached_attribute(self, name: str, source: Model | State | Control, _slice: slice | None = None):
         # get the attribute array
         attrib = getattr(source, name)
         assert isinstance(attrib, wp.array)
