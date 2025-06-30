@@ -307,7 +307,6 @@ class ArticulationView:
         self._arti_joint_coord_end = int(model_joint_q_start[arti_joint_end])
 
         root_joint_type = arti_joint_types[0]
-        print(f"{arti_joint_begin}, {root_joint_type}")
         # fixed base means that all linear and angular degrees of freedom are locked at the root
         self.is_fixed_base = root_joint_type == JOINT_FIXED
         # floating base means that all linear and angular degrees of freedom are unlocked at the root
