@@ -141,7 +141,9 @@ class TestMuJoCoSolver(unittest.TestCase):
             print("Debug: test_render_trajectory finished.")
 
 
-class TestMuJoCoSolverMassProperties(TestMuJoCoSolver):
+class TestMuJoCoSolverPropertiesBase(TestMuJoCoSolver):
+    """Base class for MuJoCo solver property tests with common setup."""
+
     def setUp(self):
         """Set up a model with multiple environments, each with a free body and an articulated tree."""
         self.seed = 123
@@ -237,6 +239,8 @@ class TestMuJoCoSolverMassProperties(TestMuJoCoSolver):
         self.control = self.model.control()
         self.contacts = self.model.collide(self.state_in)
 
+
+class TestMuJoCoSolverMassProperties(TestMuJoCoSolverPropertiesBase):
     def test_randomize_body_mass(self):
         """
         Tests if the body mass is randomized correctly and updates properly after simulation steps.
@@ -443,7 +447,7 @@ class TestMuJoCoSolverMassProperties(TestMuJoCoSolver):
         check_inertias(updated_inertias, "Updated ")
 
 
-class TestMuJoCoSolverJointProperties(TestMuJoCoSolverMassProperties):
+class TestMuJoCoSolverJointProperties(TestMuJoCoSolverPropertiesBase):
     def test_joint_attributes_registration_and_updates(self):
         """
         Verify that joint effort limit, velocity limit, armature, and friction:
@@ -628,6 +632,346 @@ class TestMuJoCoSolverJointProperties(TestMuJoCoSolverMassProperties):
                     places=4,
                     msg=f"Updated MuJoCo DOF {dof_idx} in env {env_idx} friction should match Newton value",
                 )
+
+
+class TestMuJoCoSolverGeomProperties(TestMuJoCoSolverPropertiesBase):
+    def test_geom_property_conversion(self):
+        """
+        Test that Newton shape properties are correctly converted to MuJoCo geom properties.
+        Verifies friction values can be updated via notify_model_changed.
+        """
+        # Get info about static shapes (like plane)
+        collision_groups = np.array(self.model.shape_collision_group)
+        static_shapes = np.where(collision_groups < 0)[0]
+        num_static = len(static_shapes)
+
+        # Shapes per environment (excluding static shapes)
+        shapes_per_env = (self.model.shape_count - num_static) // self.model.num_envs
+
+        # Create solver - this will use default friction values
+        solver = MuJoCoSolver(self.model, iterations=1, disable_contacts=True)
+
+        # Now set different friction values for each shape AFTER solver creation
+        new_mu_values = np.zeros(self.model.shape_count)
+
+        # Set friction for static shapes
+        for i in static_shapes:
+            new_mu_values[i] = 0.8  # Default friction for static shapes
+
+        # Set friction for environment shapes
+        for env_idx in range(self.model.num_envs):
+            for shape_idx in range(shapes_per_env):
+                # Global index accounts for static shapes
+                global_shape_idx = num_static + env_idx * shapes_per_env + shape_idx
+                # Pattern: 0.3 + shape_idx * 0.1 + env_idx * 0.2
+                new_mu_values[global_shape_idx] = 0.3 + shape_idx * 0.1 + env_idx * 0.2
+
+        self.model.shape_materials.mu.assign(new_mu_values)
+
+        # Notify solver of shape property changes
+        solver.notify_model_changed(newton.sim.NOTIFY_FLAG_SHAPE_PROPERTIES)
+
+        # Verify shape-to-geom mapping exists
+        self.assertTrue(hasattr(self.model, "mjc_shape_to_geom"))
+        self.assertEqual(len(self.model.mjc_shape_to_geom), self.model.shape_count)
+
+        # Get shape-to-geom mapping
+        shape_to_geom = self.model.mjc_shape_to_geom.numpy()
+        shape_types = self.model.shape_geo.type.numpy()
+
+        # Verify friction values match Newton's mu
+        geom_friction = solver.mjw_model.geom_friction.numpy()
+
+        # Only check shapes that were actually converted (selected_shapes)
+        for shape_idx in solver.selected_shapes.numpy():
+            geom_idx = shape_to_geom[shape_idx]
+            if geom_idx >= 0:  # Valid geom
+                # Skip plane shapes as they use default friction from MuJoCo
+                if shape_types[shape_idx] == newton.GEO_PLANE:
+                    continue
+
+                expected_mu = new_mu_values[shape_idx]
+
+                # Check that all worlds have the same friction value
+                for world_idx in range(self.model.num_envs):
+                    actual_friction = geom_friction[world_idx, geom_idx]
+
+                    # Slide friction should match exactly
+                    self.assertAlmostEqual(
+                        float(actual_friction[0]),
+                        expected_mu,
+                        places=5,
+                        msg=f"Slide friction mismatch for shape {shape_idx} (type {shape_types[shape_idx]}) in world {world_idx}",
+                    )
+
+                    # Torsional and rolling friction should be scaled by model parameters
+                    expected_torsional = expected_mu * self.model.rigid_contact_torsional_friction
+                    expected_rolling = expected_mu * self.model.rigid_contact_rolling_friction
+
+                    self.assertAlmostEqual(
+                        float(actual_friction[1]),
+                        expected_torsional,
+                        places=5,
+                        msg=f"Torsional friction mismatch for shape {shape_idx} in world {world_idx}",
+                    )
+
+                    self.assertAlmostEqual(
+                        float(actual_friction[2]),
+                        expected_rolling,
+                        places=5,
+                        msg=f"Rolling friction mismatch for shape {shape_idx} in world {world_idx}",
+                    )
+
+    def test_geom_property_update(self):
+        """
+        Test that geom properties can be dynamically updated during simulation.
+        Updates friction and collision radius and verifies changes propagate to MuJoCo.
+        """
+        # Get info about static shapes
+        collision_groups = np.array(self.model.shape_collision_group)
+        static_shapes = np.where(collision_groups < 0)[0]
+        num_static = len(static_shapes)
+
+        # Shapes per environment (excluding static shapes)
+        shapes_per_env = (self.model.shape_count - num_static) // self.model.num_envs
+
+        # Set initial friction values
+        initial_mu_values = np.ones(self.model.shape_count) * 0.5
+        self.model.shape_materials.mu.assign(initial_mu_values)
+
+        # Create solver
+        solver = MuJoCoSolver(self.model, iterations=1, disable_contacts=True)
+
+        # Get initial values
+        shape_to_geom = self.model.mjc_shape_to_geom.numpy()
+        shape_types = self.model.shape_geo.type.numpy()
+
+        # Run a simulation step
+        solver.step(self.model, self.state_in, self.state_out, self.control, self.contacts, 0.01)
+        self.state_in, self.state_out = self.state_out, self.state_in
+
+        # Update shape material properties with different pattern
+        updated_mu_values = np.zeros(self.model.shape_count)
+
+        # Set friction for static shapes
+        for i in static_shapes:
+            updated_mu_values[i] = 0.9
+
+        # Set friction for environment shapes
+        for env_idx in range(self.model.num_envs):
+            for shape_idx in range(shapes_per_env):
+                global_shape_idx = num_static + env_idx * shapes_per_env + shape_idx
+                # New pattern: 0.6 + shape_idx * 0.15 + env_idx * 0.3
+                updated_mu_values[global_shape_idx] = 0.6 + shape_idx * 0.15 + env_idx * 0.3
+
+        self.model.shape_materials.mu.assign(updated_mu_values)
+
+        # Notify model changed
+        solver.notify_model_changed(newton.sim.NOTIFY_FLAG_SHAPE_PROPERTIES)
+
+        # Check updated values
+        updated_friction = solver.mjw_model.geom_friction.numpy()
+
+        # Only check shapes that were actually converted (selected_shapes)
+        for shape_idx in solver.selected_shapes.numpy():
+            geom_idx = shape_to_geom[shape_idx]
+            if geom_idx >= 0:  # Valid geom
+                # Skip plane shapes as they use default friction
+                if shape_types[shape_idx] == newton.GEO_PLANE:
+                    continue
+
+                expected_mu = updated_mu_values[shape_idx]
+
+                # Check all worlds have the updated friction
+                for world_idx in range(self.model.num_envs):
+                    actual_friction = updated_friction[world_idx, geom_idx]
+
+                    # Verify friction updated
+                    self.assertAlmostEqual(
+                        float(actual_friction[0]),
+                        expected_mu,
+                        places=5,
+                        msg=f"Updated slide friction mismatch for shape {shape_idx} in world {world_idx}",
+                    )
+                    # Verify it's different from initial (0.5)
+                    self.assertNotAlmostEqual(
+                        float(actual_friction[0]),
+                        0.5,
+                        places=5,
+                        msg=f"Friction should have changed from initial for shape {shape_idx} in world {world_idx}",
+                    )
+
+    def test_collision_radius_mapping(self):
+        """
+        Test that collision radius is correctly mapped to geom_rbound.
+        Verifies both initial mapping and dynamic updates.
+        Note: This test only checks spherical shapes since Newton's collision_radius
+        doesn't directly map to MuJoCo's geom_rbound for non-spherical shapes.
+        """
+
+        # Create solver
+        solver = MuJoCoSolver(self.model, iterations=1, disable_contacts=True)
+
+        # Get shape collision radii
+        shape_radii = self.model.shape_collision_radius.numpy()
+        shape_to_geom = self.model.mjc_shape_to_geom.numpy()
+        shape_types = self.model.shape_geo.type.numpy()
+        geom_rbound = solver.mjw_model.geom_rbound.numpy()
+
+        # Check initial collision radii - only for selected shapes
+        # Track which shapes we actually verified
+        verified_count = 0
+        for shape_idx in solver.selected_shapes.numpy():
+            geom_idx = shape_to_geom[shape_idx]
+            if geom_idx >= 0:
+                # Only check spherical shapes where collision_radius maps directly to geom_rbound
+                # For other shapes, MuJoCo's geom_rbound is the bounding sphere radius which
+                # is computed differently than Newton's collision_radius
+                if shape_types[shape_idx] != newton.GEO_SPHERE:
+                    continue
+
+                expected_radius = shape_radii[shape_idx]
+                verified_count += 1
+
+                # Check all worlds have the same radius
+                for world_idx in range(self.model.num_envs):
+                    actual_rbound = geom_rbound[world_idx, geom_idx]
+                    self.assertAlmostEqual(
+                        float(actual_rbound),
+                        expected_radius,
+                        places=5,
+                        msg=f"Collision radius mismatch for shape {shape_idx} in world {world_idx}",
+                    )
+
+        # If no spheres were found, at least verify the test setup is working
+        if verified_count == 0:
+            print("Warning: No spherical shapes found to test collision radius mapping")
+
+        # Update collision radii
+        new_radii = shape_radii * 1.5  # Scale by 1.5
+        self.model.shape_collision_radius.assign(new_radii)
+
+        # Notify model changed
+        solver.notify_model_changed(newton.sim.NOTIFY_FLAG_SHAPE_PROPERTIES)
+
+        # Check updated radii
+        updated_geom_rbound = solver.mjw_model.geom_rbound.numpy()
+
+        for shape_idx in solver.selected_shapes.numpy():
+            geom_idx = shape_to_geom[shape_idx]
+            if geom_idx >= 0:
+                # Only check spherical shapes
+                if shape_types[shape_idx] != newton.GEO_SPHERE:
+                    continue
+
+                expected_radius = new_radii[shape_idx]
+
+                # Check all worlds have the updated radius
+                for world_idx in range(self.model.num_envs):
+                    actual_rbound = updated_geom_rbound[world_idx, geom_idx]
+                    self.assertAlmostEqual(
+                        float(actual_rbound),
+                        expected_radius,
+                        places=5,
+                        msg=f"Updated collision radius mismatch for shape {shape_idx} in world {world_idx}",
+                    )
+
+    def test_geom_transform_update(self):
+        """
+        Test that geom_size, geom_pos, and geom_quat can be dynamically updated.
+        Verifies transform properties propagate correctly to MuJoCo.
+        """
+        # Create solver
+        solver = MuJoCoSolver(self.model, iterations=1, disable_contacts=True)
+
+        # Get initial values
+        shape_to_geom = self.model.mjc_shape_to_geom.numpy()
+
+        # Check geom transform properties are expanded
+        self.assertEqual(solver.mjw_model.geom_size.shape[0], self.model.num_envs)
+        self.assertEqual(solver.mjw_model.geom_pos.shape[0], self.model.num_envs)
+        self.assertEqual(solver.mjw_model.geom_quat.shape[0], self.model.num_envs)
+
+        # Get initial transforms
+        initial_geom_pos = solver.mjw_model.geom_pos.numpy().copy()
+
+        # Update shape transforms
+        new_transforms = []
+        new_sizes = []
+        for i in range(self.model.shape_count):
+            # Create new transform with offset position
+            new_pos = wp.vec3(1.0 + i * 0.1, 2.0 + i * 0.1, 3.0 + i * 0.1)
+            new_transform = wp.transform(new_pos, wp.quat_identity())
+            new_transforms.append(new_transform)
+
+            # Scale sizes by 1.2
+            old_size = self.model.shape_geo.scale.numpy()[i]
+            new_size = wp.vec3(old_size[0] * 1.2, old_size[1] * 1.2, old_size[2] * 1.2)
+            new_sizes.append(new_size)
+
+        # Update model arrays
+        self.model.shape_transform.assign(wp.array(new_transforms, dtype=wp.transform, device=self.model.device))
+        self.model.shape_geo.scale.assign(wp.array(new_sizes, dtype=wp.vec3, device=self.model.device))
+
+        # Notify model changed
+        solver.notify_model_changed(newton.sim.NOTIFY_FLAG_SHAPE_PROPERTIES)
+
+        # Check updated values
+        updated_geom_size = solver.mjw_model.geom_size.numpy()
+        updated_geom_pos = solver.mjw_model.geom_pos.numpy()
+
+        # Only check shapes that were actually converted (selected_shapes)
+        # Track which shapes we actually verified
+        verified_count = 0
+        for shape_idx in solver.selected_shapes.numpy():
+            geom_idx = shape_to_geom[shape_idx]
+            if geom_idx >= 0:
+                # Skip the plane shape as it has special handling for size
+                if self.model.shape_geo.type.numpy()[shape_idx] == newton.GEO_PLANE:
+                    continue
+
+                verified_count += 1
+
+                # Check all worlds have the same transform
+                for world_idx in range(self.model.num_envs):
+                    # Verify size updated for non-zero dimensions
+                    for dim in range(3):
+                        expected_size = float(new_sizes[shape_idx][dim])
+                        actual_size = float(updated_geom_size[world_idx, geom_idx][dim])
+
+                        # Only check dimensions that should have non-zero values
+                        if expected_size > 0:
+                            self.assertAlmostEqual(
+                                actual_size,
+                                expected_size,
+                                places=5,
+                                msg=f"Size mismatch for shape {shape_idx} in world {world_idx}, dimension {dim}",
+                            )
+
+                    # Verify position updated (accounting for up-axis conversion if needed)
+                    new_pos = new_transforms[shape_idx].p
+                    if self.model.up_axis == 1:  # Y-up to Z-up conversion
+                        expected_pos = np.array([new_pos[0], -new_pos[2], new_pos[1]])
+                    else:
+                        expected_pos = np.array([new_pos[0], new_pos[1], new_pos[2]])
+
+                    for dim in range(3):
+                        self.assertAlmostEqual(
+                            float(updated_geom_pos[world_idx, geom_idx][dim]),
+                            expected_pos[dim],
+                            places=5,
+                            msg=f"Position mismatch for shape {shape_idx} in world {world_idx}, dimension {dim}",
+                        )
+                        # Verify position actually changed from initial
+                        self.assertNotAlmostEqual(
+                            float(updated_geom_pos[world_idx, geom_idx][dim]),
+                            float(initial_geom_pos[world_idx, geom_idx][dim]),
+                            places=5,
+                            msg=f"Position should have changed for shape {shape_idx} in world {world_idx}, dimension {dim}",
+                        )
+
+        # Ensure we actually tested some shapes
+        self.assertGreater(verified_count, 0, "Should have verified at least one shape")
 
 
 if __name__ == "__main__":
