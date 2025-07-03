@@ -42,10 +42,12 @@ def compute_middle_kernel(
 @wp.kernel
 def reset_materials_kernel(mu: wp.array2d(dtype=float), seed: int, num_envs: int):
     i, j = wp.tid()
+
     if RANDOMIZE_PER_ENV:
         rng = wp.rand_init(seed, i)
     else:
         rng = wp.rand_init(seed, i * num_envs + j)
+
     mu[i, j] = wp.randf(rng)  # random coefficient of friction
 
 
