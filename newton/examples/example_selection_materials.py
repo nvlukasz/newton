@@ -25,6 +25,11 @@ USE_TORCH = False
 COLLAPSE_FIXED_JOINTS = False
 VERBOSE = True
 
+# RANDOMIZE_PER_ENV determines how shape material values are randomized.
+# - If True, all shapes in the same environment get the same random value.
+# - If False, each shape in each environment gets its own random value.
+RANDOMIZE_PER_ENV = True
+
 
 @wp.kernel
 def compute_middle_kernel(
@@ -37,7 +42,10 @@ def compute_middle_kernel(
 @wp.kernel
 def reset_materials_kernel(mu: wp.array2d(dtype=float), seed: int, num_envs: int):
     i, j = wp.tid()
-    rng = wp.rand_init(seed, i * num_envs + j)
+    if RANDOMIZE_PER_ENV:
+        rng = wp.rand_init(seed, i)
+    else:
+        rng = wp.rand_init(seed, i * num_envs + j)
     mu[i, j] = wp.randf(rng)  # random coefficient of friction
 
 
@@ -169,18 +177,25 @@ class Example:
         if USE_TORCH:
             import torch  # noqa: PLC0415
 
+            # flip velocities
             if self.reset_count % 2 == 0:
                 self.default_ant_root_velocities[:, 4] = 5.0
             else:
                 self.default_ant_root_velocities[:, 4] = -5.0
 
-            material_mu = torch.rand((self.ants.count, self.ants.shape_count))
+            # randomize materials
+            if RANDOMIZE_PER_ENV:
+                material_mu = torch.rand(self.ants.count).unsqueeze(1).repeat(1, self.ants.shape_count)
+            else:
+                material_mu = torch.rand((self.ants.count, self.ants.shape_count))
         else:
+            # flip velocities
             if self.reset_count % 2 == 0:
                 self.default_ant_root_velocities.fill_(wp.spatial_vector(0.0, 0.0, 0.0, 0.0, 5.0, 0.0))
             else:
                 self.default_ant_root_velocities.fill_(wp.spatial_vector(0.0, 0.0, 0.0, 0.0, -5.0, 0.0))
 
+            # randomize materials
             material_mu = self.ants.get_attribute("shape_materials.mu", self.model)
             wp.launch(
                 reset_materials_kernel, dim=material_mu.shape, inputs=[material_mu, self.reset_count, self.num_envs]
@@ -189,6 +204,7 @@ class Example:
         self.ants.set_attribute("shape_materials.mu", self.model, material_mu)
 
         # check values in model
+        # print(self.ants.get_attribute("shape_materials.mu", self.model))
         # print(self.model.shape_materials.mu)
 
         # !!! Notify solver of material changes !!!
