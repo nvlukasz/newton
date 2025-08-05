@@ -115,7 +115,7 @@ class Slice:
         return hash((self.start, self.stop))
 
     def __eq__(self, other):
-        return self.start == other.start and self.stop == other.stop
+        return isinstance(other, Slice) and self.start == other.start and self.stop == other.stop
 
     def __str__(self):
         return f"({self.start}, {self.stop})"
