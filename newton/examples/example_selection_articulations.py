@@ -25,7 +25,9 @@ import newton.utils
 from newton.examples import compute_env_offsets
 from newton.utils.selection import ArticulationView
 
-USE_TORCH = False
+import time
+
+USE_TORCH = True
 COLLAPSE_FIXED_JOINTS = False
 VERBOSE = True
 
@@ -115,16 +117,16 @@ class Example:
         self.solver = newton.solvers.MuJoCoSolver(self.model)
 
         self.renderer = None
-        if stage_path:
-            self.renderer = newton.utils.SimRendererOpenGL(
-                path=stage_path,
-                model=self.model,
-                scaling=2.0,
-                up_axis=str(up_axis),
-                screen_width=1280,
-                screen_height=720,
-                camera_pos=(0, 4, 30),
-            )
+        # if stage_path:
+        #     self.renderer = newton.utils.SimRendererOpenGL(
+        #         path=stage_path,
+        #         model=self.model,
+        #         scaling=2.0,
+        #         up_axis=str(up_axis),
+        #         screen_width=1280,
+        #         screen_height=720,
+        #         camera_pos=(0, 4, 30),
+        #     )
 
         self.state_0 = self.model.state()
         self.state_1 = self.model.state()
@@ -145,6 +147,8 @@ class Example:
         # ===========================================================
         self.ants = ArticulationView(self.model, "ant", verbose=VERBOSE, exclude_joint_types=[newton.JOINT_FREE])
         self.hums = ArticulationView(self.model, "humanoid", verbose=VERBOSE, exclude_joint_types=[newton.JOINT_FREE])
+
+        self.timings = None
 
         if USE_TORCH:
             import torch  # noqa: PLC0415
@@ -222,6 +226,7 @@ class Example:
             self.state_0, self.state_1 = self.state_1, self.state_0
 
     def step(self):
+        t1 = time.time_ns()
         if self.sim_time >= self.next_reset:
             self.reset(mask=self.mask_0)
             self.mask_0, self.mask_1 = self.mask_1, self.mask_0
@@ -246,6 +251,19 @@ class Example:
             else:
                 self.simulate()
         self.sim_time += self.frame_dt
+
+        t2 = time.time_ns()
+        # print((t2 - t1) / 1_000_000)
+
+        if self.step_count % 100 == 0:
+            if self.timings is not None:
+                import numpy as np
+                avg = np.mean(np.array(self.timings))
+                print(f"{self.step_count}: {avg / 1_000_000 :.3f} ms")
+            self.timings = [t2 - t1]
+        else:
+            self.timings.append(t2 - t1)
+
         self.step_count += 1
 
     def reset(self, mask=None):
@@ -325,7 +343,7 @@ if __name__ == "__main__":
         default="example_selection_articulations.usd",
         help="Path to the output USD file.",
     )
-    parser.add_argument("--num-frames", type=int, default=1200, help="Total number of frames.")
+    parser.add_argument("--num-frames", type=int, default=10_000, help="Total number of frames.")
     parser.add_argument("--num-envs", type=int, default=16, help="Total number of simulated environments.")
     parser.add_argument("--use-cuda-graph", default=True, action=argparse.BooleanOptionalAction)
 
@@ -338,8 +356,8 @@ if __name__ == "__main__":
             example.step()
             example.render()
 
-            if not example.renderer:
-                print(f"[{frame_idx:4d}/{args.num_frames}]")
+            # if not example.renderer:
+            #     print(f"[{frame_idx:4d}/{args.num_frames}]")
 
         if example.renderer:
             example.renderer.save()
