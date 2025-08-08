@@ -1,7 +1,7 @@
-﻿newton.solvers.Style3DSolver
+﻿newton.solvers.SolverStyle3D
 ============================
 
-.. autoclass:: newton.solvers.Style3DSolver
+.. autoclass:: newton.solvers.SolverStyle3D
    :members:
    :undoc-members:
    :show-inheritance:

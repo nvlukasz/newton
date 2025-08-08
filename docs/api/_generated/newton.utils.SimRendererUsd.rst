@@ -1,7 +1,7 @@
-﻿newton.utils.SimRendererUsd
+﻿newton.viewer.RendererUsd
 ===========================
 
-.. autoclass:: newton.utils.SimRendererUsd
+.. autoclass:: newton.viewer.RendererUsd
    :members:
    :undoc-members:
    :show-inheritance:

@@ -9,7 +9,7 @@
    .. autosummary::
    
       IKSolver
-      JointLimitObjective
-      PositionObjective
-      RotationObjective
+      IKJointLimitObjective
+      IKPositionObjective
+      IKRotationObjective
    

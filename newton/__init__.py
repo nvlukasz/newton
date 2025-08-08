@@ -13,46 +13,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from . import solvers
-from ._version import __version__
+# submodule APIs
+from . import geometry, ik, selection, solvers, utils, viewer
 
 # Core functionality
-from .core import (
+from ._src.core import (
     Axis,
     AxisType,
 )
 
 # Geometry functionality
-from .geometry import (
+from ._src.geometry import (
     SDF,
     GeoType,
     Mesh,
-    create_box,
-    create_capsule,
-    create_cone,
-    create_cylinder,
-    create_none,
-    create_plane,
-    create_sphere,
+    ParticleFlags,
+    ShapeFlags,
 )
 
 # Simulation functionality
-from .sim import (
-    EQ_CONNECT,
-    EQ_JOINT,
-    EQ_WELD,
-    JOINT_BALL,
-    JOINT_D6,
-    JOINT_DISTANCE,
-    JOINT_FIXED,
-    JOINT_FREE,
-    JOINT_MODE_NONE,
-    JOINT_MODE_TARGET_POSITION,
-    JOINT_MODE_TARGET_VELOCITY,
-    JOINT_PRISMATIC,
-    JOINT_REVOLUTE,
+from ._src.sim import (
     Contacts,
     Control,
+    EqType,
+    JointMode,
+    JointType,
     Model,
     ModelBuilder,
     State,
@@ -60,39 +45,46 @@ from .sim import (
     eval_ik,
 )
 
-__all__ = [
-    "EQ_CONNECT",
-    "EQ_JOINT",
-    "EQ_WELD",
-    "JOINT_BALL",
-    "JOINT_D6",
-    "JOINT_DISTANCE",
-    "JOINT_FIXED",
-    "JOINT_FREE",
-    "JOINT_MODE_NONE",
-    "JOINT_MODE_TARGET_POSITION",
-    "JOINT_MODE_TARGET_VELOCITY",
-    "JOINT_PRISMATIC",
-    "JOINT_REVOLUTE",
-    "SDF",
+# TODO: HMMM
+# Contact sensors
+from ._src.utils.contact_sensor import (
+    ContactSensor,
+    populate_contacts,
+)
+
+# version
+from ._version import __version__
+
+__all__ = [  # noqa
+    "__version__",
+    # core
     "Axis",
     "AxisType",
-    "Contacts",
-    "Control",
+    # geometry
     "GeoType",
     "Mesh",
+    "ParticleFlags",
+    "SDF",
+    "ShapeFlags",
+    # sim
+    "Contacts",
+    "Control",
+    "EqType",
+    "JointMode",
+    "JointType",
     "Model",
     "ModelBuilder",
     "State",
-    "__version__",
-    "create_box",
-    "create_capsule",
-    "create_cone",
-    "create_cylinder",
-    "create_none",
-    "create_plane",
-    "create_sphere",
     "eval_fk",
     "eval_ik",
+    # contact sensors
+    "ContactSensor",
+    "populate_contacts",
+    # submodules
+    "geometry",
+    "ik",
+    "selection",
     "solvers",
+    "utils",
+    "viewer",
 ]

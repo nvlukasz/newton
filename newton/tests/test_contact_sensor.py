@@ -19,7 +19,6 @@ import warp as wp
 
 import newton
 from newton.tests.unittest_utils import assert_np_equal
-from newton.utils.contact_sensor import ContactSensor
 
 
 class MockModel:
@@ -31,7 +30,7 @@ class MockModel:
 
 def create_contacts(device, pairs, nconmax, positions=None, normals=None, separations=None, forces=None):
     """Helper to create Contacts with specified contacts"""
-    contacts = newton.sim.contacts.Contacts(0, 0)
+    contacts = newton.Contacts(0, 0)
 
     n_contacts = len(pairs)
 
@@ -76,7 +75,7 @@ class TestContactSensor(unittest.TestCase):
         model.body_key = ["A", "B"]
         model.body_shapes = [entity_A, entity_B]
 
-        contact_sensor = ContactSensor(model, sensing_obj_bodies="*", counterpart_bodies="*")
+        contact_sensor = newton.ContactSensor(model, sensing_obj_bodies="*", counterpart_bodies="*")
 
         test_contacts = [
             {

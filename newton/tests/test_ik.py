@@ -22,7 +22,7 @@ import numpy as np
 import warp as wp
 
 import newton
-import newton.sim.ik as ik
+import newton._src.sim.ik as ik
 from newton.tests.unittest_utils import add_function_test, assert_np_equal, get_test_devices
 
 # ----------------------------------------------------------------------------
@@ -168,7 +168,7 @@ def _convergence_test_planar(test, device, mode: ik.JacobianMode):
         ee_link = 1
         ee_off = wp.vec3(0.5, 0.0, 0.0)
 
-        pos_obj = ik.PositionObjective(
+        pos_obj = ik.IKPositionObjective(
             link_index=ee_link,
             link_offset=ee_off,
             target_positions=targets,
@@ -223,7 +223,7 @@ def _convergence_test_free(test, device, mode: ik.JacobianMode):
         ee_link = 1  # second body
         ee_off = wp.vec3(0.5, 0.0, 0.0)
 
-        pos_obj = ik.PositionObjective(
+        pos_obj = ik.IKPositionObjective(
             link_index=ee_link,
             link_offset=ee_off,
             target_positions=targets,
@@ -275,8 +275,8 @@ def _convergence_test_d6(test, device, mode: ik.JacobianMode):
         angles = [math.pi / 6 + prob * math.pi / 8 for prob in range(n_problems)]
         rot_targets = wp.array([[0.0, 0.0, math.sin(a / 2), math.cos(a / 2)] for a in angles], dtype=wp.vec4)
 
-        pos_obj = ik.PositionObjective(0, wp.vec3(0.0, 0.0, 0.0), pos_targets, n_problems, 6, 0)
-        rot_obj = ik.RotationObjective(0, wp.quat_identity(), rot_targets, n_problems, 6, 3)
+        pos_obj = ik.IKPositionObjective(0, wp.vec3(0.0, 0.0, 0.0), pos_targets, n_problems, 6, 0)
+        rot_obj = ik.IKRotationObjective(0, wp.quat_identity(), rot_targets, n_problems, 6, 3)
 
         solver = ik.IKSolver(model, joint_q_2d, [pos_obj, rot_obj], lambda_initial=1e-3, jacobian_mode=mode)
 
@@ -342,7 +342,7 @@ def _jacobian_compare(test, device, objective_builder):
 
 def _pos_objective_builder(model, n_problems):
     targets = wp.array([[1.5, 0.8, 0.0] for _ in range(n_problems)], dtype=wp.vec3)
-    pos_obj = ik.PositionObjective(
+    pos_obj = ik.IKPositionObjective(
         link_index=1,
         link_offset=wp.vec3(0.5, 0.0, 0.0),
         target_positions=targets,
@@ -365,7 +365,7 @@ def test_position_jacobian_compare(test, device):
 def _rot_objective_builder(model, n_problems):
     angles = [math.pi / 6 + prob * math.pi / 8 for prob in range(n_problems)]
     quats = [[0.0, 0.0, math.sin(a / 2), math.cos(a / 2)] for a in angles]
-    rot_obj = ik.RotationObjective(
+    rot_obj = ik.IKRotationObjective(
         link_index=1,
         link_offset_rotation=wp.quat_identity(),
         target_rotations=wp.array(quats, dtype=wp.vec4),
@@ -391,7 +391,7 @@ def _jl_objective_builder(model, n_problems):
     joint_limit_lower = wp.array([-1.0] * dof, dtype=wp.float32)
     joint_limit_upper = wp.array([1.0] * dof, dtype=wp.float32)
 
-    jl_obj = ik.JointLimitObjective(
+    jl_obj = ik.IKJointLimitObjective(
         joint_limit_lower=joint_limit_lower,
         joint_limit_upper=joint_limit_upper,
         n_problems=n_problems,
@@ -416,8 +416,8 @@ def _d6_objective_builder(model, n_problems):
     angles = [math.pi / 6 + prob * math.pi / 8 for prob in range(n_problems)]
     rot_targets = wp.array([[0.0, 0.0, math.sin(a / 2), math.cos(a / 2)] for a in angles], dtype=wp.vec4)
 
-    pos_obj = ik.PositionObjective(0, wp.vec3(0.0, 0.0, 0.0), pos_targets, n_problems, 6, 0)
-    rot_obj = ik.RotationObjective(0, wp.quat_identity(), rot_targets, n_problems, 6, 3)
+    pos_obj = ik.IKPositionObjective(0, wp.vec3(0.0, 0.0, 0.0), pos_targets, n_problems, 6, 0)
+    rot_obj = ik.IKRotationObjective(0, wp.quat_identity(), rot_targets, n_problems, 6, 3)
     return [pos_obj, rot_obj]
 
 

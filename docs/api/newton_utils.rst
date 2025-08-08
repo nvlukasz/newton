@@ -10,8 +10,8 @@ newton.utils
    :nosignatures:
 
    SimRenderer
-   SimRendererOpenGL
-   SimRendererUsd
+   RendererOpenGL
+   RendererUsd
 
 .. rubric:: Functions
 

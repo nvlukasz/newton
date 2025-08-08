@@ -1,7 +1,7 @@
-﻿newton.solvers.FeatherstoneSolver
+﻿newton.solvers.SolverFeatherstone
 =================================
 
-.. autoclass:: newton.solvers.FeatherstoneSolver
+.. autoclass:: newton.solvers.SolverFeatherstone
    :members:
    :undoc-members:
    :show-inheritance:

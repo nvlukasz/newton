@@ -1,7 +1,7 @@
-﻿newton.solvers.SemiImplicitSolver
+﻿newton.solvers.SolverSemiImplicit
 =================================
 
-.. autoclass:: newton.solvers.SemiImplicitSolver
+.. autoclass:: newton.solvers.SolverSemiImplicit
    :members:
    :undoc-members:
    :show-inheritance:

@@ -1,7 +1,7 @@
-﻿newton.solvers.VBDSolver
+﻿newton.solvers.SolverVBD
 ========================
 
-.. autoclass:: newton.solvers.VBDSolver
+.. autoclass:: newton.solvers.SolverVBD
    :members:
    :undoc-members:
    :show-inheritance:
