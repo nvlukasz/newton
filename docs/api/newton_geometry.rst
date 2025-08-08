@@ -60,11 +60,11 @@ newton.geometry
      - 0
    * - MESH_MAXHULLVERT
      - 64
-   * - PARTICLE_FLAG_ACTIVE
+   * - ParticleFlags.ACTIVE
      - 1
-   * - SHAPE_FLAG_COLLIDE_PARTICLES
+   * - ShapeFlags.COLLIDE_PARTICLES
      - 4
-   * - SHAPE_FLAG_COLLIDE_SHAPES
+   * - ShapeFlags.COLLIDE_SHAPES
      - 2
-   * - SHAPE_FLAG_VISIBLE
+   * - ShapeFlags.VISIBLE
      - 1

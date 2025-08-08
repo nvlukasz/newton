@@ -46,33 +46,33 @@ newton.sim
 
    * - Name
      - Value
-   * - JOINT_BALL
+   * - JointType.BALL
      - 2
-   * - JOINT_D6
+   * - JointType.D6
      - 6
-   * - JOINT_DISTANCE
+   * - JointType.DISTANCE
      - 5
-   * - JOINT_FIXED
+   * - JointType.FIXED
      - 3
-   * - JOINT_FREE
+   * - JointType.FREE
      - 4
-   * - JOINT_MODE_NONE
+   * - JointMode.NONE
      - 0
-   * - JOINT_MODE_TARGET_POSITION
+   * - JointMode.TARGET_POSITION
      - 1
-   * - JOINT_MODE_TARGET_VELOCITY
+   * - JointMode.TARGET_VELOCITY
      - 2
-   * - JOINT_PRISMATIC
+   * - JointType.PRISMATIC
      - 0
-   * - JOINT_REVOLUTE
+   * - JointType.REVOLUTE
      - 1
-   * - NOTIFY_FLAG_BODY_INERTIAL_PROPERTIES
+   * - SolverNotifyFlags.BODY_INERTIAL_PROPERTIES
      - 8
-   * - NOTIFY_FLAG_BODY_PROPERTIES
+   * - SolverNotifyFlags.BODY_PROPERTIES
      - 4
-   * - NOTIFY_FLAG_JOINT_DOF_PROPERTIES
+   * - SolverNotifyFlags.JOINT_DOF_PROPERTIES
      - 2
-   * - NOTIFY_FLAG_JOINT_PROPERTIES
+   * - SolverNotifyFlags.JOINT_PROPERTIES
      - 1
-   * - NOTIFY_FLAG_SHAPE_PROPERTIES
+   * - SolverNotifyFlags.SHAPE_PROPERTIES
      - 16

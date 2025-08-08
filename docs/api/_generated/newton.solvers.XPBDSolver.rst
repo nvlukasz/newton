@@ -1,7 +1,7 @@
-﻿newton.solvers.XPBDSolver
+﻿newton.solvers.SolverXPBD
 =========================
 
-.. autoclass:: newton.solvers.XPBDSolver
+.. autoclass:: newton.solvers.SolverXPBD
    :members:
    :undoc-members:
    :show-inheritance:

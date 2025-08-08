@@ -244,7 +244,7 @@ class Example:
         integrator = integrator if integrator is not None else ROBOT_CONFIGS[robot]["integrator"]
         njmax = njmax if njmax is not None else ROBOT_CONFIGS[robot]["njmax"]
         nconmax = nconmax if nconmax is not None else ROBOT_CONFIGS[robot]["nconmax"]
-        self.solver = newton.solvers.MuJoCoSolver(
+        self.solver = newton.solvers.SolverMuJoCo(
             self.model,
             use_mujoco=use_mujoco,
             solver=solver,
@@ -256,13 +256,13 @@ class Example:
         )
 
         if stage_path and not headless:
-            self.renderer = newton.utils.SimRendererOpenGL(self.model, stage_path)
+            self.renderer = newton.viewer.RendererOpenGL(self.model, stage_path)
         else:
             self.renderer = None
 
         self.control = self.model.control()
         self.state_0, self.state_1 = self.model.state(), self.model.state()
-        newton.sim.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state_0)
+        newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state_0)
 
         self.graph = None
         if self.use_cuda_graph:
@@ -358,7 +358,7 @@ if __name__ == "__main__":
         "--show-mujoco-viewer",
         default=False,
         action=argparse.BooleanOptionalAction,
-        help="Toggle MuJoCo viewer next to Newton renderer when MuJoCoSolver is active.",
+        help="Toggle MuJoCo viewer next to Newton renderer when SolverMuJoCo is active.",
     )
 
     parser.add_argument(

@@ -1,7 +1,7 @@
-﻿newton.utils.SimRendererOpenGL
+﻿newton.viewer.RendererOpenGL
 ==============================
 
-.. autoclass:: newton.utils.SimRendererOpenGL
+.. autoclass:: newton.viewer.RendererOpenGL
    :members:
    :undoc-members:
    :show-inheritance:

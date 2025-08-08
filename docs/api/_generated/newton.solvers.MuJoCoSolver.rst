@@ -1,7 +1,7 @@
-﻿newton.solvers.MuJoCoSolver
+﻿newton.solvers.SolverMuJoCo
 ===========================
 
-.. autoclass:: newton.solvers.MuJoCoSolver
+.. autoclass:: newton.solvers.SolverMuJoCo
    :members:
    :undoc-members:
    :show-inheritance:
