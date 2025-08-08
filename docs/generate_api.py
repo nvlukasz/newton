@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -34,7 +36,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 # Modules for which we want API pages.  Feel free to modify.
-MODULES: list[str] = ["newton.core", "newton.sim", "newton.geometry", "newton.solvers", "newton.utils"]
+MODULES: list[str] = [
+    "newton",
+    "newton.geometry",
+    "newton.ik",
+    "newton.selection",
+    "newton.sensors",
+    "newton.solvers",
+    "newton.utils",
+    "newton.viewer",
+]
 
 # Output directory (relative to repo root)
 OUTPUT_DIR = REPO_ROOT / "docs" / "api"
@@ -198,6 +209,10 @@ def write_module_page(mod_name: str) -> None:
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    # delete previously generated files
+    if os.path.isdir(OUTPUT_DIR):
+        shutil.rmtree(OUTPUT_DIR)
+
     for mod in MODULES:
         write_module_page(mod)
     print("\nDone. Add docs/api/index.rst to your TOC or glob it in.")
