@@ -13,30 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from enum import IntFlag
-
-# ParticleFlags.ACTIVE = wp.constant(wp.uint32(1 << 0))
-# """Indicates that the particle is active."""
+from enum import IntEnum
 
 
 # Particle flags
-class ParticleFlags(IntFlag):
+class ParticleFlags(IntEnum):
     ACTIVE = 1 << 0
     """Indicates that the particle is active."""
 
 
-# ShapeFlags.VISIBLE = wp.constant(wp.uint32(1 << 0))
-# """Indicates that the shape is visible."""
-
-# ShapeFlags.COLLIDE_SHAPES = wp.constant(wp.uint32(1 << 1))
-# """Indicates that the shape collides with other shapes."""
-
-# ShapeFlags.COLLIDE_PARTICLES = wp.constant(wp.uint32(1 << 2))
-# """Indicates that the shape collides with particles."""
-
-
 # Shape flags
-class ShapeFlags(IntFlag):
+class ShapeFlags(IntEnum):
     VISIBLE = 1 << 0
     """Indicates that the shape is visible."""
 

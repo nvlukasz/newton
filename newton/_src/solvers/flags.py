@@ -13,13 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Implementation of the Newton model class."""
+"""Solver flags."""
 
-from enum import IntFlag
+from enum import IntEnum
 
 
 # model update flags - used for solver.notify_model_update()
-class SolverNotifyFlags(IntFlag):
+class SolverNotifyFlags(IntEnum):
     JOINT_PROPERTIES = 1 << 0
     """Indicates joint property updates: joint_q, joint_X_p, joint_X_c."""
 
