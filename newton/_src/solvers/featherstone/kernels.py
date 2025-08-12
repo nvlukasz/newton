@@ -15,58 +15,13 @@
 
 import warp as wp
 
+from ...core import transform_twist
 from ...sim import JointType
 from ...sim.articulation import (
     compute_2d_rotational_dofs,
     compute_3d_rotational_dofs,
 )
 from ..euler.kernels import eval_joint_force
-
-
-# Frank & Park definition 3.20, pg 100
-@wp.func
-def transform_twist(t: wp.transform, x: wp.spatial_vector):
-    q = wp.transform_get_rotation(t)
-    p = wp.transform_get_translation(t)
-
-    w = wp.spatial_top(x)
-    v = wp.spatial_bottom(x)
-
-    w = wp.quat_rotate(q, w)
-    v = wp.quat_rotate(q, v) + wp.cross(p, w)
-
-    return wp.spatial_vector(w, v)
-
-
-@wp.func
-def transform_wrench(t: wp.transform, x: wp.spatial_vector):
-    q = wp.transform_get_rotation(t)
-    p = wp.transform_get_translation(t)
-
-    w = wp.spatial_top(x)
-    v = wp.spatial_bottom(x)
-
-    v = wp.quat_rotate(q, v)
-    w = wp.quat_rotate(q, w) + wp.cross(p, v)
-
-    return wp.spatial_vector(w, v)
-
-
-@wp.func
-def spatial_adjoint(R: wp.mat33, S: wp.mat33):
-    # T = [R  0]
-    #     [S  R]
-
-    # fmt: off
-    return wp.spatial_matrix(
-        R[0, 0], R[0, 1], R[0, 2],     0.0,     0.0,     0.0,
-        R[1, 0], R[1, 1], R[1, 2],     0.0,     0.0,     0.0,
-        R[2, 0], R[2, 1], R[2, 2],     0.0,     0.0,     0.0,
-        S[0, 0], S[0, 1], S[0, 2], R[0, 0], R[0, 1], R[0, 2],
-        S[1, 0], S[1, 1], S[1, 2], R[1, 0], R[1, 1], R[1, 2],
-        S[2, 0], S[2, 1], S[2, 2], R[2, 0], R[2, 1], R[2, 2],
-    )
-    # fmt: on
 
 
 @wp.kernel
@@ -117,7 +72,7 @@ def spatial_transform_inertia(t: wp.transform, I: wp.spatial_matrix):
     R = wp.matrix_from_cols(r1, r2, r3)
     S = wp.skew(p) @ R
 
-    T = spatial_adjoint(R, S)
+    T = wp.spatial_adjoint(R, S)
 
     return wp.mul(wp.mul(wp.transpose(T), I), T)
 
