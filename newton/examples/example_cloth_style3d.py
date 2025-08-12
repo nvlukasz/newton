@@ -36,7 +36,7 @@ class Example:
         self.sim_time = 0.0
         self.profiler = {}
         self.use_cuda_graph = wp.get_device().is_cuda
-        builder = newton.utils.Style3DModelBuilder(up_axis=newton.Axis.Y)
+        builder = newton.Style3DModelBuilder(up_axis=newton.Axis.Y)
 
         use_cloth_mesh = True
         if use_cloth_mesh:

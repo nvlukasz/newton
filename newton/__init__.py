@@ -45,6 +45,10 @@ from ._src.sim import (
     eval_ik,
 )
 
+# TODO: eliminate these helpers, roll functionality into Model and ModelBuilder?
+from ._src.sim.style3d import Style3DModel, Style3DModelBuilder
+
+
 # TODO: HMMM
 # Contact sensors
 from ._src.utils.contact_sensor import (
@@ -55,17 +59,20 @@ from ._src.utils.contact_sensor import (
 # version
 from ._version import __version__
 
+# fmt: off
 __all__ = [  # noqa
     "__version__",
     # core
     "Axis",
     "AxisType",
+
     # geometry
     "GeoType",
     "Mesh",
     "ParticleFlags",
     "SDF",
     "ShapeFlags",
+
     # sim
     "Contacts",
     "Control",
@@ -77,9 +84,15 @@ __all__ = [  # noqa
     "State",
     "eval_fk",
     "eval_ik",
+
+    # style3d helpers
+    "Style3DModel",
+    "Style3DModelBuilder",
+
     # contact sensors
     "ContactSensor",
     "populate_contacts",
+
     # submodules
     "geometry",
     "ik",
@@ -88,3 +101,4 @@ __all__ = [  # noqa
     "utils",
     "viewer",
 ]
+# fmt: on
