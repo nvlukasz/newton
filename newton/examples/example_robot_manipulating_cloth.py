@@ -35,8 +35,8 @@ import newton
 import newton.examples
 import newton.utils
 from newton import Model, ModelBuilder, State, eval_fk
-from newton.utils import transform_twist
 from newton.solvers import SolverFeatherstone, SolverVBD
+from newton.utils import transform_twist
 
 
 def allclose(a: wp.vec3, b: wp.vec3, rtol=1e-5, atol=1e-8):

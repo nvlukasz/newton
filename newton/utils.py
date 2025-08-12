@@ -27,9 +27,8 @@ from ._src.core.spatial import (
     velocity_at_point,
 )
 
-from ._src.utils import download_asset
 # TODO: move importers to ModelBuilder, e.g., ModelBuilder.load_mjcf()
-from ._src.utils import parse_mjcf, parse_urdf, parse_usd
+from ._src.utils import download_asset, parse_mjcf, parse_urdf, parse_usd
 from ._src.utils.recorder import BasicRecorder, ModelAndStateRecorder
 
 # fmt: off
