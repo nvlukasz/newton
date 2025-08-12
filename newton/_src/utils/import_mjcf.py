@@ -23,10 +23,9 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import warp as wp
 
-from .. import geometry
 from ..core import quat_between_axes, quat_from_euler
 from ..core.types import Axis, AxisType, Sequence, Transform
-from ..geometry import Mesh
+from ..geometry import MESH_MAXHULLVERT, Mesh
 from ..sim import JointType, ModelBuilder
 
 
@@ -55,6 +54,7 @@ def parse_mjcf(
     collapse_fixed_joints: bool = False,
     verbose: bool = False,
     skip_equality_constraints: bool = False,
+    mesh_maxhullvert: int = MESH_MAXHULLVERT,
 ):
     """
     Parses MuJoCo XML (MJCF) file and adds the bodies and joints to the given ModelBuilder.
@@ -84,6 +84,7 @@ def parse_mjcf(
         collapse_fixed_joints (bool): If True, fixed joints are removed and the respective bodies are merged.
         verbose (bool): If True, print additional information about parsing the MJCF.
         skip_equality_constraints (bool): Whether <equality> tags should be parsed. If True, equality constraints are ignored.
+        mesh_maxhullvert (int): Maximum vertices for convex hull approximation of meshes.
     """
     if xform is None:
         xform = wp.transform()
@@ -147,8 +148,8 @@ def parse_mjcf(
                 name = mesh.attrib.get("name", ".".join(os.path.basename(fname).split(".")[:-1]))
                 s = mesh.attrib.get("scale", "1.0 1.0 1.0")
                 s = np.fromstring(s, sep=" ", dtype=np.float32)
-                # parse maxhullvert attribute, default to MESH_MAXHULLVERT if not specified
-                maxhullvert = int(mesh.attrib.get("maxhullvert", str(geometry.MESH_MAXHULLVERT)))
+                # parse maxhullvert attribute, default to mesh_maxhullvert if not specified
+                maxhullvert = int(mesh.attrib.get("maxhullvert", str(mesh_maxhullvert)))
                 mesh_assets[name] = {"file": fname, "scale": s, "maxhullvert": maxhullvert}
 
     class_parent = {}
@@ -343,7 +344,7 @@ def parse_mjcf(
                 assert len(geom_size) == 3, "need to specify size for mesh geom"
 
                 # get maxhullvert value from mesh assets
-                maxhullvert = mesh_assets[geom_attrib["mesh"]].get("maxhullvert", geometry.MESH_MAXHULLVERT)
+                maxhullvert = mesh_assets[geom_attrib["mesh"]].get("maxhullvert", mesh_maxhullvert)
 
                 if hasattr(m, "geometry"):
                     # multiple meshes are contained in a scene

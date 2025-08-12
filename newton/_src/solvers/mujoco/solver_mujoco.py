@@ -23,9 +23,8 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import warp as wp
 
-from ... import geometry
 from ...core.types import nparray, override
-from ...geometry import GeoType, ShapeFlags
+from ...geometry import MESH_MAXHULLVERT, GeoType, ShapeFlags
 from ...sim import (
     Contacts,
     Control,
@@ -1629,7 +1628,7 @@ class SolverMuJoCo(SolverBase):
         actuated_axes: list[int] | None = None,
         skip_visual_only_geoms: bool = True,
         add_axes: bool = False,
-        maxhullvert: int = geometry.MESH_MAXHULLVERT,
+        mesh_maxhullvert: int = MESH_MAXHULLVERT,
         ls_parallel: bool = False,
     ) -> tuple[MjWarpModel, MjWarpData, MjModel, MjData]:
         """
@@ -1924,7 +1923,7 @@ class SolverMuJoCo(SolverBase):
                 if stype == GeoType.MESH:
                     mesh_src = model.shape_source[shape]
                     # use mesh-specific maxhullvert or fall back to the default
-                    mesh_maxhullvert = getattr(mesh_src, "maxhullvert", maxhullvert)
+                    maxhullvert = getattr(mesh_src, "maxhullvert", mesh_maxhullvert)
                     # apply scaling
                     size = shape_size[shape]
                     vertices = mesh_src.vertices * size
@@ -1932,7 +1931,7 @@ class SolverMuJoCo(SolverBase):
                         name=name,
                         uservert=vertices.flatten(),
                         userface=mesh_src.indices.flatten(),
-                        maxhullvert=mesh_maxhullvert,
+                        maxhullvert=maxhullvert,
                     )
                     geom_params["meshname"] = name
                 if incoming_xform is not None:

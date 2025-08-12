@@ -21,7 +21,6 @@ import warp as wp
 
 import newton
 import newton.examples
-from newton._src import geometry
 from newton._src.geometry.utils import create_box_mesh, transform_points
 from newton.tests.unittest_utils import USD_AVAILABLE, assert_np_equal, get_test_devices
 from newton.utils import parse_usd
@@ -266,11 +265,7 @@ class TestImportUsd(unittest.TestCase):
         create_collision_mesh("/meshBoundingCube", vertices, indices, UsdPhysics.Tokens.boundingCube)
 
         builder = newton.ModelBuilder()
-        geometry.MESH_MAXHULLVERT = 4
-        parse_usd(
-            stage,
-            builder,
-        )
+        parse_usd(stage, builder, mesh_maxhullvert=4)
 
         self.assertEqual(builder.body_count, 0)
         self.assertEqual(builder.shape_count, 4)

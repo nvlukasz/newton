@@ -37,7 +37,6 @@ class GeoType(enum.IntEnum):
 
 
 # Default maximum vertices for convex hull approximation
-# FIXME: expose as public? It should be modifiable by user? Why not use an arg?
 MESH_MAXHULLVERT = 64
 
 

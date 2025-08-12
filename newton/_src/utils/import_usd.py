@@ -25,10 +25,9 @@ from typing import Any, Literal
 import numpy as np
 import warp as wp
 
-from .. import geometry
 from ..core import quat_between_axes
 from ..core.types import Axis, Transform
-from ..geometry import Mesh, ShapeFlags
+from ..geometry import MESH_MAXHULLVERT, Mesh, ShapeFlags
 from ..sim import JointMode, ModelBuilder
 
 
@@ -51,6 +50,7 @@ def parse_usd(
     bodies_follow_joint_ordering: bool = True,
     skip_mesh_approximation: bool = False,
     load_non_physics_prims: bool = True,
+    mesh_maxhullvert: int = MESH_MAXHULLVERT,
 ) -> dict[str, Any]:
     """
     Parses a Universal Scene Description (USD) stage containing UsdPhysics schema definitions for rigid-body articulations and adds the bodies, shapes and joints to the given ModelBuilder.
@@ -77,6 +77,7 @@ def parse_usd(
         bodies_follow_joint_ordering (bool): If True, the bodies are added to the builder in the same order as the joints (parent then child body). Otherwise, bodies are added in the order they appear in the USD. Default is True.
         skip_mesh_approximation (bool): If True, mesh approximation is skipped. Otherwise, meshes are approximated according to the ``physics:approximation`` attribute defined on the UsdPhysicsMeshCollisionAPI (if it is defined). Default is False.
         load_non_physics_prims (bool): If True, prims that are children of a rigid body that do not have a UsdPhysics schema applied are loaded as visual shapes in a separate pass (may slow down the loading process). Otherwise, non-physics prims are ignored. Default is True.
+        mesh_maxhullvert (int): Maximum vertices for convex hull approximation of meshes.
 
     Returns:
         dict: Dictionary with the following entries:
@@ -1062,7 +1063,7 @@ def parse_usd(
                             )
                             continue
                         face_id += count
-                    m = Mesh(points, np.array(faces, dtype=np.int32).flatten(), maxhullvert=geometry.MESH_MAXHULLVERT)
+                    m = Mesh(points, np.array(faces, dtype=np.int32).flatten(), maxhullvert=mesh_maxhullvert)
                     shape_id = builder.add_shape_mesh(
                         scale=scale,
                         mesh=m,

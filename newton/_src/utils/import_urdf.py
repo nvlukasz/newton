@@ -24,10 +24,9 @@ from urllib.parse import unquote, urlsplit
 import numpy as np
 import warp as wp
 
-from .. import geometry
 from ..core import Axis, AxisType, quat_between_axes
 from ..core.types import Transform
-from ..geometry import Mesh
+from ..geometry import MESH_MAXHULLVERT, Mesh
 from ..sim import ModelBuilder
 
 
@@ -67,6 +66,7 @@ def parse_urdf(
     ensure_nonstatic_links: bool = True,
     static_link_mass: float = 1e-2,
     collapse_fixed_joints: bool = False,
+    mesh_maxhullvert: int = MESH_MAXHULLVERT,
 ):
     """
     Parses a URDF file and adds the bodies and joints to the given ModelBuilder.
@@ -87,6 +87,7 @@ def parse_urdf(
         ensure_nonstatic_links (bool): If True, links with zero mass are given a small mass (see `static_link_mass`) to ensure they are dynamic.
         static_link_mass (float): The mass to assign to links with zero mass (if `ensure_nonstatic_links` is set to True).
         collapse_fixed_joints (bool): If True, fixed joints are removed and the respective bodies are merged.
+        mesh_maxhullvert (int): Maximum vertices for convex hull approximation of meshes.
     """
     axis_xform = wp.transform(wp.vec3(0.0), quat_between_axes(up_axis, builder.up_axis))
     if xform is None:
@@ -217,7 +218,7 @@ def parse_urdf(
                     for m_geom in m.geometry.values():
                         m_vertices = np.array(m_geom.vertices, dtype=np.float32) * scaling
                         m_faces = np.array(m_geom.faces.flatten(), dtype=np.int32)
-                        m_mesh = Mesh(m_vertices, m_faces, maxhullvert=geometry.MESH_MAXHULLVERT)
+                        m_mesh = Mesh(m_vertices, m_faces, maxhullvert=mesh_maxhullvert)
                         s = builder.add_shape_mesh(
                             body=link,
                             xform=tf,
@@ -229,7 +230,7 @@ def parse_urdf(
                     # a single mesh
                     m_vertices = np.array(m.vertices, dtype=np.float32) * scaling
                     m_faces = np.array(m.faces.flatten(), dtype=np.int32)
-                    m_mesh = Mesh(m_vertices, m_faces, maxhullvert=geometry.MESH_MAXHULLVERT)
+                    m_mesh = Mesh(m_vertices, m_faces, maxhullvert=mesh_maxhullvert)
                     s = builder.add_shape_mesh(
                         body=link,
                         xform=tf,
