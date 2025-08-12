@@ -260,7 +260,7 @@ class SolverBase:
             control (Control): The control input.
                 Defaults to `None` which means the control values from the
                 :class:`Model` are used.
-            contacts (Contact): The contact information.
+            contacts (Contacts): The contact information.
             dt (float): The time step (typically in seconds).
         """
         raise NotImplementedError()
