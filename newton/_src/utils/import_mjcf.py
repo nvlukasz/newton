@@ -23,13 +23,11 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import warp as wp
 
-import newton
-
 from .. import geometry
 from ..core import quat_between_axes, quat_from_euler
 from ..core.types import Axis, AxisType, Sequence, Transform
 from ..geometry import Mesh
-from ..sim import ModelBuilder
+from ..sim import JointType, ModelBuilder
 
 
 def parse_mjcf(
@@ -465,7 +463,7 @@ def parse_mjcf(
 
         freejoint_tags = body.findall("freejoint")
         if len(freejoint_tags) > 0:
-            joint_type = newton.JointType.FREE
+            joint_type = JointType.FREE
             joint_name.append(freejoint_tags[0].attrib.get("name", f"{body_name}_freejoint"))
             joint_armature.append(0.0)
         else:
@@ -490,10 +488,10 @@ def parse_mjcf(
                 joint_armature.append(parse_float(joint_attrib, "armature", default_joint_armature) * armature_scale)
 
                 if joint_type_str == "free":
-                    joint_type = newton.JointType.FREE
+                    joint_type = JointType.FREE
                     break
                 if joint_type_str == "fixed":
-                    joint_type = newton.JointType.FIXED
+                    joint_type = JointType.FIXED
                     break
                 is_angular = joint_type_str == "hinge"
                 axis_vec = parse_vec(joint_attrib, "axis", (0.0, 0.0, 0.0))
@@ -518,14 +516,14 @@ def parse_mjcf(
         )
 
         if joint_type is None:
-            joint_type = newton.JointType.D6
+            joint_type = JointType.D6
             if len(linear_axes) == 0:
                 if len(angular_axes) == 0:
-                    joint_type = newton.JointType.FIXED
+                    joint_type = JointType.FIXED
                 elif len(angular_axes) == 1:
-                    joint_type = newton.JointType.REVOLUTE
+                    joint_type = JointType.REVOLUTE
             elif len(linear_axes) == 1 and len(angular_axes) == 0:
-                joint_type = newton.JointType.PRISMATIC
+                joint_type = JointType.PRISMATIC
 
         if len(freejoint_tags) > 0 and parent == -1 and (base_joint is not None or floating is not None):
             joint_pos = joint_pos[0] if len(joint_pos) > 0 else (0.0, 0.0, 0.0)
@@ -587,7 +585,7 @@ def parse_mjcf(
             joint_pos = joint_pos[0] if len(joint_pos) > 0 else (0.0, 0.0, 0.0)
             if len(joint_name) == 0:
                 joint_name = [f"{body_name}_joint"]
-            if joint_type == newton.JointType.FREE:
+            if joint_type == JointType.FREE:
                 builder.add_joint_free(
                     link,
                     key="_".join(joint_name),

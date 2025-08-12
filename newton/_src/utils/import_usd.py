@@ -25,12 +25,11 @@ from typing import Any, Literal
 import numpy as np
 import warp as wp
 
-import newton
-
 from .. import geometry
 from ..core import quat_between_axes
 from ..core.types import Axis, Transform
-from ..sim import ModelBuilder
+from ..geometry import Mesh, ShapeFlags
+from ..sim import JointMode, ModelBuilder
 
 
 def parse_usd(
@@ -432,7 +431,7 @@ def parse_usd(
                     else:
                         continue
                     face_id += count
-                m = newton.Mesh(points, np.array(faces, dtype=np.int32).flatten())
+                m = Mesh(points, np.array(faces, dtype=np.int32).flatten())
                 shape_id = builder.add_shape_mesh(
                     parent_body_id,
                     xform,
@@ -551,10 +550,10 @@ def parse_usd(
                 # XXX take the target which is nonzero to decide between position vs. velocity target...
                 if joint_desc.drive.targetVelocity:
                     joint_params["target"] = joint_desc.drive.targetVelocity
-                    joint_params["mode"] = newton.JointMode.TARGET_VELOCITY
+                    joint_params["mode"] = JointMode.TARGET_VELOCITY
                 else:
                     joint_params["target"] = joint_desc.drive.targetPosition
-                    joint_params["mode"] = newton.JointMode.TARGET_POSITION
+                    joint_params["mode"] = JointMode.TARGET_POSITION
 
                 joint_params["target_ke"] = joint_desc.drive.stiffness * joint_drive_gains_scaling
                 joint_params["target_kd"] = joint_desc.drive.damping * joint_drive_gains_scaling
@@ -608,7 +607,7 @@ def parse_usd(
 
                 def define_joint_mode(dof, joint_desc):
                     target = 0.0  # TODO: parse target from state:*:physics:appliedForce usd attribute when no drive is present
-                    mode = newton.JointMode.NONE
+                    mode = JointMode.NONE
                     target_ke = 0.0
                     target_kd = 0.0
                     for drive in joint_desc.jointDrives:
@@ -617,10 +616,10 @@ def parse_usd(
                         if drive.second.enabled:
                             if drive.second.targetVelocity != 0.0:
                                 target = drive.second.targetVelocity
-                                mode = newton.JointMode.TARGET_VELOCITY
+                                mode = JointMode.TARGET_VELOCITY
                             else:
                                 target = drive.second.targetPosition
-                                mode = newton.JointMode.TARGET_POSITION
+                                mode = JointMode.TARGET_POSITION
                             target_ke = drive.second.stiffness
                             target_kd = drive.second.damping
                     return target, mode, target_ke, target_kd
@@ -1063,9 +1062,7 @@ def parse_usd(
                             )
                             continue
                         face_id += count
-                    m = newton.Mesh(
-                        points, np.array(faces, dtype=np.int32).flatten(), maxhullvert=geometry.MESH_MAXHULLVERT
-                    )
+                    m = Mesh(points, np.array(faces, dtype=np.int32).flatten(), maxhullvert=geometry.MESH_MAXHULLVERT)
                     shape_id = builder.add_shape_mesh(
                         scale=scale,
                         mesh=m,
@@ -1111,7 +1108,7 @@ def parse_usd(
                     prim, "physics:collisionEnabled", True
                 ):
                     no_collision_shapes.add(shape_id)
-                    builder.shape_flags[shape_id] &= ~newton.ShapeFlags.COLLIDE_SHAPES
+                    builder.shape_flags[shape_id] &= ~ShapeFlags.COLLIDE_SHAPES
 
     # approximate meshes
     for remeshing_method, shape_ids in remeshing_queue.items():

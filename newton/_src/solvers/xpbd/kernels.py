@@ -15,11 +15,9 @@
 
 import warp as wp
 
-import newton
-
 from ...core import velocity_at_point
 from ...geometry import ParticleFlags
-from ...sim.joints import JointMode
+from ...sim import JointMode, JointType
 from ...utils import (
     vec_abs,
     vec_leaky_max,
@@ -905,7 +903,7 @@ def apply_joint_forces(
 ):
     tid = wp.tid()
     type = joint_type[tid]
-    if type == newton.JointType.FIXED:
+    if type == JointType.FIXED:
         return
 
     # rigid body indices of the child and parent
@@ -944,13 +942,13 @@ def apply_joint_forces(
     t_total = wp.vec3()
     f_total = wp.vec3()
 
-    if type == newton.JointType.FREE or type == newton.JointType.DISTANCE:
+    if type == JointType.FREE or type == JointType.DISTANCE:
         t_total = wp.vec3(joint_f[qd_start + 0], joint_f[qd_start + 1], joint_f[qd_start + 2])
         f_total = wp.vec3(joint_f[qd_start + 3], joint_f[qd_start + 4], joint_f[qd_start + 5])
-    elif type == newton.JointType.BALL:
+    elif type == JointType.BALL:
         t_total = wp.vec3(joint_f[qd_start + 0], joint_f[qd_start + 1], joint_f[qd_start + 2])
 
-    elif type == newton.JointType.REVOLUTE or type == newton.JointType.PRISMATIC or type == newton.JointType.D6:
+    elif type == JointType.REVOLUTE or type == JointType.PRISMATIC or type == JointType.D6:
         # unroll for loop to ensure joint actions remain differentiable
         # (since differentiating through a dynamic for loop that updates a local variable is not supported)
 
@@ -1167,11 +1165,11 @@ def solve_simple_body_joints(
 
     if joint_enabled[tid] == 0:
         return
-    if type == newton.JointType.FREE:
+    if type == JointType.FREE:
         return
-    if type == newton.JointType.DISTANCE:
+    if type == JointType.DISTANCE:
         return
-    if type == newton.JointType.D6:
+    if type == JointType.D6:
         return
 
     # rigid body indices of the child and parent
@@ -1236,7 +1234,7 @@ def solve_simple_body_joints(
     # joint properties (for 1D joints)
     axis = joint_axis[axis_start]
 
-    if type == newton.JointType.FIXED:
+    if type == JointType.FIXED:
         limit_lower = 0.0
         limit_upper = 0.0
     else:
@@ -1257,7 +1255,7 @@ def solve_simple_body_joints(
     ang_delta_c = wp.vec3(0.0)
 
     # handle angular constraints
-    if type == newton.JointType.REVOLUTE:
+    if type == JointType.REVOLUTE:
         # align joint axes
         a_p = wp.quat_rotate(q_p, axis)
         a_c = wp.quat_rotate(q_c, axis)
@@ -1372,7 +1370,7 @@ def solve_simple_body_joints(
             ang_delta_p -= lambda_n * ncorr
             ang_delta_c += lambda_n * ncorr
 
-    if (type == newton.JointType.FIXED) or (type == newton.JointType.PRISMATIC):
+    if (type == JointType.FIXED) or (type == JointType.PRISMATIC):
         # align the mutual orientations of the two bodies
         # Eq. 18-19
         q = q_p * wp.quat_inverse(q_c)
@@ -1406,7 +1404,7 @@ def solve_simple_body_joints(
 
     lower_pos_limits = wp.vec3(0.0)
     upper_pos_limits = wp.vec3(0.0)
-    if type == newton.JointType.PRISMATIC:
+    if type == JointType.PRISMATIC:
         lower_pos_limits = axis * limit_lower
         upper_pos_limits = axis * limit_upper
 
@@ -1416,7 +1414,7 @@ def solve_simple_body_joints(
     corr -= vec_leaky_min(zero, upper_pos_limits - dx)
     corr -= vec_leaky_max(zero, lower_pos_limits - dx)
 
-    # if (type == newton.JointType.PRISMATIC):
+    # if (type == JointType.PRISMATIC):
     #     if mode == JointMode.TARGET_POSITION:
     #         target = wp.clamp(target, limit_lower, limit_upper)
     #         if target_ke > 0.0:
@@ -1485,15 +1483,15 @@ def solve_body_joints(
 
     if joint_enabled[tid] == 0:
         return
-    if type == newton.JointType.FREE:
+    if type == JointType.FREE:
         return
-    # if type == newton.JointType.FIXED:
+    # if type == JointType.FIXED:
     #     return
-    # if type == newton.JointType.REVOLUTE:
+    # if type == JointType.REVOLUTE:
     #     return
-    # if type == newton.JointType.PRISMATIC:
+    # if type == JointType.PRISMATIC:
     #     return
-    # if type == newton.JointType.BALL:
+    # if type == JointType.BALL:
     #     return
 
     # rigid body indices of the child and parent
@@ -1557,7 +1555,7 @@ def solve_body_joints(
     world_com_c = wp.transform_point(pose_c, com_c)
 
     # handle positional constraints
-    if type == newton.JointType.DISTANCE:
+    if type == JointType.DISTANCE:
         r_p = wp.transform_get_translation(X_wp) - world_com_p
         r_c = wp.transform_get_translation(X_wc) - world_com_c
         lower = joint_limit_lower[axis_start]
@@ -1750,12 +1748,7 @@ def solve_body_joints(
                 lin_delta_c += linear_c * (d_lambda * linear_relaxation)
                 ang_delta_c += angular_c * (d_lambda * angular_relaxation)
 
-    if (
-        type == newton.JointType.FIXED
-        or type == newton.JointType.PRISMATIC
-        or type == newton.JointType.REVOLUTE
-        or type == newton.JointType.D6
-    ):
+    if type == JointType.FIXED or type == JointType.PRISMATIC or type == JointType.REVOLUTE or type == JointType.D6:
         # handle angular constraints
 
         # local joint rotations
@@ -1877,7 +1870,7 @@ def solve_body_joints(
         axis_limits_lower = wp.spatial_top(axis_limits)
         axis_limits_upper = wp.spatial_bottom(axis_limits)
 
-        # if type == newton.JointType.D6:
+        # if type == JointType.D6:
         #     wp.printf("axis_target: %f %f %f\t axis_stiffness: %f %f %f\t axis_damping: %f %f %f\t axis_limits_lower: %f %f %f \t axis_limits_upper: %f %f %f\n",
         #               axis_target[0], axis_target[1], axis_target[2],
         #               axis_stiffness[0], axis_stiffness[1], axis_stiffness[2],

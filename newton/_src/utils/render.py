@@ -22,9 +22,9 @@ import warp as wp
 from warp.render import OpenGLRenderer, UsdRenderer
 from warp.render.utils import solidify_mesh, tab10_color_map
 
-import newton
-
-from ..geometry import ShapeFlags, raycast
+from ..core import Axis, AxisType
+from ..geometry import GeoType, ShapeFlags, raycast
+from ..sim import Contacts, JointType, Model, State
 
 
 @wp.kernel
@@ -167,11 +167,11 @@ def CreateSimRenderer(renderer):
 
         def __init__(
             self,
-            model: newton.Model | None = None,
+            model: Model | None = None,
             path: str = "No path specified",
             scaling: float = 1.0,
             fps: int = 60,
-            up_axis: newton.AxisType | None = None,
+            up_axis: AxisType | None = None,
             show_joints: bool = False,
             show_particles: bool = True,
             pick_stiffness: float = 20000.0,
@@ -196,8 +196,8 @@ def CreateSimRenderer(renderer):
                 if model:
                     up_axis = model.up_axis
                 else:
-                    up_axis = newton.Axis.Z
-            up_axis = newton.Axis.from_any(up_axis)
+                    up_axis = Axis.Z
+            up_axis = Axis.from_any(up_axis)
             super().__init__(path, scaling=scaling, fps=fps, up_axis=str(up_axis), **render_kwargs)
             self.scaling = scaling
             self.cam_axis = up_axis.value
@@ -242,7 +242,7 @@ def CreateSimRenderer(renderer):
                     self._default_on_mouse_drag = self.window.on_mouse_drag
                     self.window.on_mouse_drag = self.on_mouse_drag
 
-        def populate(self, model: newton.Model):
+        def populate(self, model: Model):
             """
             Populates the renderer with objects from the simulation model.
             This method sets up the rendering scene by creating visual representations
@@ -410,7 +410,7 @@ def CreateSimRenderer(renderer):
                 if geo_hash in geo_shape:
                     shape = geo_shape[geo_hash]
                 else:
-                    if geo_type == newton.GeoType.PLANE:
+                    if geo_type == GeoType.PLANE:
                         # plane mesh
                         width = geo_scale[0] if geo_scale[0] > 0.0 else 100.0
                         length = geo_scale[1] if geo_scale[1] > 0.0 else 100.0
@@ -425,30 +425,30 @@ def CreateSimRenderer(renderer):
                                 name, p, q, width, length, color, parent_body=body, is_template=True
                             )
 
-                    elif geo_type == newton.GeoType.SPHERE:
+                    elif geo_type == GeoType.SPHERE:
                         shape = self.render_sphere(
                             name, p, q, geo_scale[0], parent_body=body, is_template=True, color=color
                         )
 
-                    elif geo_type == newton.GeoType.CAPSULE:
+                    elif geo_type == GeoType.CAPSULE:
                         shape = self.render_capsule(
                             name, p, q, geo_scale[0], geo_scale[1], parent_body=body, is_template=True, color=color
                         )
 
-                    elif geo_type == newton.GeoType.CYLINDER:
+                    elif geo_type == GeoType.CYLINDER:
                         shape = self.render_cylinder(
                             name, p, q, geo_scale[0], geo_scale[1], parent_body=body, is_template=True, color=color
                         )
 
-                    elif geo_type == newton.GeoType.CONE:
+                    elif geo_type == GeoType.CONE:
                         shape = self.render_cone(
                             name, p, q, geo_scale[0], geo_scale[1], parent_body=body, is_template=True, color=color
                         )
 
-                    elif geo_type == newton.GeoType.BOX:
+                    elif geo_type == GeoType.BOX:
                         shape = self.render_box(name, p, q, geo_scale, parent_body=body, is_template=True, color=color)
 
-                    elif geo_type == newton.GeoType.MESH:
+                    elif geo_type == GeoType.MESH:
                         if not geo_is_solid:
                             faces, vertices = solidify_mesh(geo_src.indices, geo_src.vertices, geo_thickness)
                         else:
@@ -466,7 +466,7 @@ def CreateSimRenderer(renderer):
                             is_template=True,
                         )
 
-                    elif geo_type == newton.GeoType.SDF:
+                    elif geo_type == GeoType.SDF:
                         continue
 
                     geo_shape[geo_hash] = shape
@@ -474,9 +474,9 @@ def CreateSimRenderer(renderer):
                 if add_shape_instance and shape_flags[s] & ShapeFlags.VISIBLE:
                     # TODO support dynamic visibility
                     q_shape = X_bs.q
-                    if geo_type in (newton.GeoType.CAPSULE, newton.GeoType.CYLINDER, newton.GeoType.CONE):
+                    if geo_type in (GeoType.CAPSULE, GeoType.CYLINDER, GeoType.CONE):
                         q_shape = X_bs.q * wp.quat_from_axis_angle(wp.vec3(1.0, 0.0, 0.0), -wp.pi / 2.0)
-                    if geo_type == newton.GeoType.MESH:
+                    if geo_type == GeoType.MESH:
                         # ensure we use the correct scale for the mesh instance
                         scale = np.asarray(geo_scale, dtype=np.float32)
                     self.add_shape_instance(name, shape, body, X_bs.p, q_shape, scale, custom_index=s, visible=True)
@@ -531,9 +531,9 @@ def CreateSimRenderer(renderer):
             )
             for i, t in enumerate(joint_type):
                 if t not in {
-                    newton.JointType.REVOLUTE,
-                    # newton.JointType.PRISMATIC,
-                    newton.JointType.D6,
+                    JointType.REVOLUTE,
+                    # JointType.PRISMATIC,
+                    JointType.D6,
                 }:
                     continue
                 tf = joint_tf[i]
@@ -583,7 +583,7 @@ def CreateSimRenderer(renderer):
             """
             return tab10_color_map(instance_count)
 
-        def apply_picking_force(self, state: newton.State):
+        def apply_picking_force(self, state: State):
             """Applies a force to the body at the picking position.
             Args:
                 state (newton.State): The simulation state.
@@ -603,7 +603,7 @@ def CreateSimRenderer(renderer):
                 device=self.model.device,
             )
 
-        def render(self, state: newton.State):
+        def render(self, state: State):
             """
             Updates the renderer with the given simulation state.
             Args:
@@ -862,7 +862,7 @@ def CreateSimRenderer(renderer):
                     color=(muscle_activation[m], 0.2, 0.5),
                 )
 
-        def compute_contact_rendering_points(self, body_q: wp.array, contacts: newton.Contacts):
+        def compute_contact_rendering_points(self, body_q: wp.array, contacts: Contacts):
             """
             Computes the world-space positions of contact points for rendering.
             Args:
@@ -920,7 +920,7 @@ def CreateSimRenderer(renderer):
         def render_contacts(
             self,
             body_q: wp.array,
-            contacts: newton.Contacts,
+            contacts: Contacts,
             contact_point_radius: float = 1e-3,
         ):
             """
@@ -996,12 +996,12 @@ class RendererUsd(CreateSimRenderer(renderer=UsdRenderer)):
 
     def __init__(
         self,
-        model: newton.Model,
+        model: Model,
         stage: str | Usd.Stage,
         source_stage: str | Usd.Stage | None = None,
         scaling: float = 1.0,
         fps: int = 60,
-        up_axis: newton.AxisType | None = None,
+        up_axis: AxisType | None = None,
         show_joints: bool = False,
         path_body_map: dict | None = None,
         path_body_relative_transform: dict | None = None,
@@ -1055,13 +1055,13 @@ class RendererUsd(CreateSimRenderer(renderer=UsdRenderer)):
             self._prepare_output_stage()
             self._precompute_parents_xform_inverses()
 
-    def render_update_stage(self, state: newton.State):
+    def render_update_stage(self, state: State):
         if not self.source_stage:
             raise ValueError("source_stage must be set before calling render_update_stage")
 
         self._update_usd_stage(state)
 
-    def _update_usd_stage(self, state: newton.State):
+    def _update_usd_stage(self, state: State):
         """
         Render transforms of USD prims as time-sampled animation in USD.
 

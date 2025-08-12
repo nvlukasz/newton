@@ -23,12 +23,21 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import warp as wp
 
-import newton
-
 from ... import geometry
 from ...core.types import nparray, override
-from ...geometry import ShapeFlags
-from ...sim import Contacts, Control, Model, State, color_graph, count_rigid_contact_points, plot_graph
+from ...geometry import GeoType, ShapeFlags
+from ...sim import (
+    Contacts,
+    Control,
+    EqType,
+    JointMode,
+    JointType,
+    Model,
+    State,
+    color_graph,
+    count_rigid_contact_points,
+    plot_graph,
+)
 from ...utils import topological_sort
 from ..flags import SolverNotifyFlags
 from ..solver import SolverBase
@@ -369,7 +378,7 @@ def convert_mj_coords_to_warp_kernel(
     wq_i = joint_q_start[joints_per_env * worldid + jntid]
     wqd_i = joint_qd_start[joints_per_env * worldid + jntid]
 
-    if type == newton.JointType.FREE:
+    if type == JointType.FREE:
         # convert position components
         for i in range(3):
             joint_q[wq_i + i] = qpos[worldid, q_i + i]
@@ -400,7 +409,7 @@ def convert_mj_coords_to_warp_kernel(
         joint_qd[wqd_i + 3] = qvel[worldid, qd_i + 0]
         joint_qd[wqd_i + 4] = qvel[worldid, qd_i + 1]
         joint_qd[wqd_i + 5] = qvel[worldid, qd_i + 2]
-    elif type == newton.JointType.BALL:
+    elif type == JointType.BALL:
         # change quaternion order from wxyz to xyzw
         rot = wp.quat(
             qpos[worldid, q_i + 1],
@@ -447,7 +456,7 @@ def convert_warp_coords_to_mj_kernel(
     wq_i = joint_q_start[joints_per_env * worldid + jntid]
     wqd_i = joint_qd_start[joints_per_env * worldid + jntid]
 
-    if type == newton.JointType.FREE:
+    if type == JointType.FREE:
         # convert position components
         for i in range(3):
             qpos[worldid, q_i + i] = joint_q[wq_i + i]
@@ -480,7 +489,7 @@ def convert_warp_coords_to_mj_kernel(
         qvel[worldid, qd_i + 4] = w[1]
         qvel[worldid, qd_i + 5] = w[2]
 
-    elif type == newton.JointType.BALL:
+    elif type == JointType.BALL:
         # change quaternion order from xyzw to wxyz
         qpos[worldid, q_i + 0] = joint_q[wq_i + 1]
         qpos[worldid, q_i + 1] = joint_q[wq_i + 2]
@@ -556,7 +565,7 @@ def apply_mjc_control_kernel(
     worldid, axisid = wp.tid()
     actuator_id = axis_to_actuator[axisid]
     if actuator_id != -1:
-        if axis_mode[axisid] != newton.JointMode.NONE:
+        if axis_mode[axisid] != JointMode.NONE:
             mj_act[worldid, actuator_id] = joint_target[worldid * axes_per_env + axisid]
         else:
             mj_act[worldid, actuator_id] = 0.0
@@ -603,7 +612,7 @@ def apply_mjc_qfrc_kernel(
     # wq_i = joint_q_start[joints_per_env * worldid + jntid]
     wqd_i = joint_qd_start[joints_per_env * worldid + jntid]
     jtype = joint_type[jntid]
-    if jtype == newton.JointType.FREE or jtype == newton.JointType.DISTANCE:
+    if jtype == JointType.FREE or jtype == JointType.DISTANCE:
         tf = body_q[worldid * bodies_per_env + child]
         rot = wp.transform_get_rotation(tf)
         # com_world = wp.transform_point(tf, body_com[child])
@@ -620,7 +629,7 @@ def apply_mjc_qfrc_kernel(
         qfrc_applied[worldid, qd_i + 3] = w[0]
         qfrc_applied[worldid, qd_i + 4] = w[1]
         qfrc_applied[worldid, qd_i + 5] = w[2]
-    elif jtype == newton.JointType.BALL:
+    elif jtype == JointType.BALL:
         qfrc_applied[worldid, qd_i + 0] = joint_f[wqd_i + 0]
         qfrc_applied[worldid, qd_i + 1] = joint_f[wqd_i + 1]
         qfrc_applied[worldid, qd_i + 2] = joint_f[wqd_i + 2]
@@ -681,7 +690,7 @@ def eval_single_articulation_fk(
         X_j = wp.transform_identity()
         v_j = wp.spatial_vector(wp.vec3(), wp.vec3())
 
-        if type == newton.JointType.PRISMATIC:
+        if type == JointType.PRISMATIC:
             axis = joint_axis[qd_start]
 
             q = joint_q[q_start]
@@ -690,7 +699,7 @@ def eval_single_articulation_fk(
             X_j = wp.transform(axis * q, wp.quat_identity())
             v_j = wp.spatial_vector(wp.vec3(), axis * qd)
 
-        if type == newton.JointType.REVOLUTE:
+        if type == JointType.REVOLUTE:
             axis = joint_axis[qd_start]
 
             q = joint_q[q_start]
@@ -699,7 +708,7 @@ def eval_single_articulation_fk(
             X_j = wp.transform(wp.vec3(), wp.quat_from_axis_angle(axis, q))
             v_j = wp.spatial_vector(axis * qd, wp.vec3())
 
-        if type == newton.JointType.BALL:
+        if type == JointType.BALL:
             r = wp.quat(joint_q[q_start + 0], joint_q[q_start + 1], joint_q[q_start + 2], joint_q[q_start + 3])
 
             w = wp.vec3(joint_qd[qd_start + 0], joint_qd[qd_start + 1], joint_qd[qd_start + 2])
@@ -707,7 +716,7 @@ def eval_single_articulation_fk(
             X_j = wp.transform(wp.vec3(), r)
             v_j = wp.spatial_vector(w, wp.vec3())
 
-        if type == newton.JointType.FREE or type == newton.JointType.DISTANCE:
+        if type == JointType.FREE or type == JointType.DISTANCE:
             t = wp.transform(
                 wp.vec3(joint_q[q_start + 0], joint_q[q_start + 1], joint_q[q_start + 2]),
                 wp.quat(joint_q[q_start + 3], joint_q[q_start + 4], joint_q[q_start + 5], joint_q[q_start + 6]),
@@ -721,7 +730,7 @@ def eval_single_articulation_fk(
             X_j = t
             v_j = v
 
-        if type == newton.JointType.D6:
+        if type == JointType.D6:
             pos = wp.vec3(0.0)
             rot = wp.quat_identity()
             vel_v = wp.vec3(0.0)
@@ -938,13 +947,13 @@ def update_axis_properties_kernel(
         kv = joint_target_kv[tid]
         mode = joint_dof_mode[tid]
 
-        if mode == newton.JointMode.TARGET_POSITION:
+        if mode == JointMode.TARGET_POSITION:
             # bias = vec10f(0.0, -kp, -kv, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
             # gain = vec10f(kp, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
             actuator_bias[worldid, actuator_idx][1] = -kp
             actuator_bias[worldid, actuator_idx][2] = -kv
             actuator_gain[worldid, actuator_idx][0] = kp
-        elif mode == newton.JointMode.TARGET_VELOCITY:
+        elif mode == JointMode.TARGET_VELOCITY:
             # bias = vec10f(0.0, 0.0, -kv, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
             # gain = vec10f(kv, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
             actuator_bias[worldid, actuator_idx][1] = 0.0
@@ -1789,28 +1798,28 @@ class SolverMuJoCo(SolverBase):
 
         # supported non-fixed joint types in MuJoCo (fixed joints are handled by nesting bodies)
         supported_joint_types = {
-            newton.JointType.FREE,
-            newton.JointType.BALL,
-            newton.JointType.PRISMATIC,
-            newton.JointType.REVOLUTE,
-            newton.JointType.D6,
+            JointType.FREE,
+            JointType.BALL,
+            JointType.PRISMATIC,
+            JointType.REVOLUTE,
+            JointType.D6,
         }
 
         geom_type_mapping = {
-            newton.GeoType.SPHERE: mujoco.mjtGeom.mjGEOM_SPHERE,
-            newton.GeoType.PLANE: mujoco.mjtGeom.mjGEOM_PLANE,
-            newton.GeoType.CAPSULE: mujoco.mjtGeom.mjGEOM_CAPSULE,
-            newton.GeoType.CYLINDER: mujoco.mjtGeom.mjGEOM_CYLINDER,
-            newton.GeoType.BOX: mujoco.mjtGeom.mjGEOM_BOX,
-            newton.GeoType.MESH: mujoco.mjtGeom.mjGEOM_MESH,
+            GeoType.SPHERE: mujoco.mjtGeom.mjGEOM_SPHERE,
+            GeoType.PLANE: mujoco.mjtGeom.mjGEOM_PLANE,
+            GeoType.CAPSULE: mujoco.mjtGeom.mjGEOM_CAPSULE,
+            GeoType.CYLINDER: mujoco.mjtGeom.mjGEOM_CYLINDER,
+            GeoType.BOX: mujoco.mjtGeom.mjGEOM_BOX,
+            GeoType.MESH: mujoco.mjtGeom.mjGEOM_MESH,
         }
         geom_type_name = {
-            newton.GeoType.SPHERE: "sphere",
-            newton.GeoType.PLANE: "plane",
-            newton.GeoType.CAPSULE: "capsule",
-            newton.GeoType.CYLINDER: "cylinder",
-            newton.GeoType.BOX: "box",
-            newton.GeoType.MESH: "mesh",
+            GeoType.SPHERE: "sphere",
+            GeoType.PLANE: "plane",
+            GeoType.CAPSULE: "capsule",
+            GeoType.CYLINDER: "cylinder",
+            GeoType.BOX: "box",
+            GeoType.MESH: "mesh",
         }
 
         mj_bodies = [spec.worldbody]
@@ -1905,14 +1914,14 @@ class SolverMuJoCo(SolverBase):
                     continue
                 stype = shape_type[shape]
                 name = f"{geom_type_name[stype]}_{shape}"
-                if stype == newton.GeoType.PLANE and warp_body_id != -1:
+                if stype == GeoType.PLANE and warp_body_id != -1:
                     raise ValueError("Planes can only be attached to static bodies")
                 geom_params = {
                     "type": geom_type_mapping[stype],
                     "name": name,
                 }
                 tf = wp.transform(*shape_transform[shape])
-                if stype == newton.GeoType.MESH:
+                if stype == GeoType.MESH:
                     mesh_src = model.shape_source[shape]
                     # use mesh-specific maxhullvert or fall back to the default
                     mesh_maxhullvert = getattr(mesh_src, "maxhullvert", maxhullvert)
@@ -1938,7 +1947,7 @@ class SolverMuJoCo(SolverBase):
                     size[size == 0.0] = nonzero
                     geom_params["size"] = size
                 else:
-                    assert stype == newton.GeoType.PLANE, "Only plane shapes are allowed to have a size of zero"
+                    assert stype == GeoType.PLANE, "Only plane shapes are allowed to have a size of zero"
                     # planes are always infinite for collision purposes in mujoco
                     geom_params["size"] = [5.0, 5.0, 5.0]
 
@@ -2024,7 +2033,7 @@ class SolverMuJoCo(SolverBase):
                     joint_names[name] += 1
                     name = f"{name}_{joint_names[name]}"
 
-            if j_type == newton.JointType.FREE:
+            if j_type == JointType.FREE:
                 body.add_joint(
                     name=name,
                     type=mujoco.mjtJoint.mjJNT_FREE,
@@ -2074,12 +2083,12 @@ class SolverMuJoCo(SolverBase):
                         else:
                             args = actuator_args
 
-                        if joint_dof_mode[ai] == newton.JointMode.TARGET_POSITION:
+                        if joint_dof_mode[ai] == JointMode.TARGET_POSITION:
                             kp = joint_target_ke[ai]
                             kv = joint_target_kd[ai]
                             args["biasprm"] = [0.0, -kp, -kv, 0, 0, 0, 0, 0, 0, 0]
                             args["gainprm"] = [kp, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-                        elif joint_dof_mode[ai] == newton.JointMode.TARGET_VELOCITY:
+                        elif joint_dof_mode[ai] == JointMode.TARGET_VELOCITY:
                             kv = joint_target_kd[ai]
                             args["biasprm"] = [0.0, 0.0, -kv, 0, 0, 0, 0, 0, 0, 0]
                             args["gainprm"] = [kv, 0, 0, 0, 0, 0, 0, 0, 0, 0]
@@ -2137,12 +2146,12 @@ class SolverMuJoCo(SolverBase):
                         else:
                             args = actuator_args
 
-                        if joint_dof_mode[ai] == newton.JointMode.TARGET_POSITION:
+                        if joint_dof_mode[ai] == JointMode.TARGET_POSITION:
                             kp = joint_target_ke[ai]
                             kv = joint_target_kd[ai]
                             args["biasprm"] = [0.0, -kp, -kv, 0, 0, 0, 0, 0, 0, 0]
                             args["gainprm"] = [kp, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-                        elif joint_dof_mode[ai] == newton.JointMode.TARGET_VELOCITY:
+                        elif joint_dof_mode[ai] == JointMode.TARGET_VELOCITY:
                             kv = joint_target_kd[ai]
                             args["biasprm"] = [0.0, 0.0, -kv, 0, 0, 0, 0, 0, 0, 0]
                             args["gainprm"] = [kv, 0, 0, 0, 0, 0, 0, 0, 0, 0]
@@ -2159,7 +2168,7 @@ class SolverMuJoCo(SolverBase):
                         axis_to_actuator[ai] = actuator_count
                         actuator_count += 1
 
-            elif j_type != newton.JointType.FIXED:
+            elif j_type != JointType.FIXED:
                 raise NotImplementedError(f"Joint type {j_type} is not supported yet")
 
             # add geoms
@@ -2169,7 +2178,7 @@ class SolverMuJoCo(SolverBase):
             add_geoms(child, incoming_xform=child_tf)
 
         for i, typ in enumerate(eq_constraint_type):
-            if typ == newton.EqType.CONNECT:
+            if typ == EqType.CONNECT:
                 eq = spec.add_equality(objtype=mujoco.mjtObj.mjOBJ_BODY)
                 eq.type = mujoco.mjtEq.mjEQ_CONNECT
                 eq.active = eq_constraint_enabled[i]
@@ -2177,7 +2186,7 @@ class SolverMuJoCo(SolverBase):
                 eq.name2 = model.body_key[eq_constraint_body2[i]]
                 eq.data[0:3] = eq_constraint_anchor[i]
 
-            elif typ == newton.EqType.JOINT:
+            elif typ == EqType.JOINT:
                 eq = spec.add_equality(objtype=mujoco.mjtObj.mjOBJ_JOINT)
                 eq.type = mujoco.mjtEq.mjEQ_JOINT
                 eq.active = eq_constraint_enabled[i]
@@ -2185,7 +2194,7 @@ class SolverMuJoCo(SolverBase):
                 eq.name2 = model.joint_key[eq_constraint_joint2[i]]
                 eq.data[0:5] = eq_constraint_polycoef[i]
 
-            elif typ == newton.EqType.WELD:
+            elif typ == EqType.WELD:
                 eq = spec.add_equality(objtype=mujoco.mjtObj.mjOBJ_BODY)
                 eq.type = mujoco.mjtEq.mjEQ_WELD
                 eq.active = eq_constraint_enabled[i]

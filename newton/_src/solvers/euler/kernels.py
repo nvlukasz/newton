@@ -17,8 +17,6 @@ from __future__ import annotations
 
 import warp as wp
 
-import newton
-
 from ...core import (
     quat_decompose,
     quat_twist,
@@ -28,6 +26,8 @@ from ...geometry.kernels import triangle_closest_point_barycentric
 from ...sim import (
     Contacts,
     Control,
+    JointMode,
+    JointType,
     Model,
     State,
 )
@@ -980,21 +980,21 @@ def eval_joint_force(
     damping_f = 0.0
     target_f = 0.0
 
-    if mode == newton.JointMode.TARGET_POSITION:
+    if mode == JointMode.TARGET_POSITION:
         target_f = target_ke * (act - q) - target_kd * qd
-    elif mode == newton.JointMode.TARGET_VELOCITY:
+    elif mode == JointMode.TARGET_VELOCITY:
         target_f = target_ke * (act - qd)
 
     # compute limit forces, damping only active when limit is violated
     if q < limit_lower:
         limit_f = limit_ke * (limit_lower - q)
         damping_f = -limit_kd * qd
-        if mode == newton.JointMode.TARGET_VELOCITY:
+        if mode == JointMode.TARGET_VELOCITY:
             target_f = 0.0  # override target force when limit is violated
     elif q > limit_upper:
         limit_f = limit_ke * (limit_upper - q)
         damping_f = -limit_kd * qd
-        if mode == newton.JointMode.TARGET_VELOCITY:
+        if mode == JointMode.TARGET_VELOCITY:
             target_f = 0.0  # override target force when limit is violated
 
     return limit_f + damping_f + target_f
@@ -1037,7 +1037,7 @@ def eval_body_joints(
         return
 
     qd_start = joint_qd_start[tid]
-    if type == newton.JointType.FREE or type == newton.JointType.DISTANCE:
+    if type == JointType.FREE or type == JointType.DISTANCE:
         wrench = wp.spatial_vector(
             joint_f[qd_start + 0],
             joint_f[qd_start + 1],
@@ -1099,7 +1099,7 @@ def eval_body_joints(
     # reduce angular damping stiffness for stability
     angular_damping_scale = 0.01
 
-    if type == newton.JointType.FIXED:
+    if type == JointType.FIXED:
         ang_err = wp.normalize(wp.vec3(r_err[0], r_err[1], r_err[2])) * wp.acos(r_err[3]) * 2.0
 
         f_total += x_err * joint_attach_ke + v_err * joint_attach_kd
@@ -1107,7 +1107,7 @@ def eval_body_joints(
             wp.transform_vector(X_wp, ang_err) * joint_attach_ke + w_err * joint_attach_kd * angular_damping_scale
         )
 
-    if type == newton.JointType.PRISMATIC:
+    if type == JointType.PRISMATIC:
         axis = joint_axis[qd_start]
 
         # world space joint axis
@@ -1143,7 +1143,7 @@ def eval_body_joints(
             wp.transform_vector(X_wp, ang_err) * joint_attach_ke + w_err * joint_attach_kd * angular_damping_scale
         )
 
-    if type == newton.JointType.REVOLUTE:
+    if type == JointType.REVOLUTE:
         axis = joint_axis[qd_start]
 
         axis_p = wp.transform_vector(X_wp, axis)
@@ -1178,7 +1178,7 @@ def eval_body_joints(
         f_total += x_err * joint_attach_ke + v_err * joint_attach_kd
         t_total += swing_err * joint_attach_ke + (w_err - qd * axis_p) * joint_attach_kd * angular_damping_scale
 
-    if type == newton.JointType.BALL:
+    if type == JointType.BALL:
         ang_err = wp.normalize(wp.vec3(r_err[0], r_err[1], r_err[2])) * wp.acos(r_err[3]) * 2.0
 
         # TODO joint limits
@@ -1187,7 +1187,7 @@ def eval_body_joints(
         f_total += x_err * joint_attach_ke + v_err * joint_attach_kd
         t_total += wp.vec3(-joint_f[qd_start], -joint_f[qd_start + 1], -joint_f[qd_start + 2])
 
-    if type == newton.JointType.D6:
+    if type == JointType.D6:
         pos = wp.vec3(0.0)
         vel = wp.vec3(0.0)
         if lin_axis_count >= 1:
@@ -1375,7 +1375,7 @@ def eval_body_joints(
                 0.0,
                 0.0,
                 0.0,
-                newton.JointMode.NONE,
+                JointMode.NONE,
             )
 
         if ang_axis_count == 3:
