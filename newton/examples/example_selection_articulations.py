@@ -283,6 +283,7 @@ class Example:
 
         if not isinstance(self.solver, newton.solvers.SolverMuJoCo):
             self.ants.eval_fk(self.state_0, mask=mask)
+            self.hums.eval_fk(self.state_0, mask=mask)
 
     def render(self):
         if self.renderer is None:
