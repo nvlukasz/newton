@@ -35,9 +35,7 @@ import newton
 import newton.examples
 import newton.utils
 from newton import Model, ModelBuilder, State, eval_fk
-
-# FIXME?
-from newton._src.solvers.featherstone.kernels import transform_twist
+from newton.utils import transform_twist
 from newton.solvers import SolverFeatherstone, SolverVBD
 
 

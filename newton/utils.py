@@ -13,22 +13,53 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# TODO: move these to Warp?
+from ._src.core.spatial import (
+    quat_between_axes,
+    quat_decompose,
+    quat_from_euler,
+    quat_to_euler,
+    quat_to_rpy,
+    quat_twist,
+    quat_twist_angle,
+    transform_twist,
+    transform_wrench,
+    velocity_at_point,
+)
+
 # HMMM
 from ._src.sim.style3d import Style3DModel, Style3DModelBuilder
 
-# TODO: move importers to ModelBuilder
+# TODO: move importers to ModelBuilder, e.g., ModelBuilder.load_mjcf()
 from ._src.utils import download_asset, parse_mjcf, parse_urdf, parse_usd
 from ._src.utils.recorder import BasicRecorder, ModelAndStateRecorder
 
+# fmt: off
 __all__ = [  # noqa
+    # math utils
+    "quat_between_axes",
+    "quat_decompose",
+    "quat_from_euler",
+    "quat_to_euler",
+    "quat_to_rpy",
+    "quat_twist",
+    "quat_twist_angle",
+    "transform_twist",
+    "transform_wrench",
+    "velocity_at_point",
+
+    # assets
     "download_asset",
-    "BasicRecorder",
-    "ModelAndStateRecorder",
-    # importers
     "parse_mjcf",
     "parse_urdf",
     "parse_usd",
+
     # style3d utils
     "Style3DModel",
     "Style3DModelBuilder",
+
+    # recorders
+    "BasicRecorder",
+    "ModelAndStateRecorder",
 ]
+# fmt: on
