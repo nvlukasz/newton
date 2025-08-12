@@ -33,7 +33,7 @@ from ._src.utils.recorder import BasicRecorder, ModelAndStateRecorder
 
 # fmt: off
 __all__ = [  # noqa
-    # math utils
+    # spatial utils
     "quat_between_axes",
     "quat_decompose",
     "quat_from_euler",

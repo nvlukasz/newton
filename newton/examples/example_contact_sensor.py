@@ -22,9 +22,10 @@ wp.config.enable_backward = False
 import newton
 import newton.examples
 import newton.utils
-from newton import Contacts, ContactSensor, populate_contacts
+from newton import Contacts
 from newton.examples import compute_env_offsets
 from newton.selection import ArticulationView
+from newton.sensors import ContactSensor, populate_contacts
 
 USE_TORCH = False
 COLLAPSE_FIXED_JOINTS = False

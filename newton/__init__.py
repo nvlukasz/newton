@@ -48,13 +48,6 @@ from ._src.sim import (
 # TODO: eliminate these helpers, roll functionality into Model and ModelBuilder?
 from ._src.sim.style3d import Style3DModel, Style3DModelBuilder
 
-# TODO: HMMM
-# Contact sensors
-from ._src.utils.contact_sensor import (
-    ContactSensor,
-    populate_contacts,
-)
-
 # version
 from ._version import __version__
 
@@ -87,10 +80,6 @@ __all__ = [  # noqa
     # style3d helpers
     "Style3DModel",
     "Style3DModelBuilder",
-
-    # contact sensors
-    "ContactSensor",
-    "populate_contacts",
 
     # submodules
     "geometry",

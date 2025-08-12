@@ -18,6 +18,7 @@ import unittest
 import warp as wp
 
 import newton
+from newton.sensors import ContactSensor
 from newton.tests.unittest_utils import assert_np_equal
 
 
@@ -75,7 +76,7 @@ class TestContactSensor(unittest.TestCase):
         model.body_key = ["A", "B"]
         model.body_shapes = [entity_A, entity_B]
 
-        contact_sensor = newton.ContactSensor(model, sensing_obj_bodies="*", counterpart_bodies="*")
+        contact_sensor = ContactSensor(model, sensing_obj_bodies="*", counterpart_bodies="*")
 
         test_contacts = [
             {
