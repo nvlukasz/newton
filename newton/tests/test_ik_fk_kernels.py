@@ -21,7 +21,7 @@ import numpy as np
 import warp as wp
 
 import newton
-import newton._src.sim.ik as ik
+import newton.ik as ik
 from newton import JointType
 from newton.tests.unittest_utils import add_function_test, assert_np_equal, get_test_devices
 
