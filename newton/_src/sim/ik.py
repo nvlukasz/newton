@@ -471,7 +471,7 @@ class IKSolver:
         _lm_solve_tiled = wp.kernel(enable_backward=False, module="unique")(_template)
 
         # late-import jcalc_motion, jcalc_transform to avoid circular import error
-        from newton._src.solvers.featherstone.kernels import (  # noqa: PLC0415
+        from ..solvers.featherstone.kernels import (  # noqa: PLC0415
             jcalc_integrate,
             jcalc_motion,
             jcalc_transform,

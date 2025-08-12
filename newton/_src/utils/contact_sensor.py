@@ -23,8 +23,8 @@ from typing import Any
 import numpy as np
 import warp as wp
 
-from newton import Contacts, Model
-from newton.solvers import SolverBase
+from ..sim import Contacts, Model
+from ..solvers import SolverBase
 
 
 class MatchKind(Enum):
