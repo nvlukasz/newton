@@ -30,6 +30,7 @@ import warp as wp
 wp.config.enable_backward = False
 
 import newton
+import newton.utils
 import newton.viewer
 from newton.examples.example_anymal_c_walk import AnymalController
 from newton.solvers import SolverImplicitMPM
