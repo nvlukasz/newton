@@ -12,6 +12,7 @@ newton
    geometry
    ik
    selection
+   sensors
    solvers
    utils
    viewer
