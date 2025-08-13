@@ -14,7 +14,7 @@
 # limitations under the License.
 
 # submodule APIs
-from . import geometry, ik, selection, solvers, utils, viewer
+from . import geometry, ik, selection, sensors, solvers, utils, viewer
 
 # Core functionality
 from ._src.core import (
@@ -92,6 +92,7 @@ __all__ = [  # noqa
     "geometry",
     "ik",
     "selection",
+    "sensors",
     "solvers",
     "utils",
     "viewer",
