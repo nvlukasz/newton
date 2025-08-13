@@ -27,13 +27,38 @@ from ._src.core.spatial import (
     velocity_at_point,
 )
 
-# TODO: move importers to ModelBuilder, e.g., ModelBuilder.load_mjcf()
-from ._src.utils import download_asset, parse_mjcf, parse_urdf, parse_usd
+# sim utils
+from ._src.sim import (
+    color_graph,
+    plot_graph,
+)
+
+# TODO: move importers to ModelBuilder, e.g., parse_mjcf() -> ModelBuilder.load_mjcf()
+# TODO: move math utils to Warp?
+from ._src.utils import (
+    boltzmann,
+    download_asset,
+    leaky_max,
+    leaky_min,
+    parse_mjcf,
+    parse_urdf,
+    parse_usd,
+    smooth_max,
+    smooth_min,
+    transform_inertia,
+    vec_abs,
+    vec_leaky_max,
+    vec_leaky_min,
+    vec_max,
+    vec_min,
+)
+
+# recorders
 from ._src.utils.recorder import BasicRecorder, ModelAndStateRecorder
 
 # fmt: off
 __all__ = [  # noqa
-    # spatial utils
+    # spatial math utils
     "quat_between_axes",
     "quat_decompose",
     "quat_from_euler",
@@ -44,6 +69,23 @@ __all__ = [  # noqa
     "transform_twist",
     "transform_wrench",
     "velocity_at_point",
+
+    # misc math utils
+    "boltzmann",
+    "leaky_max",
+    "leaky_min",
+    "smooth_max",
+    "smooth_min",
+    "transform_inertia",
+    "vec_abs",
+    "vec_leaky_max",
+    "vec_leaky_min",
+    "vec_max",
+    "vec_min",
+
+    # sim utils
+    "color_graph",
+    "plot_graph",
 
     # assets
     "download_asset",

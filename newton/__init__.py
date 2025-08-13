@@ -33,6 +33,7 @@ from ._src.geometry import (
 
 # Simulation functionality
 from ._src.sim import (
+    CollisionPipeline,
     Contacts,
     Control,
     EqType,
@@ -41,8 +42,10 @@ from ._src.sim import (
     Model,
     ModelBuilder,
     State,
+    count_rigid_contact_points,
     eval_fk,
     eval_ik,
+    get_joint_dof_count,
 )
 
 # TODO: eliminate these helpers, roll functionality into Model and ModelBuilder?
@@ -66,6 +69,7 @@ __all__ = [  # noqa
     "ShapeFlags",
 
     # sim
+    CollisionPipeline,
     "Contacts",
     "Control",
     "EqType",
@@ -74,8 +78,10 @@ __all__ = [  # noqa
     "Model",
     "ModelBuilder",
     "State",
+    "count_rigid_contact_points",
     "eval_fk",
     "eval_ik",
+    "get_joint_dof_count",
 
     # style3d helpers
     "Style3DModel",
