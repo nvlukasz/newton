@@ -276,15 +276,15 @@ class SolverBase:
         internal buffers without having to recreate the whole solver object.
         Valid flags are:
 
-        ==========================================  =============================================================
-        Constant                                    Description
-        ==========================================  =============================================================
+        ==============================================  =============================================================
+        Constant                                        Description
+        ==============================================  =============================================================
         ``SolverNotifyFlags.JOINT_PROPERTIES``            Joint transforms or coordinates have changed.
         ``SolverNotifyFlags.JOINT_DOF_PROPERTIES``        Joint axis limits, targets, modes, DOF state, or force buffers have changed.
         ``SolverNotifyFlags.BODY_PROPERTIES``             Rigid-body pose or velocity buffers have changed.
         ``SolverNotifyFlags.BODY_INERTIAL_PROPERTIES``    Rigid-body mass or inertia tensors have changed.
         ``SolverNotifyFlags.SHAPE_PROPERTIES``            Shape transforms or geometry have changed.
-        ==========================================  =============================================================
+        ==============================================  =============================================================
 
         Args:
             flags (int): Bit-mask of model-update flags indicating which model

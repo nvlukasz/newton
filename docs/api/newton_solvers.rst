@@ -9,10 +9,12 @@ newton.solvers
    :toctree: _generated
    :nosignatures:
 
-   SolverFeatherstone
-   SolverMuJoCo
-   SolverSemiImplicit
    SolverBase
+   SolverFeatherstone
+   SolverImplicitMPM
+   SolverMuJoCo
+   SolverNotifyFlags
+   SolverSemiImplicit
    SolverStyle3D
    SolverVBD
    SolverXPBD
