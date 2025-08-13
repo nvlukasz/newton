@@ -28,6 +28,7 @@ newton
    ParticleFlags
    SDF
    ShapeFlags
+   CollisionPipeline
    Contacts
    Control
    EqType
@@ -47,5 +48,7 @@ newton
 
    __version__
    AxisType
+   count_rigid_contact_points
    eval_fk
    eval_ik
+   get_joint_dof_count

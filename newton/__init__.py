@@ -57,6 +57,7 @@ from ._version import __version__
 # fmt: off
 __all__ = [  # noqa
     "__version__",
+
     # core
     "Axis",
     "AxisType",
@@ -69,7 +70,7 @@ __all__ = [  # noqa
     "ShapeFlags",
 
     # sim
-    CollisionPipeline,
+    "CollisionPipeline",
     "Contacts",
     "Control",
     "EqType",

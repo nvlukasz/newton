@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -209,7 +210,8 @@ def write_module_page(mod_name: str) -> None:
 
 if __name__ == "__main__":
     # delete previously generated files
-    shutil.rmtree(OUTPUT_DIR)
+    if os.path.isdir(OUTPUT_DIR):
+        shutil.rmtree(OUTPUT_DIR)
 
     for mod in MODULES:
         write_module_page(mod)
