@@ -9,9 +9,9 @@ newton.ik
    :toctree: _generated
    :nosignatures:
 
+   IKJacobianMode
    IKJointLimitObjective
    IKObjective
    IKPositionObjective
    IKRotationObjective
    IKSolver
-   IKJacobianMode
