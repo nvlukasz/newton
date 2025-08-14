@@ -11,7 +11,7 @@ The generated files live in ``docs/api/`` (git-ignored by default).
 
 Usage (from the repository root):
 
-    python tools/generate_api_rst.py
+    python docs/generate_api.py
 
 Adjust ``MODULES`` below to fit your project.
 """
@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import importlib
 import inspect
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -133,9 +132,9 @@ def write_module_page(mod_name: str) -> None:
         lines.extend([".. rubric:: Submodules", ""])
         # Link to sibling generated module pages without creating autosummary stubs.
         for sub in modules:
-            full = f"{mod_name}.{sub}"
-            doc = full.replace(".", "_")
-            lines.append(f"- :doc:`{full} <{doc}>`")
+            modname = f"{mod_name}.{sub}"
+            docname = modname.replace(".", "_")
+            lines.append(f"- :doc:`{modname} <{docname}>`")
         lines.append("")
 
     if classes:
@@ -211,8 +210,7 @@ def write_module_page(mod_name: str) -> None:
 
 if __name__ == "__main__":
     # delete previously generated files
-    if os.path.isdir(OUTPUT_DIR):
-        shutil.rmtree(OUTPUT_DIR)
+    shutil.rmtree(OUTPUT_DIR, ignore_errors=True)
 
     for mod in MODULES:
         write_module_page(mod)
