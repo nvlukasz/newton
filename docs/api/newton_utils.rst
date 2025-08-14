@@ -18,7 +18,14 @@ newton.utils
    :toctree: _generated
    :signatures: long
 
+   boltzmann
    color_graph
+   download_asset
+   leaky_max
+   leaky_min
+   parse_mjcf
+   parse_urdf
+   parse_usd
    plot_graph
    quat_between_axes
    quat_decompose
@@ -27,21 +34,14 @@ newton.utils
    quat_to_rpy
    quat_twist
    quat_twist_angle
-   transform_twist
-   transform_wrench
-   velocity_at_point
-   boltzmann
-   leaky_max
-   leaky_min
    smooth_max
    smooth_min
    transform_inertia
+   transform_twist
+   transform_wrench
    vec_abs
    vec_leaky_max
    vec_leaky_min
    vec_max
    vec_min
-   download_asset
-   parse_mjcf
-   parse_urdf
-   parse_usd
+   velocity_at_point

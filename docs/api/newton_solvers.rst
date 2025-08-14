@@ -13,8 +13,8 @@ newton.solvers
    SolverFeatherstone
    SolverImplicitMPM
    SolverMuJoCo
+   SolverNotifyFlags
    SolverSemiImplicit
    SolverStyle3D
    SolverVBD
    SolverXPBD
-   SolverNotifyFlags

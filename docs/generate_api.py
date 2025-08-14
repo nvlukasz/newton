@@ -129,6 +129,7 @@ def write_module_page(mod_name: str) -> None:
     # Render a simple bullet list of submodules (no autosummary/toctree) to
     # avoid generating stub pages that can cause duplicate descriptions.
     if modules:
+        modules.sort()
         lines.extend([".. rubric:: Submodules", ""])
         # Link to sibling generated module pages without creating autosummary stubs.
         for sub in modules:
@@ -138,6 +139,7 @@ def write_module_page(mod_name: str) -> None:
         lines.append("")
 
     if classes:
+        classes.sort()
         lines.extend(
             [
                 ".. rubric:: Classes",
@@ -152,6 +154,7 @@ def write_module_page(mod_name: str) -> None:
         lines.append("")
 
     if functions:
+        functions.sort()
         lines.extend(
             [
                 ".. rubric:: Functions",
@@ -166,6 +169,7 @@ def write_module_page(mod_name: str) -> None:
         lines.append("")
 
     if constants:
+        constants.sort()
         lines.extend(
             [
                 ".. rubric:: Constants",
