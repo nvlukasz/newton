@@ -15,15 +15,6 @@
 
 from enum import IntEnum
 
-# # Types of joints linking rigid bodies
-# JointType.PRISMATIC = wp.constant(0)
-# JointType.REVOLUTE = wp.constant(1)
-# JointType.BALL = wp.constant(2)
-# JointType.FIXED = wp.constant(3)
-# JointType.FREE = wp.constant(4)
-# JointType.DISTANCE = wp.constant(5)
-# JointType.D6 = wp.constant(6)
-
 
 # Types of joints linking rigid bodies
 class JointType(IntEnum):
@@ -52,22 +43,10 @@ def get_joint_dof_count(joint_type: int, num_axes: int) -> tuple[int, int]:
     return dof_count, coord_count
 
 
-# # Joint axis control mode types
-# JointMode.NONE = wp.constant(0)
-# JointMode.TARGET_POSITION = wp.constant(1)
-# JointMode.TARGET_VELOCITY = wp.constant(2)
-
-
 class JointMode(IntEnum):
     NONE = 0
     TARGET_POSITION = 1
     TARGET_VELOCITY = 2
-
-
-# # (temporary) equality constraint types
-# EqType.CONNECT = wp.constant(0)
-# EqType.WELD = wp.constant(1)
-# EqType.JOINT = wp.constant(2)
 
 
 # (temporary) equality constraint types
