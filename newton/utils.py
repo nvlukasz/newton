@@ -13,7 +13,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# ==================================================================================
+# sim utils
+# ==================================================================================
+from ._src.sim import (
+    color_graph,
+    plot_graph,
+)
+
+__all__ = [
+    "color_graph",
+    "plot_graph",
+]
+
+# ==================================================================================
+# spatial math
 # TODO: move these to Warp?
+# ==================================================================================
 from ._src.core.spatial import (
     quat_between_axes,
     quat_decompose,
@@ -27,38 +43,7 @@ from ._src.core.spatial import (
     velocity_at_point,
 )
 
-# sim utils
-from ._src.sim import (
-    color_graph,
-    plot_graph,
-)
-
-# TODO: move importers to ModelBuilder, e.g., parse_mjcf() -> ModelBuilder.load_mjcf()
-# TODO: move math utils to Warp?
-from ._src.utils import (
-    boltzmann,
-    download_asset,
-    leaky_max,
-    leaky_min,
-    parse_mjcf,
-    parse_urdf,
-    parse_usd,
-    smooth_max,
-    smooth_min,
-    transform_inertia,
-    vec_abs,
-    vec_leaky_max,
-    vec_leaky_min,
-    vec_max,
-    vec_min,
-)
-
-# recorders
-from ._src.utils.recorder import BasicRecorder, ModelAndStateRecorder
-
-# fmt: off
-__all__ = [  # noqa
-    # spatial math utils
+__all__ += [
     "quat_between_axes",
     "quat_decompose",
     "quat_from_euler",
@@ -69,8 +54,27 @@ __all__ = [  # noqa
     "transform_twist",
     "transform_wrench",
     "velocity_at_point",
+]
 
-    # misc math utils
+# ==================================================================================
+# math utils
+# TODO: move math utils to Warp?
+# ==================================================================================
+from ._src.utils import (  # noqa: E402
+    boltzmann,
+    leaky_max,
+    leaky_min,
+    smooth_max,
+    smooth_min,
+    transform_inertia,
+    vec_abs,
+    vec_leaky_max,
+    vec_leaky_min,
+    vec_max,
+    vec_min,
+)
+
+__all__ += [
     "boltzmann",
     "leaky_max",
     "leaky_min",
@@ -82,19 +86,30 @@ __all__ = [  # noqa
     "vec_leaky_min",
     "vec_max",
     "vec_min",
+]
 
-    # sim utils
-    "color_graph",
-    "plot_graph",
+# ==================================================================================
+# importers and asset management
+# TODO: move importers to ModelBuilder, e.g., parse_mjcf() -> ModelBuilder.load_mjcf()
+# ==================================================================================
+from ._src.utils.download_assets import download_asset  # noqa: E402
+from ._src.utils.import_mjcf import parse_mjcf  # noqa: E402
+from ._src.utils.import_urdf import parse_urdf  # noqa: E402
+from ._src.utils.import_usd import parse_usd  # noqa: E402
 
-    # assets
+__all__ += [
     "download_asset",
     "parse_mjcf",
     "parse_urdf",
     "parse_usd",
+]
 
-    # recorders
+# ==================================================================================
+# recorders
+# ==================================================================================
+from ._src.utils.recorder import BasicRecorder, ModelAndStateRecorder  # noqa: E402
+
+__all__ += [
     "BasicRecorder",
     "ModelAndStateRecorder",
 ]
-# fmt: on

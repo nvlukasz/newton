@@ -13,16 +13,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# submodule APIs
-from . import geometry, ik, selection, sensors, solvers, utils, viewer
-
-# Core functionality
+# ==================================================================================
+# core
+# ==================================================================================
 from ._src.core import (
     Axis,
     AxisType,
 )
+from ._version import __version__
 
-# Geometry functionality
+__all__ = [
+    "Axis",
+    "AxisType",
+    "__version__",
+]
+
+# ==================================================================================
+# geometry
+# ==================================================================================
 from ._src.geometry import (
     SDF,
     GeoType,
@@ -31,8 +39,18 @@ from ._src.geometry import (
     ShapeFlags,
 )
 
-# Simulation functionality
-from ._src.sim import (
+__all__ += [
+    "SDF",
+    "GeoType",
+    "Mesh",
+    "ParticleFlags",
+    "ShapeFlags",
+]
+
+# ==================================================================================
+# sim
+# ==================================================================================
+from ._src.sim import (  # noqa: E402
     CollisionPipeline,
     Contacts,
     Control,
@@ -48,28 +66,7 @@ from ._src.sim import (
     get_joint_dof_count,
 )
 
-# TODO: eliminate these helpers, roll functionality into Model and ModelBuilder?
-from ._src.sim.style3d import Style3DModel, Style3DModelBuilder
-
-# version
-from ._version import __version__
-
-# fmt: off
-__all__ = [  # noqa
-    "__version__",
-
-    # core
-    "Axis",
-    "AxisType",
-
-    # geometry
-    "GeoType",
-    "Mesh",
-    "ParticleFlags",
-    "SDF",
-    "ShapeFlags",
-
-    # sim
+__all__ += [
     "CollisionPipeline",
     "Contacts",
     "Control",
@@ -83,12 +80,25 @@ __all__ = [  # noqa
     "eval_fk",
     "eval_ik",
     "get_joint_dof_count",
+]
 
-    # style3d helpers
+# ==================================================================================
+# Style3D helpers
+# TODO: eliminate these and roll the functionality into Model and ModelBuilder?
+# ==================================================================================
+from ._src.sim.style3d import Style3DModel, Style3DModelBuilder  # noqa: E402
+
+__all__ += [
     "Style3DModel",
     "Style3DModelBuilder",
+]
 
-    # submodules
+# ==================================================================================
+# submodule APIs
+# ==================================================================================
+from . import geometry, ik, selection, sensors, solvers, utils, viewer  # noqa: E402
+
+__all__ += [
     "geometry",
     "ik",
     "selection",
@@ -97,4 +107,3 @@ __all__ = [  # noqa
     "utils",
     "viewer",
 ]
-# fmt: on
