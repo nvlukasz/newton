@@ -172,5 +172,7 @@ Given the parent body's world transform :math:`x_{wp}` and the joint transform :
 
 
 .. autofunction:: newton.eval_fk
+   :noindex:
 
 .. autofunction:: newton.eval_ik
+   :noindex:

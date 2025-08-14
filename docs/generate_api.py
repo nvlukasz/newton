@@ -126,18 +126,15 @@ def write_module_page(mod_name: str) -> None:
 
     lines.extend([f".. currentmodule:: {mod_name}", ""])
 
+    # Render a simple bullet list of submodules (no autosummary/toctree) to
+    # avoid generating stub pages that can cause duplicate descriptions.
     if modules:
-        lines.extend(
-            [
-                ".. rubric:: Submodules",
-                "",
-                ".. autosummary::",
-                f"   :toctree: {TOCTREE_DIR}",
-                "   :nosignatures:",
-                "",
-            ]
-        )
-        lines.extend([f"   {mod}" for mod in modules])
+        lines.extend([".. rubric:: Submodules", ""])
+        # Link to sibling generated module pages without creating autosummary stubs.
+        for sub in modules:
+            full = f"{mod_name}.{sub}"
+            doc = full.replace(".", "_")
+            lines.append(f"- :doc:`{full} <{doc}>`")
         lines.append("")
 
     if classes:

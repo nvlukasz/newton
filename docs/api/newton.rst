@@ -5,17 +5,13 @@ newton
 
 .. rubric:: Submodules
 
-.. autosummary::
-   :toctree: _generated
-   :nosignatures:
-
-   geometry
-   ik
-   selection
-   sensors
-   solvers
-   utils
-   viewer
+- :doc:`newton.geometry <newton_geometry>`
+- :doc:`newton.ik <newton_ik>`
+- :doc:`newton.selection <newton_selection>`
+- :doc:`newton.sensors <newton_sensors>`
+- :doc:`newton.solvers <newton_solvers>`
+- :doc:`newton.utils <newton_utils>`
+- :doc:`newton.viewer <newton_viewer>`
 
 .. rubric:: Classes
 
