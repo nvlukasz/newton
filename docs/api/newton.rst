@@ -24,10 +24,10 @@ newton
    :nosignatures:
 
    Axis
+   SDF
    GeoType
    Mesh
    ParticleFlags
-   SDF
    ShapeFlags
    CollisionPipeline
    Contacts
@@ -47,8 +47,8 @@ newton
    :toctree: _generated
    :signatures: long
 
-   __version__
    AxisType
+   __version__
    count_rigid_contact_points
    eval_fk
    eval_ik

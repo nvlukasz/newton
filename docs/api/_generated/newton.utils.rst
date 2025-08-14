@@ -8,9 +8,9 @@
 
    .. autosummary::
    
-      quat_between_axes
       color_graph
       plot_graph
+      quat_between_axes
       download_asset
       parse_mjcf
       parse_urdf

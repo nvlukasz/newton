@@ -18,6 +18,8 @@ newton.utils
    :toctree: _generated
    :signatures: long
 
+   color_graph
+   plot_graph
    quat_between_axes
    quat_decompose
    quat_from_euler
@@ -39,8 +41,6 @@ newton.utils
    vec_leaky_min
    vec_max
    vec_min
-   color_graph
-   plot_graph
    download_asset
    parse_mjcf
    parse_urdf
