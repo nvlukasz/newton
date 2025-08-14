@@ -2333,7 +2333,7 @@ class ModelBuilder:
         +------------------------+-------------------------------------------------------------------------------+
         | ``"convex_hull"``      | Approximate the mesh with a convex hull (default)                             |
         +------------------------+-------------------------------------------------------------------------------+
-        | ``<remeshing_method>`` | Any remeshing method supported by :func:`newton.geometry.utils.remesh_mesh`   |
+        | ``<remeshing_method>`` | Any remeshing method supported by :func:`newton.geometry.remesh_mesh`         |
         +------------------------+-------------------------------------------------------------------------------+
 
         .. note::

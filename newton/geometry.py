@@ -14,9 +14,11 @@
 # limitations under the License.
 
 from ._src.geometry import BroadPhaseAllPairs, BroadPhaseExplicit, BroadPhaseSAP
+from ._src.geometry.utils import remesh_mesh
 
 __all__ = [
     "BroadPhaseAllPairs",
     "BroadPhaseExplicit",
     "BroadPhaseSAP",
+    "remesh_mesh",
 ]

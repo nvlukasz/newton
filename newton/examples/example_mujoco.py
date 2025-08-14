@@ -114,9 +114,7 @@ def _setup_g1(articulation_builder):
         if hash_m in simplified_meshes:
             articulation_builder.shape_source[i] = simplified_meshes[hash_m]
         else:
-            simplified = newton.geometry.utils.remesh_mesh(
-                m, visualize=False, method="convex_hull", recompute_inertia=False
-            )
+            simplified = newton.geometry.remesh_mesh(m, visualize=False, method="convex_hull", recompute_inertia=False)
             articulation_builder.shape_source[i] = simplified
             simplified_meshes[hash_m] = simplified
     root_dofs = 7
