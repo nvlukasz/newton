@@ -122,6 +122,18 @@ class Slice:
         return slice(self.start, self.stop)
 
 
+def get_name_from_key(key: str):
+    return key.split("/")[-1]
+
+
+def find_matching_ids(keys: list[str], pattern: str):
+    ids = []
+    for id, key in enumerate(keys):
+        if fnmatch(key, pattern):
+            ids.append(id)
+    return ids
+
+
 class ArticulationView:
     def __init__(
         self,
@@ -141,11 +153,7 @@ class ArticulationView:
         if verbose is None:
             verbose = wp.config.verbose
 
-        articulation_ids = []
-        for id, key in enumerate(model.articulation_key):
-            if fnmatch(key, pattern):
-                articulation_ids.append(id)
-
+        articulation_ids = find_matching_ids(model.articulation_key, pattern)
         articulation_count = len(articulation_ids)
         if articulation_count == 0:
             raise KeyError("No matching articulations")
@@ -174,9 +182,6 @@ class ArticulationView:
         arti_joint_types = []
         arti_link_ids = []
         arti_link_names = []
-
-        def get_name_from_key(key):
-            return key.split("/")[-1]
 
         for idx in range(arti_joint_count):
             joint_id = arti_joint_begin + idx
@@ -710,3 +715,25 @@ class ArticulationView:
         # translate view mask to Model articulation mask
         articulation_mask = self.get_model_articulation_mask(mask=mask)
         eval_fk(self.model, target.joint_q, target.joint_qd, target, mask=articulation_mask)
+
+
+class RigidBodyView:
+    def __init__(
+        self,
+        model: Model,
+        pattern: str,
+        verbose: bool | None = None,
+    ):
+        self.model = model
+        self.device = model.device
+
+        if verbose is None:
+            verbose = wp.config.verbose
+
+        body_ids = find_matching_ids(model.body_key, pattern)
+        body_count = len(body_ids)
+        if body_count == 0:
+            raise KeyError("No matching bodies")
+
+        # FIXME: avoid/reduce this readback?
+        model_shape_body = model.shape_body.numpy()
