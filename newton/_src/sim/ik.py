@@ -23,21 +23,13 @@ from .articulation import eval_single_articulation_fk
 
 
 class IKJacobianMode(_Enum):
-    """
-    Enumeration of Jacobian computation modes for inverse kinematics objectives.
-
-    This enum controls how the Jacobian matrix (derivatives of objectives with respect to joint coordinates)
-    is computed for each objective in the IK solver.
-    """
-
     AUTODIFF = "autodiff"
-    """Use Warp's reverse-mode automatic differentiation to compute the Jacobian for every objective."""
-
     ANALYTIC = "analytic"
-    """Use objective-specific analytic Jacobians only."""
-
     MIXED = "mixed"
-    """Use analytic Jacobians where available, autodiff fallback elsewhere."""
+
+
+# Prevent Sphinx autodoc from documenting ``enum.Enum`` as a module member.
+# Importing as ``_Enum`` keeps it private and skips the std-lib warning.
 
 
 class IKSolver:
@@ -117,36 +109,9 @@ class IKSolver:
         rho_min=1e-3,
     ):
         """
-        Initialize a batch inverse kinematics (IK) solver.
+        Construct a batch IK solver.
 
-        Parameters
-        ----------
-        model : Articulation
-            The shared articulation model for all IK problems in the batch.
-        joint_q : wp.array2d[float32], shape (n_problems, model.joint_coord_count)
-            Initial joint coordinates for each problem in the batch. Modified in place.
-        objectives : Sequence[IKObjective]
-            Ordered list of IK objectives, shared by all problems. Each objective may contain
-            per-problem parameter arrays (e.g., target positions).
-        lambda_initial : float, optional (default=0.1)
-            Initial Levenberg-Marquardt (LM) damping value per problem.
-        jacobian_mode : IKJacobianMode, optional (default=IKJacobianMode.AUTODIFF)
-            Backend used for Jacobian computation.
-        lambda_factor : float, optional (default=2.0)
-            Multiplicative update factor for the LM damping parameter.
-        lambda_min : float, optional (default=1e-5)
-            Lower bound for the LM damping parameter.
-        lambda_max : float, optional (default=1e10)
-            Upper bound for the LM damping parameter.
-        rho_min : float, optional (default=1e-3)
-            Acceptance threshold for the ratio of predicted to actual cost reduction.
-
-        Notes
-        -----
-        - The solver operates on a batch of independent IK problems, all sharing the same
-          articulation (`model`) and objectives (`objectives`).
-        - Per-problem data includes each row of `joint_q` and any per-problem arrays in the objectives.
-        - No other data is duplicated across problems.
+        See class doc-string for parameter semantics.
         """
 
         self.model = model
@@ -274,27 +239,6 @@ class IKSolver:
             self._step(step_size=step_size, iteration=i)
 
     def compute_residuals(self, joint_q=None, output_residuals=None):
-        """
-        Compute the residuals for all IK objectives given a set of joint coordinates.
-
-        Parameters
-        ----------
-        joint_q : wp.array, optional
-            The joint coordinates to use for forward kinematics. If None, uses self.joint_q.
-        output_residuals : wp.array, optional
-            The array to store the computed residuals. If None, uses self.residuals.
-
-        Returns
-        -------
-        output_residuals : wp.array
-            The array containing the computed residuals for all objectives.
-
-        Notes
-        -----
-        This method performs forward kinematics using either autodiff/mixed or analytic mode,
-        then computes the residuals for each objective in parallel (if CUDA is available).
-        The output_residuals array is zeroed before accumulation.
-        """
         joint_q = joint_q or self.joint_q
         output_residuals = output_residuals or self.residuals
 
@@ -313,23 +257,6 @@ class IKSolver:
         return output_residuals
 
     def compute_jacobian(self):
-        """
-        Compute the Jacobian matrix for all IK objectives with respect to the joint coordinates.
-
-        Returns
-        -------
-        jacobian : wp.array
-            The computed Jacobian array of shape (n_problems, n_residuals, n_dofs).
-
-        Notes
-        -----
-        The computation mode is determined by `self.jacobian_mode`:
-        - AUTODIFF: Uses Warp's reverse-mode autodiff for all objectives.
-        - ANALYTIC: Uses objective-specific analytic Jacobians only.
-        - MIXED: Uses analytic Jacobians where available, autodiff fallback elsewhere.
-
-        The resulting Jacobian is stored in `self.jacobian` and also returned.
-        """
         self.jacobian.zero_()
 
         if self.jacobian_mode == IKJacobianMode.AUTODIFF:
@@ -917,149 +844,25 @@ def _update_lm_state(
 
 
 class IKObjective:
-    """
-    Base class for inverse kinematics (IK) objectives.
-
-    IK objectives define residuals (errors) and optionally their Jacobians
-    with respect to the joint coordinates. Subclasses should implement the
-    required methods to define specific IK tasks, such as end-effector
-    position or orientation constraints.
-
-    Methods
-    -------
-    residual_dim() -> int
-        Returns the dimension (number of scalar residuals) of this objective.
-
-    compute_residuals(body_q, joint_q, model, residuals, start_idx)
-        Computes the residuals for this objective and writes them into the
-        `residuals` array starting at `start_idx`.
-
-    compute_jacobian_autodiff(tape, model, jacobian, start_idx, dq_dof)
-        Computes the Jacobian of the residuals with respect to the joint
-        coordinates using automatic differentiation, and writes it into the
-        `jacobian` array starting at `start_idx`.
-
-    supports_analytic() -> bool
-        Returns True if this objective supports an analytic Jacobian
-        implementation, False otherwise.
-
-    bind_device(device)
-        Binds the objective to a Warp device (for buffer allocation, etc).
-
-    init_buffers(model, jacobian_mode)
-        Initializes any internal buffers required by the objective, given
-        the model and Jacobian computation mode.
-
-    compute_jacobian_analytic(body_q, joint_q, model, jacobian, joint_S_s, start_idx)
-        Computes the analytic Jacobian of the residuals with respect to the
-        joint coordinates, and writes it into the `jacobian` array starting
-        at `start_idx`. Only required if `supports_analytic()` returns True.
-    """
-
     def residual_dim(self):
-        """
-        Returns the number of scalar residuals for this objective.
-
-        Returns
-        -------
-        int
-            The dimension of the residual vector for this objective.
-        """
         raise NotImplementedError
 
     def compute_residuals(self, body_q, joint_q, model, residuals, start_idx):
-        """
-        Compute the residuals for this objective.
-
-        Parameters
-        ----------
-        body_q : wp.array2d
-            Body transforms for all problems.
-        joint_q : wp.array2d
-            Joint coordinates for all problems.
-        model : Articulation
-            The shared articulation model.
-        residuals : wp.array2d
-            Output array for residuals (to be written at start_idx).
-        start_idx : int
-            Starting index in the residuals array for this objective.
-        """
         raise NotImplementedError
 
     def compute_jacobian_autodiff(self, tape, model, jacobian, start_idx, dq_dof):
-        """
-        Compute the Jacobian of the residuals with respect to joint coordinates
-        using automatic differentiation.
-
-        Parameters
-        ----------
-        tape : wp.Tape
-            Warp autodiff tape containing the computation graph.
-        model : Articulation
-            The shared articulation model.
-        jacobian : wp.array3d
-            Output array for the Jacobian (to be written at start_idx).
-        start_idx : int
-            Starting index in the Jacobian array for this objective.
-        dq_dof : wp.array2d
-            Array of joint coordinate perturbations (for autodiff).
-        """
         raise NotImplementedError
 
     def supports_analytic(self):
-        """
-        Returns whether this objective supports an analytic Jacobian.
-
-        Returns
-        -------
-        bool
-            True if analytic Jacobian is implemented, False otherwise.
-        """
         return False
 
     def bind_device(self, device):
-        """
-        Bind this objective to a Warp device.
-
-        Parameters
-        ----------
-        device : wp.Device
-            The Warp device to bind to.
-        """
         self.device = device
 
     def init_buffers(self, model, jacobian_mode):
-        """
-        Initialize any internal buffers required by this objective.
-
-        Parameters
-        ----------
-        model : Articulation
-            The shared articulation model.
-        jacobian_mode : IKJacobianMode
-            The Jacobian computation mode.
-        """
         pass
 
     def compute_jacobian_analytic(self, body_q, joint_q, model, jacobian, joint_S_s, start_idx):
-        """
-        Compute the analytic Jacobian of the residuals with respect to joint coordinates.
-
-        Parameters
-        ----------
-        body_q : wp.array2d
-            Body transforms for all problems.
-        joint_q : wp.array2d
-            Joint coordinates for all problems.
-        model : Articulation
-            The shared articulation model.
-        jacobian : wp.array3d
-            Output array for the Jacobian (to be written at start_idx).
-        joint_S_s : wp.array2d
-            Motion subspace array for all problems.
-        start_idx : int
-            Starting index in the Jacobian array for this objective.
-        """
         pass
 
 
@@ -1162,34 +965,24 @@ def _pos_jac_analytic(
 
 class IKPositionObjective(IKObjective):
     """
-    Inverse kinematics objective for enforcing a positional target on a single end-effector link.
-
-    This objective constrains the world-space position of a specified link (optionally offset in the link's local frame)
-    to match a target position for each problem in a batch. The objective supports both analytic and autodiff Jacobian
-    computation.
+    End-effector positional target for one link.
 
     Parameters
     ----------
     link_index : int
-        Index of the body whose frame defines the end-effector.
+        Body index whose frame defines the end-effector.
     link_offset : wp.vec3
-        Offset from the body frame origin (in local coordinates) to the end-effector point.
+        Offset from the body frame (local coordinates).
     target_positions : wp.array(dtype=wp.vec3)
-        Array of target positions, one per problem (shape: [n_problems]).
+        One target position per problem.
     n_problems : int
-        Number of parallel IK problems in the batch.
+        Number of parallel IK problems.
     total_residuals : int
-        Total number of residuals in the global residual vector (used for autodiff bookkeeping).
+        Global residual vector length (for autodiff bookkeeping).
     residual_offset : int
-        Starting index of this objective's residuals within the global residual vector.
+        Starting index of this objective inside the residual vector.
     weight : float, default 1.0
-        Scalar weight applied to both the residual and Jacobian rows for this objective.
-
-    Notes
-    -----
-    - The objective contributes 3 residuals per problem (for x, y, z position error).
-    - The analytic Jacobian is computed using the motion subspace and kinematic tree structure.
-    - For autodiff, a set of one-hot vectors is used to extract the relevant Jacobian rows.
+        Scalar weight multiplying both residual and Jacobian rows.
     """
 
     def __init__(
@@ -1207,19 +1000,7 @@ class IKPositionObjective(IKObjective):
         self.e_arrays = None
 
     def init_buffers(self, model, jacobian_mode):
-        """
-        Initialize any internal buffers required for Jacobian computation.
-
-        For analytic Jacobians, precomputes a lookup table indicating which DoFs affect the end-effector.
-        For autodiff, allocates one-hot vectors for extracting the correct Jacobian rows.
-
-        Parameters
-        ----------
-        model : newton.Model
-            The shared articulation model.
-        jacobian_mode : IKJacobianMode
-            The Jacobian computation mode (ANALYTIC or AUTODIFF).
-        """
+        """Precompute lookup tables for analytic jacobian computation."""
         if jacobian_mode == IKJacobianMode.ANALYTIC:
             joint_qd_start_np = model.joint_qd_start.numpy()
             dof_to_joint_np = np.empty(joint_qd_start_np[-1], dtype=np.int32)
@@ -1254,22 +1035,9 @@ class IKPositionObjective(IKObjective):
                 self.e_arrays.append(wp.array(e.flatten(), dtype=wp.float32, device=self.device))
 
     def supports_analytic(self):
-        """
-        Returns True, indicating that this objective supports analytic Jacobian computation.
-        """
         return True
 
     def set_target_position(self, problem_idx, new_position):
-        """
-        Set the target position for a single problem in the batch.
-
-        Parameters
-        ----------
-        problem_idx : int
-            Index of the problem to update.
-        new_position : wp.vec3
-            New target position for the specified problem.
-        """
         wp.launch(
             _update_position_target,
             dim=1,
@@ -1279,14 +1047,6 @@ class IKPositionObjective(IKObjective):
         )
 
     def set_target_positions(self, new_positions):
-        """
-        Set the target positions for all problems in the batch.
-
-        Parameters
-        ----------
-        new_positions : wp.array(dtype=wp.vec3)
-            Array of new target positions (shape: [n_problems]).
-        """
         wp.launch(
             _update_position_targets,
             dim=self.n_problems,
@@ -1296,28 +1056,9 @@ class IKPositionObjective(IKObjective):
         )
 
     def residual_dim(self):
-        """
-        Returns the number of scalar residuals contributed by this objective (always 3).
-        """
         return 3
 
     def compute_residuals(self, body_q, joint_q, model, residuals, start_idx):
-        """
-        Compute the position residuals for this objective and write them into the residual vector.
-
-        Parameters
-        ----------
-        body_q : wp.array2d[wp.transform]
-            World transforms for all bodies and problems.
-        joint_q : wp.array2d[float32]
-            Joint coordinates (not used for this objective).
-        model : newton.Model
-            The shared articulation model.
-        residuals : wp.array2d[float32]
-            Output residual array (shape: [n_problems, n_residuals]).
-        start_idx : int
-            Starting index in the residual vector for this objective.
-        """
         wp.launch(
             _pos_residuals,
             dim=self.n_problems,
@@ -1334,22 +1075,6 @@ class IKPositionObjective(IKObjective):
         )
 
     def compute_jacobian_autodiff(self, tape, model, jacobian, start_idx, dq_dof):
-        """
-        Compute the Jacobian of the position residuals with respect to the joint coordinates using autodiff.
-
-        Parameters
-        ----------
-        tape : wp.Tape
-            Warp autodiff tape containing the computation graph.
-        model : newton.Model
-            The shared articulation model.
-        jacobian : wp.array3d[float32]
-            Output Jacobian array (shape: [n_problems, n_residuals, n_dofs]).
-        start_idx : int
-            Starting index in the residual vector for this objective.
-        dq_dof : wp.array2d[float32]
-            Joint velocity array for autodiff.
-        """
         for component in range(3):
             tape.backward(grads={tape.outputs[0]: self.e_arrays[component].flatten()})
 
@@ -1375,24 +1100,6 @@ class IKPositionObjective(IKObjective):
             tape.zero()
 
     def compute_jacobian_analytic(self, body_q, joint_q, model, jacobian, joint_S_s, start_idx):
-        """
-        Compute the analytic Jacobian of the position residuals with respect to the joint coordinates.
-
-        Parameters
-        ----------
-        body_q : wp.array2d[wp.transform]
-            World transforms for all bodies and problems.
-        joint_q : wp.array2d[float32]
-            Joint coordinates (not used for this objective).
-        model : newton.Model
-            The shared articulation model.
-        jacobian : wp.array3d[float32]
-            Output Jacobian array (shape: [n_problems, n_residuals, n_dofs]).
-        joint_S_s : wp.array2d[wp.spatial_vector]
-            Motion subspace matrix for all problems and DoFs.
-        start_idx : int
-            Starting index in the residual vector for this objective.
-        """
         n_dofs = model.joint_dof_count
 
         wp.launch(
@@ -1492,32 +1199,22 @@ def _limit_jac_analytic(
 
 class IKJointLimitObjective(IKObjective):
     """
-    Inverse kinematics objective for enforcing joint limit constraints.
-
-    This objective penalizes violations of lower and upper joint limits for each degree of freedom (DoF)
-    in the articulation. For each DoF, a residual is generated that is nonzero only if the joint coordinate
-    exceeds its specified bounds. The objective supports both analytic and autodiff Jacobian computation.
+    Joint limit constraint objective.
 
     Parameters
     ----------
     joint_limit_lower : wp.array(dtype=float)
-        Array of lower bounds for each joint DoF (shape: [n_dofs]).
+        Lower bounds for each joint dof
     joint_limit_upper : wp.array(dtype=float)
-        Array of upper bounds for each joint DoF (shape: [n_dofs]).
-    n_problems : int
-        Number of parallel IK problems in the batch.
-    total_residuals : int
-        Total number of residuals in the global residual vector (used for autodiff bookkeeping).
-    residual_offset : int
-        Starting index of this objective's residuals within the global residual vector.
+        Upper bounds for each joint dof
+    n_problems : int, optional
+        Number of parallel IK problems.
+    total_residuals : int, optional
+        Global residual vector length (for autodiff bookkeeping).
+    residual_offset : int, optional
+        Starting index of this objective inside the residual vector.
     weight : float, default 0.1
-        Scalar weight applied to both the residual and Jacobian rows for this objective.
-
-    Notes
-    -----
-    - The objective contributes one residual per DoF, per problem.
-    - The analytic Jacobian is sparse and only nonzero for DoFs at their limits.
-    - For autodiff, a set of one-hot vectors is used to extract the relevant Jacobian rows.
+        Scalar weight for limit violation penalty.
     """
 
     def __init__(
@@ -1543,16 +1240,6 @@ class IKJointLimitObjective(IKObjective):
         self.dof_to_coord = None
 
     def init_buffers(self, model, jacobian_mode):
-        """
-        Initialize any internal buffers required for Jacobian computation.
-
-        Parameters
-        ----------
-        model : Articulation
-            The shared articulation model.
-        jacobian_mode : IKJacobianMode
-            The Jacobian computation mode.
-        """
         if jacobian_mode == IKJacobianMode.AUTODIFF:
             e = np.zeros((self.n_problems, self.total_residuals), dtype=np.float32)
             for prob_idx in range(self.n_problems):
@@ -1573,40 +1260,12 @@ class IKJointLimitObjective(IKObjective):
         self.dof_to_coord = wp.array(dof_to_coord_np, dtype=wp.int32, device=self.device)
 
     def supports_analytic(self):
-        """
-        Returns
-        -------
-        bool
-            True if analytic Jacobian is implemented, False otherwise.
-        """
         return True
 
     def residual_dim(self):
-        """
-        Returns
-        -------
-        int
-            The number of residuals contributed by this objective (one per DoF).
-        """
         return self.n_dofs
 
     def compute_residuals(self, body_q, joint_q, model, residuals, start_idx):
-        """
-        Compute the joint limit residuals for all problems.
-
-        Parameters
-        ----------
-        body_q : wp.array2d
-            Body transforms for all problems (unused).
-        joint_q : wp.array2d
-            Joint coordinates for all problems.
-        model : Articulation
-            The shared articulation model (unused).
-        residuals : wp.array2d
-            Output array for the residuals.
-        start_idx : int
-            Starting index in the residuals array for this objective.
-        """
         wp.launch(
             _limit_residuals,
             dim=[self.n_problems, self.n_dofs],
@@ -1624,22 +1283,6 @@ class IKJointLimitObjective(IKObjective):
         )
 
     def compute_jacobian_autodiff(self, tape, model, jacobian, start_idx, dq_dof):
-        """
-        Compute the Jacobian using autodiff for all problems.
-
-        Parameters
-        ----------
-        tape : wp.Tape
-            The autodiff tape.
-        model : Articulation
-            The shared articulation model (unused).
-        jacobian : wp.array3d
-            Output array for the Jacobian.
-        start_idx : int
-            Starting index in the Jacobian array for this objective.
-        dq_dof : wp.array2d
-            The array of joint DoF differentials.
-        """
         tape.backward(grads={tape.outputs[0]: self.e_array})
 
         q_grad = tape.gradients[dq_dof]
@@ -1657,24 +1300,6 @@ class IKJointLimitObjective(IKObjective):
         )
 
     def compute_jacobian_analytic(self, body_q, joint_q, model, jacobian, joint_S_s, start_idx):
-        """
-        Compute the analytic Jacobian for the joint limit residuals.
-
-        Parameters
-        ----------
-        body_q : wp.array2d
-            Body transforms for all problems (unused).
-        joint_q : wp.array2d
-            Joint coordinates for all problems.
-        model : Articulation
-            The shared articulation model (unused).
-        jacobian : wp.array3d
-            Output array for the Jacobian.
-        joint_S_s : wp.array2d
-            Motion subspace array for all problems (unused).
-        start_idx : int
-            Starting index in the Jacobian array for this objective.
-        """
         wp.launch(
             _limit_jac_analytic,
             dim=[self.n_problems, self.n_dofs],
@@ -1802,38 +1427,29 @@ def _rot_jac_analytic(
 
 class IKRotationObjective(IKObjective):
     """
-    Inverse kinematics objective for enforcing a rotational (orientation) target on a single end-effector link.
-
-    This objective constrains the world-space orientation of a specified link (optionally offset by a local rotation)
-    to match a target quaternion for each problem in a batch. The objective supports both analytic and autodiff Jacobian
-    computation.
+    End-effector rotational target for one link.
 
     Parameters
     ----------
     link_index : int
-        Index of the body whose frame defines the end-effector.
+        Body index whose frame defines the end-effector.
     link_offset_rotation : wp.quat
-        Rotation offset from the body frame (in local coordinates) to the end-effector orientation.
+        Rotation offset from the body frame (local coordinates).
     target_rotations : wp.array(dtype=wp.vec4)
-        Array of target quaternions, one per problem (shape: [n_problems], as vec4).
+        One target quaternion per problem (stored as vec4).
     n_problems : int
-        Number of parallel IK problems in the batch.
+        Number of parallel IK problems.
     total_residuals : int
-        Total number of residuals in the global residual vector (used for autodiff bookkeeping).
+        Global residual vector length (for autodiff bookkeeping).
     residual_offset : int
-        Starting index of this objective's residuals within the global residual vector.
-    canonicalize_quat_err : bool, default True
-        If True, the error quaternion is flipped so its scalar part is non-negative,
-        yielding the short-arc residual in SO(3). If False, the quaternion is used as computed,
-        preserving any sign convention from the forward kinematics.
+        Starting index of this objective inside the residual vector.
+    canonicalize_quat_err: bool, default True
+        If true, the error quaternion is flipped so its scalar part is non-negative,
+        yielding the short-arc residual in SO(3).
+        When false, the quaternion is used exactly as computed, preserving any
+        sign convention from the forward kinematics.
     weight : float, default 1.0
-        Scalar weight applied to both the residual and Jacobian rows for this objective.
-
-    Notes
-    -----
-    - The objective contributes 3 residuals per problem (for x, y, z rotation error).
-    - The analytic Jacobian is computed using the motion subspace and kinematic tree structure.
-    - For autodiff, a set of one-hot vectors is used to extract the relevant Jacobian rows.
+        Scalar weight multiplying both residual and Jacobian rows.
     """
 
     def __init__(
@@ -1860,19 +1476,7 @@ class IKRotationObjective(IKObjective):
         self.e_arrays = None
 
     def init_buffers(self, model, jacobian_mode):
-        """
-        Initialize any internal buffers required for Jacobian computation.
-
-        For analytic Jacobians, precomputes a lookup mask for which DoFs affect this link.
-        For autodiff, precomputes one-hot arrays for extracting Jacobian rows.
-
-        Parameters
-        ----------
-        model : Model
-            The shared articulation model.
-        jacobian_mode : IKJacobianMode
-            The Jacobian computation mode.
-        """
+        """Precompute lookup tables for analytic jacobian computation."""
         if jacobian_mode == IKJacobianMode.ANALYTIC:
             joint_qd_start_np = model.joint_qd_start.numpy()
             dof_to_joint_np = np.empty(joint_qd_start_np[-1], dtype=np.int32)
@@ -1907,25 +1511,9 @@ class IKRotationObjective(IKObjective):
                 self.e_arrays.append(wp.array(e.flatten(), dtype=wp.float32, device=self.device))
 
     def supports_analytic(self):
-        """
-        Returns
-        -------
-        bool
-            True if analytic Jacobian is implemented for this objective.
-        """
         return True
 
     def set_target_rotation(self, problem_idx, new_rotation):
-        """
-        Set the target rotation for a single problem.
-
-        Parameters
-        ----------
-        problem_idx : int
-            Index of the problem to update.
-        new_rotation : wp.vec4
-            New target quaternion.
-        """
         wp.launch(
             _update_rotation_target,
             dim=1,
@@ -1935,14 +1523,6 @@ class IKRotationObjective(IKObjective):
         )
 
     def set_target_rotations(self, new_rotations):
-        """
-        Set the target rotations for all problems in the batch.
-
-        Parameters
-        ----------
-        new_rotations : wp.array1d(dtype=wp.vec4)
-            Array of new target quaternions, one per problem.
-        """
         wp.launch(
             _update_rotation_targets,
             dim=self.n_problems,
@@ -1952,31 +1532,9 @@ class IKRotationObjective(IKObjective):
         )
 
     def residual_dim(self):
-        """
-        Returns
-        -------
-        int
-            Number of residuals contributed by this objective (always 3).
-        """
         return 3
 
     def compute_residuals(self, body_q, joint_q, model, residuals, start_idx):
-        """
-        Compute the residuals for this objective and write them into the global residual array.
-
-        Parameters
-        ----------
-        body_q : wp.array2d
-            Body transforms for all problems.
-        joint_q : wp.array2d
-            Joint coordinates for all problems.
-        model : Articulation
-            The shared articulation model.
-        residuals : wp.array2d
-            Output array for the residuals (to be written at start_idx).
-        start_idx : int
-            Starting index in the residual array for this objective.
-        """
         wp.launch(
             _rot_residuals,
             dim=self.n_problems,
@@ -1994,22 +1552,6 @@ class IKRotationObjective(IKObjective):
         )
 
     def compute_jacobian_autodiff(self, tape, model, jacobian, start_idx, dq_dof):
-        """
-        Compute the Jacobian of the residuals with respect to joint coordinates using autodiff.
-
-        Parameters
-        ----------
-        tape : wp.Tape
-            Warp autodiff tape.
-        model : Articulation
-            The shared articulation model.
-        jacobian : wp.array3d
-            Output array for the Jacobian (to be written at start_idx).
-        start_idx : int
-            Starting index in the Jacobian array for this objective.
-        dq_dof : wp.array2d
-            Joint coordinate differentials for autodiff.
-        """
         for component in range(3):
             tape.backward(grads={tape.outputs[0]: self.e_arrays[component].flatten()})
 
@@ -2035,24 +1577,6 @@ class IKRotationObjective(IKObjective):
             tape.zero()
 
     def compute_jacobian_analytic(self, body_q, joint_q, model, jacobian, joint_S_s, start_idx):
-        """
-        Compute the analytic Jacobian of the residuals with respect to joint coordinates.
-
-        Parameters
-        ----------
-        body_q : wp.array2d
-            Body transforms for all problems.
-        joint_q : wp.array2d
-            Joint coordinates for all problems.
-        model : Articulation
-            The shared articulation model.
-        jacobian : wp.array3d
-            Output array for the Jacobian (to be written at start_idx).
-        joint_S_s : wp.array2d
-            Motion subspace array for all problems.
-        start_idx : int
-            Starting index in the Jacobian array for this objective.
-        """
         n_dofs = model.joint_dof_count
 
         wp.launch(
