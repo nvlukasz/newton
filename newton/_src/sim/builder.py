@@ -784,20 +784,6 @@ class ModelBuilder:
             spacing (tuple[float, float, float], optional): The spacing between each copy along each axis.
                 For example, (5.0, 5.0, 0.0) arranges copies in a 2D grid in the XY plane.
                 Defaults to (5.0, 5.0, 0.0).
-
-        Example:
-            >>> main_builder = ModelBuilder()
-            >>> robot_builder = ModelBuilder()
-            >>> # ... build robot ...
-            >>> main_builder.replicate(robot_builder, num_copies=4, spacing=(5.0, 5.0, 0.0))
-            # This creates 4 robots in a 2x2 grid, each in its own environment group.
-
-        Note:
-            - Each replicated copy is assigned to a new environment group.
-            - The spatial arrangement is determined by the nonzero components of `spacing`.
-              For example, (5,0,0) arranges along X, (5,5,0) in a 2D grid, (5,5,5) in a 3D grid.
-            - The root transform of each copy is offset by the computed spacing, but the original
-              builder's internal transforms are preserved.
         """
         offsets = self._compute_replicate_offsets(num_copies, spacing)
         for i in range(num_copies):
