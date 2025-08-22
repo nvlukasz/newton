@@ -27,19 +27,6 @@ class State:
 
     State objects are typically created via :meth:`newton.Model.state()` and are used to
     store and update the simulation's current configuration and derived data.
-
-    Attributes:
-        particle_q (wp.array or None): 3D positions of particles, shape (particle_count,), dtype :class:`vec3`.
-        particle_qd (wp.array or None): 3D velocities of particles, shape (particle_count,), dtype :class:`vec3`.
-        particle_f (wp.array or None): 3D forces on particles, shape (particle_count,), dtype :class:`vec3`.
-        body_q (wp.array or None): Rigid body transforms (7-DOF), shape (body_count,), dtype :class:`transform`.
-        body_qd (wp.array or None): Rigid body velocities (spatial), shape (body_count,), dtype :class:`spatial_vector`.
-        body_f (wp.array or None): Rigid body forces (spatial), shape (body_count,), dtype :class:`spatial_vector`.
-            The first three entries are torque, the last three are linear force.
-            Note: :attr:`body_f` represents external wrenches in world frame, measured at the body's center of mass
-            for all solvers except :class:`~newton.solvers.SolverFeatherstone`, which expects wrenches at the world origin.
-        joint_q (wp.array or None): Generalized joint position coordinates, shape (joint_coord_count,), dtype float.
-        joint_qd (wp.array or None): Generalized joint velocity coordinates, shape (joint_dof_count,), dtype float.
     """
 
     def __init__(self) -> None:

@@ -142,7 +142,7 @@ class Mesh:
 
     Attributes:
         vertices (np.ndarray): Mesh 3D vertex positions, shape (N, 3).
-        indices (np.ndarray): Flattened triangle indices, shape (M,).
+        indices (np.ndarray): Flattened triangle indices, shape (3 per triangle).
         normals (np.ndarray or None): Optional per-vertex normals, shape (N, 3).
         uvs (np.ndarray or None): Optional per-vertex UV coordinates, shape (N, 2).
         I (Mat33): 3x3 inertia matrix of the mesh (about the center of mass, assuming density 1.0).
@@ -236,7 +236,6 @@ class Mesh:
 
     @property
     def vertices(self):
-        """np.ndarray: Mesh vertex positions, shape (N, 3)."""
         return self._vertices
 
     @vertices.setter
@@ -246,7 +245,6 @@ class Mesh:
 
     @property
     def indices(self):
-        """np.ndarray: Flattened triangle indices, shape (M,)."""
         return self._indices
 
     @indices.setter

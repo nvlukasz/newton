@@ -289,15 +289,6 @@ class ModelBuilder:
             default_edge_kd (float): Default edge bending damping.
             default_body_armature (float): Default artificial inertia for bodies.
 
-            balance_inertia (bool): Whether to automatically correct rigid body inertia tensors
-                that violate the triangle inequality. Default: True.
-            bound_mass (float or None): Minimum allowed mass value for rigid bodies. If set,
-                any body mass below this value will be clamped. Default: None.
-            bound_inertia (float or None): Minimum allowed eigenvalue for rigid body inertia tensors.
-                If set, ensures all principal moments of inertia are at least this value. Default: None.
-            validate_inertia_detailed (bool): Whether to use detailed (slower) inertia validation
-                that provides per-body warnings. Default: False.
-
             particle_q (list): List of particle positions.
             particle_qd (list): List of particle velocities.
             particle_mass (list): List of particle masses.
