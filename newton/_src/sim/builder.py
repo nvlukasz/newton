@@ -265,6 +265,172 @@ class ModelBuilder:
             )
 
     def __init__(self, up_axis: AxisType = Axis.Z, gravity: float = -9.81):
+        """
+        Initializes a new ModelBuilder instance for constructing simulation models.
+
+        Args:
+            up_axis (AxisType, optional): The axis to use as the "up" direction in the simulation.
+                Defaults to Axis.Z.
+            gravity (float, optional): The magnitude of gravity to apply along the up axis.
+                Defaults to -9.81.
+
+        Attributes:
+            num_envs (int): Number of environments in the model (for multi-environment support).
+            default_shape_cfg (ShapeConfig): Default configuration for shapes.
+            default_joint_cfg (JointDofConfig): Default configuration for joint degrees of freedom.
+            default_particle_radius (float): Default radius for particles.
+            default_tri_ke (float): Default triangle elastic stiffness.
+            default_tri_ka (float): Default triangle area stiffness.
+            default_tri_kd (float): Default triangle damping.
+            default_tri_drag (float): Default triangle drag coefficient.
+            default_tri_lift (float): Default triangle lift coefficient.
+            default_spring_ke (float): Default spring elastic stiffness.
+            default_spring_kd (float): Default spring damping.
+            default_edge_ke (float): Default edge bending elastic stiffness.
+            default_edge_kd (float): Default edge bending damping.
+            default_body_armature (float): Default artificial inertia for bodies.
+
+            balance_inertia (bool): Whether to automatically correct rigid body inertia tensors
+                that violate the triangle inequality. Default: True.
+            bound_mass (float or None): Minimum allowed mass value for rigid bodies. If set,
+                any body mass below this value will be clamped. Default: None.
+            bound_inertia (float or None): Minimum allowed eigenvalue for rigid body inertia tensors.
+                If set, ensures all principal moments of inertia are at least this value. Default: None.
+            validate_inertia_detailed (bool): Whether to use detailed (slower) inertia validation
+                that provides per-body warnings. Default: False.
+
+            particle_q (list): List of particle positions.
+            particle_qd (list): List of particle velocities.
+            particle_mass (list): List of particle masses.
+            particle_radius (list): List of particle radii.
+            particle_flags (list): List of particle flags.
+            particle_max_velocity (float): Maximum allowed velocity for particles.
+            particle_color_groups (list[nparray]): Color group indices for particles.
+            particle_group (list): Environment group index for each particle.
+
+            shape_key (list): Shape keys.
+            shape_transform (list): Transform from shape to body.
+            shape_body (list): Maps from shape index to body index.
+            shape_flags (list): Shape flags.
+            shape_type (list): Shape types.
+            shape_scale (list): Shape scales.
+            shape_source (list): Shape sources.
+            shape_is_solid (list): Whether each shape is solid.
+            shape_thickness (list): Shape thicknesses.
+            shape_material_ke (list): Shape material elastic stiffness.
+            shape_material_kd (list): Shape material damping.
+            shape_material_kf (list): Shape material friction.
+            shape_material_ka (list): Shape material area stiffness.
+            shape_material_mu (list): Shape material friction coefficient.
+            shape_material_restitution (list): Shape material restitution.
+            shape_collision_group (list): Collision group for each shape.
+            shape_collision_group_map (dict): Maps collision group to shape indices.
+            last_collision_group (int): Last used collision group index.
+            shape_collision_radius (list): Broadphase collision radius for each shape.
+            shape_group (list): Environment group index for each shape.
+            shape_collision_filter_pairs (set): Set of shape index pairs to ignore for collision.
+
+            spring_indices (list): Indices of particles connected by springs.
+            spring_rest_length (list): Rest lengths of springs.
+            spring_stiffness (list): Stiffness of springs.
+            spring_damping (list): Damping of springs.
+            spring_control (list): Control values for springs.
+
+            tri_indices (list): Indices of triangle vertices.
+            tri_poses (list): Triangle poses.
+            tri_activations (list): Triangle activations.
+            tri_materials (list): Triangle materials.
+            tri_areas (list): Triangle areas.
+
+            edge_indices (list): Indices of edge vertices (for bending).
+            edge_rest_angle (list): Rest angles for edges.
+            edge_rest_length (list): Rest lengths for edges.
+            edge_bending_properties (list): Bending properties for edges.
+
+            tet_indices (list): Indices of tetrahedron vertices.
+            tet_poses (list): Tetrahedron poses.
+            tet_activations (list): Tetrahedron activations.
+            tet_materials (list): Tetrahedron materials.
+
+            muscle_start (list): Start indices for muscles.
+            muscle_params (list): Parameters for muscles.
+            muscle_activations (list): Activations for muscles.
+            muscle_bodies (list): Body indices for muscles.
+            muscle_points (list): Points for muscles.
+
+            body_mass (list): Masses of rigid bodies.
+            body_inertia (list): Inertia tensors of rigid bodies.
+            body_inv_mass (list): Inverse masses of rigid bodies.
+            body_inv_inertia (list): Inverse inertia tensors of rigid bodies.
+            body_com (list): Centers of mass for rigid bodies.
+            body_q (list): Positions and orientations of rigid bodies.
+            body_qd (list): Velocities of rigid bodies.
+            body_key (list): Keys for rigid bodies.
+            body_shapes (dict): Mapping from body to shapes.
+            body_group (list): Environment group index for each body.
+
+            joint_parent (list): Index of the parent body for each joint.
+            joint_parents (dict): Mapping from joint to parent bodies.
+            joint_child (list): Index of the child body for each joint.
+            joint_axis (list): Joint axis in child joint frame.
+            joint_X_p (list): Frame of joint in parent.
+            joint_X_c (list): Frame of child COM in child coordinates.
+            joint_q (list): Joint positions.
+            joint_qd (list): Joint velocities.
+            joint_f (list): Joint forces.
+
+            joint_type (list): Joint types.
+            joint_key (list): Joint keys.
+            joint_armature (list): Artificial inertia for joints.
+            joint_target_ke (list): Proportional gain for joint target.
+            joint_target_kd (list): Derivative gain for joint target.
+            joint_dof_mode (list): Mode for each joint DOF.
+            joint_limit_lower (list): Lower limits for joint positions.
+            joint_limit_upper (list): Upper limits for joint positions.
+            joint_limit_ke (list): Elastic stiffness for joint limits.
+            joint_limit_kd (list): Damping for joint limits.
+            joint_target (list): Target positions or velocities for joints.
+            joint_effort_limit (list): Maximum effort for joints.
+            joint_velocity_limit (list): Maximum velocity for joints.
+            joint_friction (list): Friction for joints.
+            joint_twist_lower (list): Lower twist limits for joints.
+            joint_twist_upper (list): Upper twist limits for joints.
+            joint_enabled (list): Whether each joint is enabled.
+            joint_q_start (list): Start index in joint_q for each joint.
+            joint_qd_start (list): Start index in joint_qd for each joint.
+            joint_dof_dim (list): Number of DOFs for each joint.
+            joint_group (list): Environment group index for each joint.
+
+            articulation_start (list): Start indices for articulations.
+            articulation_key (list): Keys for articulations.
+            articulation_group (list): Environment group index for each articulation.
+
+            joint_dof_count (int): Total number of joint degrees of freedom.
+            joint_coord_count (int): Total number of joint coordinates.
+
+            current_env_group (int): Current environment group index for new entities.
+                Set to -1 for global entities.
+
+            up_axis (Axis): The up axis for the simulation.
+            gravity (float): The gravity magnitude along the up axis.
+
+            rigid_contact_margin (float): Margin for generating rigid contacts.
+            rigid_contact_torsional_friction (float): Torsional friction coefficient for rigid contacts.
+            rigid_contact_rolling_friction (float): Rolling friction coefficient for rigid contacts.
+            num_rigid_contacts_per_env (int or None): Number of rigid contact points to allocate per environment.
+
+            equality_constraint_type (list): Types of equality constraints.
+            equality_constraint_body1 (list): First body for each equality constraint.
+            equality_constraint_body2 (list): Second body for each equality constraint.
+            equality_constraint_anchor (list): Anchor points for equality constraints.
+            equality_constraint_relpose (list): Relative poses for equality constraints.
+            equality_constraint_torquescale (list): Torque scales for equality constraints.
+            equality_constraint_joint1 (list): First joint for each equality constraint.
+            equality_constraint_joint2 (list): Second joint for each equality constraint.
+            equality_constraint_polycoef (list): Polynomial coefficients for equality constraints.
+            equality_constraint_key (list): Keys for equality constraints.
+            equality_constraint_enabled (list): Whether each equality constraint is enabled.
+        """
         self.num_envs = 0
 
         # region defaults
@@ -480,7 +646,15 @@ class ModelBuilder:
 
     @property
     def up_vector(self) -> Vec3:
-        """Computes the 3D up vector from :attr:`up_axis`."""
+        """
+        Returns the 3D unit vector corresponding to the current up axis (read-only).
+
+        This property computes the up direction as a 3D vector based on the value of :attr:`up_axis`.
+        For example, if ``up_axis`` is ``Axis.Z``, this returns ``(0, 0, 1)``.
+
+        Returns:
+            Vec3: The 3D up vector corresponding to the current up axis.
+        """
         return axis_to_vec3(self.up_axis)
 
     @up_vector.setter
@@ -492,42 +666,72 @@ class ModelBuilder:
     # region counts
     @property
     def shape_count(self):
+        """
+        The number of shapes in the model.
+        """
         return len(self.shape_type)
 
     @property
     def body_count(self):
+        """
+        The number of rigid bodies in the model.
+        """
         return len(self.body_q)
 
     @property
     def joint_count(self):
+        """
+        The number of joints in the model.
+        """
         return len(self.joint_type)
 
     @property
     def particle_count(self):
+        """
+        The number of particles in the model.
+        """
         return len(self.particle_q)
 
     @property
     def tri_count(self):
+        """
+        The number of triangles in the model.
+        """
         return len(self.tri_poses)
 
     @property
     def tet_count(self):
+        """
+        The number of tetrahedra in the model.
+        """
         return len(self.tet_poses)
 
     @property
     def edge_count(self):
+        """
+        The number of edges (for bending) in the model.
+        """
         return len(self.edge_rest_angle)
 
     @property
     def spring_count(self):
+        """
+        The number of springs in the model.
+        """
         return len(self.spring_rest_length)
 
     @property
     def muscle_count(self):
+        """
+        The number of muscles in the model.
+        """
         return len(self.muscle_start)
 
     @property
     def articulation_count(self):
+        """
+        The number of articulations in the model.
+        """
         return len(self.articulation_start)
 
     # endregion
@@ -571,10 +775,40 @@ class ModelBuilder:
         spacings -= correction
         return spacings
 
-    def replicate(self, builder: ModelBuilder, num_copies: int, spacing: tuple[float, float, float] = (5.0, 5.0, 0.0)):
-        """Replicates the builder a given number of times offsetting
-        each copy according to the supplied spacing"""
+    def replicate(
+        self,
+        builder: ModelBuilder,
+        num_copies: int,
+        spacing: tuple[float, float, float] = (5.0, 5.0, 0.0),
+    ):
+        """
+        Replicates the given builder multiple times, offsetting each copy according to the supplied spacing.
 
+        This method is useful for creating multiple instances of a sub-model (e.g., robots, environments)
+        arranged in a regular grid or along a line. Each copy is offset in space by a multiple of the
+        specified spacing vector, and all entities from each copy are assigned to a new environment group.
+
+        Args:
+            builder (ModelBuilder): The builder to replicate. All entities from this builder will be copied.
+            num_copies (int): The number of copies to create.
+            spacing (tuple[float, float, float], optional): The spacing between each copy along each axis.
+                For example, (5.0, 5.0, 0.0) arranges copies in a 2D grid in the XY plane.
+                Defaults to (5.0, 5.0, 0.0).
+
+        Example:
+            >>> main_builder = ModelBuilder()
+            >>> robot_builder = ModelBuilder()
+            >>> # ... build robot ...
+            >>> main_builder.replicate(robot_builder, num_copies=4, spacing=(5.0, 5.0, 0.0))
+            # This creates 4 robots in a 2x2 grid, each in its own environment group.
+
+        Note:
+            - Each replicated copy is assigned to a new environment group.
+            - The spatial arrangement is determined by the nonzero components of `spacing`.
+              For example, (5,0,0) arranges along X, (5,5,0) in a 2D grid, (5,5,5) in a 3D grid.
+            - The root transform of each copy is offset by the computed spacing, but the original
+              builder's internal transforms are preserved.
+        """
         offsets = self._compute_replicate_offsets(num_copies, spacing)
         for i in range(num_copies):
             self.add_builder(builder, xform=wp.transform(offsets[i], wp.quat_identity()))
@@ -1550,7 +1784,7 @@ class ModelBuilder:
         enabled: bool = True,
     ) -> int:
         """Adds a joint equality constraint to the model.
-        Constrains the position or angle of one joint to be a quartic polynomial of another joint. Only scalar joint types (slide and hinge) can be used.
+        Constrains the position or angle of one joint to be a quartic polynomial of another joint. Only scalar joint types (prismatic and revolute) can be used.
 
         Args:
             joint1: Index of the first joint
@@ -3329,7 +3563,6 @@ class ModelBuilder:
             [tri_drag] * num_tris,
             [tri_lift] * num_tris,
         )
-
         for t in range(num_tris):
             area = areas[t]
 
@@ -3386,6 +3619,31 @@ class ModelBuilder:
         radius_mean: float | None = None,
         radius_std: float = 0.0,
     ):
+        """
+        Adds a regular 3D grid of particles to the model.
+
+        This helper function creates a grid of particles arranged in a rectangular lattice,
+        with optional random jitter and per-particle radius variation. The grid is defined
+        by its dimensions along each axis and the spacing between particles.
+
+        Args:
+            pos (Vec3): The world-space position of the grid origin.
+            rot (Quat): The rotation to apply to the grid (as a quaternion).
+            vel (Vec3): The initial velocity to assign to each particle.
+            dim_x (int): Number of particles along the X axis.
+            dim_y (int): Number of particles along the Y axis.
+            dim_z (int): Number of particles along the Z axis.
+            cell_x (float): Spacing between particles along the X axis.
+            cell_y (float): Spacing between particles along the Y axis.
+            cell_z (float): Spacing between particles along the Z axis.
+            mass (float): Mass to assign to each particle.
+            jitter (float): Maximum random offset to apply to each particle position.
+            radius_mean (float, optional): Mean radius for particles. If None, uses the builder's default.
+            radius_std (float, optional): Standard deviation for particle radii. If > 0, radii are sampled from a normal distribution.
+
+        Returns:
+            None
+        """
         radius_mean = radius_mean if radius_mean is not None else self.default_particle_radius
 
         rng = np.random.default_rng(42)
@@ -3662,8 +3920,22 @@ class ModelBuilder:
 
     def add_free_joints_to_floating_bodies(self, new_bodies: Iterable[int] | None = None):
         """
-        Adds a free joint to every body that is not a child in any joint and has mass > 0.
-        Should be called after all other joints have been added.
+        Adds a free joint to every rigid body that is not a child in any joint and has positive mass.
+
+        This method is typically called after all other joints have been added to the model.
+        It will iterate over the provided `new_bodies` (or all bodies if `new_bodies` is not None),
+        and for each body that is not already a child in any joint and has mass > 0,
+        it will add a free joint (6-DOF) to that body.
+
+        Args:
+            new_bodies (Iterable[int] or None, optional): The set of body indices to consider for adding free joints.
+                If None, this method will raise an error. Typically, this should be a set or list of body indices
+                that were recently added to the model.
+
+        Note:
+            - Bodies that are already a child in any joint will be skipped.
+            - Only bodies with strictly positive mass will receive a free joint.
+            - This is useful for ensuring that all floating (unconnected) bodies are properly articulated.
         """
         # set(self.joint_child) is connected_bodies
         floating_bodies = set(new_bodies) - set(self.joint_child)
@@ -3729,18 +4001,25 @@ class ModelBuilder:
         )
 
     def finalize(self, device: Devicelike | None = None, requires_grad: bool = False) -> Model:
-        """Convert this builder object to a concrete model for simulation.
+        """
+        Finalize the builder and create a concrete Model for simulation.
 
-        After building simulation elements this method should be called to transfer
-        all data to device memory ready for simulation.
+        This method transfers all simulation data from the builder to device memory,
+        returning a Model object ready for simulation. It should be called after all
+        elements (particles, bodies, shapes, joints, etc.) have been added to the builder.
 
         Args:
-            device: The simulation device to use, e.g.: 'cpu', 'cuda'
-            requires_grad: Whether to enable gradient computation for the model
+            device: The simulation device to use (e.g., 'cpu', 'cuda'). If None, uses the current Warp device.
+            requires_grad: If True, enables gradient computation for the model (for differentiable simulation).
 
         Returns:
+            Model: A fully constructed Model object containing all simulation data on the specified device.
 
-            A model object.
+        Notes:
+            - Performs validation and correction of rigid body inertia and mass properties.
+            - Closes all start-index arrays (e.g., for muscles, joints, articulations) with sentinel values.
+            - Sets up all arrays and properties required for simulation, including particles, bodies, shapes,
+              joints, springs, muscles, constraints, and collision/contact data.
         """
         from .collide import count_rigid_contact_points  # noqa: PLC0415
 
@@ -4067,7 +4346,23 @@ class ModelBuilder:
             return m
 
     def find_shape_contact_pairs(self, model: Model):
-        # find potential contact pairs based on collision groups and collision mask (pairwise filtering)
+        """
+        Identifies and stores all potential shape contact pairs for collision detection.
+
+        This method examines the collision groups and collision masks of all shapes in the model
+        to determine which pairs of shapes should be considered for contact generation. It respects
+        any user-specified collision filter pairs to avoid redundant or undesired contacts.
+
+        The resulting contact pairs are stored in the model as a 2D array of shape indices.
+
+        Args:
+            model (Model): The simulation model to which the contact pairs will be assigned.
+
+        Side Effects:
+            - Sets `model.shape_contact_pairs` to a wp.array of shape pairs (wp.vec2i).
+            - Sets `model.shape_contact_pair_count` to the number of contact pairs found.
+        """
+        # Copy the set of filtered-out shape pairs to avoid modifying the original
         filters = copy.copy(self.shape_collision_filter_pairs)
         contact_pairs = []
         # iterate over collision groups (islands)

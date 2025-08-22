@@ -92,6 +92,18 @@ class Style3DModelBuilder(ModelBuilder):
     """
 
     def __init__(self, up_axis: AxisType = Axis.Z, gravity: float = -9.81):
+        """
+        Initializes a new Style3DModelBuilder.
+
+        Args:
+            up_axis (AxisType, optional): The up axis for the simulation. Defaults to Axis.Z.
+            gravity (float, optional): The gravitational acceleration. Defaults to -9.81.
+
+        Attributes:
+            tri_aniso_ke (list): List of per-triangle anisotropic stretch stiffness values (weft, warp, shear).
+            edge_rest_area (list): List of bending edge areas, each representing the sum of the areas of the two triangles adjacent to the edge.
+            edge_bending_cot (list): List of bending edge cotangents, used for bending energy calculations.
+        """
         super().__init__(up_axis=up_axis, gravity=gravity)
 
         # triangles
@@ -107,7 +119,7 @@ class Style3DModelBuilder(ModelBuilder):
         update_num_env_count: bool = True,
         separate_collision_group: bool = True,
     ):
-        """Copies the data from `builder`, another `Style3DModelBuilder` to this `Style3DModelBuilder`.
+        """Copies the data from another `Style3DModelBuilder` to this `Style3DModelBuilder`.
 
         Args:
             builder (ModelBuilder): a model builder to add model data from.

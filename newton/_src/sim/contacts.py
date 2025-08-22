@@ -21,11 +21,42 @@ from warp.context import Devicelike
 
 
 class Contacts:
-    """Provides contact information to be consumed by a solver.
-    Stores the contact distance, position, frame, and geometry for each contact point.
+    """
+    Stores contact information for rigid and soft body collisions, to be consumed by a solver.
 
-    .. note::
-        This class definition is only a temporary solution and will change significantly in the future.
+    This class manages buffers for contact data such as positions, normals, thicknesses, and shape indices
+    for both rigid-rigid and soft-rigid contacts. The buffers are allocated on the specified device and can
+    optionally require gradients for differentiable simulation.
+
+    Attributes:
+        rigid_contact_count (wp.array): Number of rigid contacts (shape: [1], dtype: wp.int32).
+        rigid_contact_point_id (wp.array): Unique ID for each rigid contact point (shape: [rigid_contact_max], dtype: wp.int32).
+        rigid_contact_shape0 (wp.array): Indices of the first shape in each rigid contact (shape: [rigid_contact_max], dtype: wp.int32).
+        rigid_contact_shape1 (wp.array): Indices of the second shape in each rigid contact (shape: [rigid_contact_max], dtype: wp.int32).
+        rigid_contact_point0 (wp.array): Contact point on shape0 in world coordinates (shape: [rigid_contact_max, 3], dtype: wp.vec3).
+        rigid_contact_point1 (wp.array): Contact point on shape1 in world coordinates (shape: [rigid_contact_max, 3], dtype: wp.vec3).
+        rigid_contact_offset0 (wp.array): Offset from shape0's origin to contact point (shape: [rigid_contact_max, 3], dtype: wp.vec3).
+        rigid_contact_offset1 (wp.array): Offset from shape1's origin to contact point (shape: [rigid_contact_max, 3], dtype: wp.vec3).
+        rigid_contact_normal (wp.array): Contact normal at each rigid contact (shape: [rigid_contact_max, 3], dtype: wp.vec3).
+        rigid_contact_thickness0 (wp.array): Thickness at contact on shape0 (shape: [rigid_contact_max], dtype: wp.float32).
+        rigid_contact_thickness1 (wp.array): Thickness at contact on shape1 (shape: [rigid_contact_max], dtype: wp.float32).
+        rigid_contact_tids (wp.array): Thread IDs for each rigid contact (shape: [rigid_contact_max], dtype: wp.int32).
+        rigid_contact_force (wp.array): Contact force at each rigid contact (currently unused) (shape: [rigid_contact_max, 3], dtype: wp.vec3).
+
+        soft_contact_count (wp.array): Number of soft contacts (shape: [1], dtype: wp.int32).
+        soft_contact_particle (wp.array): Indices of soft particles in contact (shape: [soft_contact_max], dtype: int).
+        soft_contact_shape (wp.array): Indices of shapes in contact with soft particles (shape: [soft_contact_max], dtype: int).
+        soft_contact_body_pos (wp.array): Contact position on the body (shape: [soft_contact_max, 3], dtype: wp.vec3).
+        soft_contact_body_vel (wp.array): Contact velocity on the body (shape: [soft_contact_max, 3], dtype: wp.vec3).
+        soft_contact_normal (wp.array): Contact normal for soft contacts (shape: [soft_contact_max, 3], dtype: wp.vec3).
+        soft_contact_tids (wp.array): Thread IDs for each soft contact (shape: [soft_contact_max], dtype: int).
+
+        requires_grad (bool): Whether buffers require gradients.
+        rigid_contact_max (int): Maximum number of rigid contacts.
+        soft_contact_max (int): Maximum number of soft contacts.
+
+    Note:
+        This class is a temporary solution and its interface may change in the future.
     """
 
     def __init__(
@@ -67,7 +98,9 @@ class Contacts:
         self.soft_contact_max = soft_contact_max
 
     def clear(self):
-        """Clear all contacts."""
+        """
+        Clear all contact data, resetting counts and filling indices with -1.
+        """
         self.rigid_contact_count.zero_()
         self.rigid_contact_shape0.fill_(-1)
         self.rigid_contact_shape1.fill_(-1)
@@ -81,4 +114,7 @@ class Contacts:
 
     @property
     def device(self):
+        """
+        Returns the device on which the contact buffers are allocated.
+        """
         return self.rigid_contact_count.device

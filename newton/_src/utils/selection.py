@@ -123,6 +123,45 @@ class Slice:
 
 
 class ArticulationView:
+    """
+    ArticulationView provides a flexible interface for selecting and manipulating
+    subsets of articulations and their joints, links, and shapes within a Model.
+    It supports pattern-based selection, inclusion/exclusion filters, and convenient
+    attribute access and modification for simulation and control.
+
+    Args:
+        model (Model): The model containing the articulations.
+        pattern (str): Pattern to match articulation keys.
+        include_joints (list[str | int] | None): List of joint names, patterns, or indices to include.
+        exclude_joints (list[str | int] | None): List of joint names, patterns, or indices to exclude.
+        include_links (list[str | int] | None): List of link names, patterns, or indices to include.
+        exclude_links (list[str | int] | None): List of link names, patterns, or indices to exclude.
+        include_joint_types (list[int] | None): List of joint types to include.
+        exclude_joint_types (list[int] | None): List of joint types to exclude.
+        verbose (bool | None): If True, prints selection summary.
+
+    Attributes:
+        model (Model): The underlying model.
+        device: The device on which arrays are allocated.
+        count (int): Number of selected articulations.
+        joint_count (int): Number of selected joints.
+        joint_dof_count (int): Number of selected joint degrees of freedom.
+        joint_coord_count (int): Number of selected joint coordinates.
+        link_count (int): Number of selected links.
+        shape_count (int): Number of selected shapes.
+        joint_names (list[str]): Names of selected joints.
+        joint_dof_names (list[str]): Names of selected joint DOFs.
+        joint_coord_names (list[str]): Names of selected joint coordinates.
+        body_names (list[str]): Names of selected links.
+        shape_names (list[str]): Names of selected shapes.
+        body_shapes (list[list[int]]): Indices of shapes for each link.
+        is_fixed_base (bool): True if the root joint is fixed.
+        is_floating_base (bool): True if the root joint is floating.
+        articulation_indices (wp.array): Indices of selected articulations.
+        articulation_mask (wp.array): Mask of selected articulations in the model.
+        full_mask (wp.array): Mask of all articulations in this view.
+    """
+
     def __init__(
         self,
         model: Model,
@@ -651,28 +690,97 @@ class ArticulationView:
         else:
             return  # no-op
 
-    def get_link_transforms(self, source: Model | State):
+    def get_link_transforms(self, source: "Model | State"):
+        """
+        Get the world-space transforms of all links in the selected articulations.
+
+        Args:
+            source (Model | State): The source from which to retrieve the link transforms.
+
+        Returns:
+            array: The link transforms (dtype=wp.transform).
+        """
         return self._get_attribute_values("body_q", source)
 
-    def get_link_velocities(self, source: Model | State):
+    def get_link_velocities(self, source: "Model | State"):
+        """
+        Get the world-space spatial velocities of all links in the selected articulations.
+
+        Args:
+            source (Model | State): The source from which to retrieve the link velocities.
+
+        Returns:
+            array: The link velocities (dtype=wp.spatial_vector).
+        """
         return self._get_attribute_values("body_qd", source)
 
-    def get_dof_positions(self, source: Model | State):
+    def get_dof_positions(self, source: "Model | State"):
+        """
+        Get the joint coordinate positions (DoF positions) for the selected articulations.
+
+        Args:
+            source (Model | State): The source from which to retrieve the DoF positions.
+
+        Returns:
+            array: The joint coordinate positions (dtype=float).
+        """
         return self._get_attribute_values("joint_q", source)
 
-    def set_dof_positions(self, target: Model | State, values, mask=None):
+    def set_dof_positions(self, target: "Model | State", values, mask=None):
+        """
+        Set the joint coordinate positions (DoF positions) for the selected articulations.
+
+        Args:
+            target (Model | State): The target where to set the DoF positions.
+            values (array): The values to set (dtype=float).
+            mask (array, optional): Mask of articulations in this ArticulationView (all by default).
+        """
         self._set_attribute_values("joint_q", target, values, mask=mask)
 
-    def get_dof_velocities(self, source: Model | State):
+    def get_dof_velocities(self, source: "Model | State"):
+        """
+        Get the joint coordinate velocities (DoF velocities) for the selected articulations.
+
+        Args:
+            source (Model | State): The source from which to retrieve the DoF velocities.
+
+        Returns:
+            array: The joint coordinate velocities (dtype=float).
+        """
         return self._get_attribute_values("joint_qd", source)
 
-    def set_dof_velocities(self, target: Model | State, values, mask=None):
+    def set_dof_velocities(self, target: "Model | State", values, mask=None):
+        """
+        Set the joint coordinate velocities (DoF velocities) for the selected articulations.
+
+        Args:
+            target (Model | State): The target where to set the DoF velocities.
+            values (array): The values to set (dtype=float).
+            mask (array, optional): Mask of articulations in this ArticulationView (all by default).
+        """
         self._set_attribute_values("joint_qd", target, values, mask=mask)
 
-    def get_dof_forces(self, source: Control):
+    def get_dof_forces(self, source: "Control"):
+        """
+        Get the joint forces (DoF forces) for the selected articulations.
+
+        Args:
+            source (Control): The source from which to retrieve the DoF forces.
+
+        Returns:
+            array: The joint forces (dtype=float).
+        """
         return self._get_attribute_values("joint_f", source)
 
-    def set_dof_forces(self, target: Control, values, mask=None):
+    def set_dof_forces(self, target: "Control", values, mask=None):
+        """
+        Set the joint forces (DoF forces) for the selected articulations.
+
+        Args:
+            target (Control): The target where to set the DoF forces.
+            values (array): The values to set (dtype=float).
+            mask (array, optional): Mask of articulations in this ArticulationView (all by default).
+        """
         self._set_attribute_values("joint_f", target, values, mask=mask)
 
     # ========================================================================================
