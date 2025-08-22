@@ -98,11 +98,6 @@ class Style3DModelBuilder(ModelBuilder):
         Args:
             up_axis (AxisType, optional): The up axis for the simulation. Defaults to Axis.Z.
             gravity (float, optional): The gravitational acceleration. Defaults to -9.81.
-
-        Attributes:
-            tri_aniso_ke (list): List of per-triangle anisotropic stretch stiffness values (weft, warp, shear).
-            edge_rest_area (list): List of bending edge areas, each representing the sum of the areas of the two triangles adjacent to the edge.
-            edge_bending_cot (list): List of bending edge cotangents, used for bending energy calculations.
         """
         super().__init__(up_axis=up_axis, gravity=gravity)
 

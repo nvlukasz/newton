@@ -75,14 +75,6 @@ class SDF:
     An SDF is a volumetric representation of a shape, where each point in the volume
     stores the signed distance to the closest surface. This class encapsulates the
     SDF volume and its physical properties for use in simulation.
-
-    Attributes:
-        volume (wp.Volume | None): The underlying Warp volume object defining the SDF.
-        I (Mat33): 3x3 inertia matrix of the SDF (around the center of mass).
-        mass (float): The total mass of the SDF.
-        com (Vec3): The center of mass of the SDF.
-        has_inertia (bool): Whether the SDF has inertia (always True).
-        is_solid (bool): Whether the SDF is treated as a solid (always True).
     """
 
     def __init__(self, volume: wp.Volume | None = None, I=None, mass=1.0, com=None):
@@ -139,20 +131,6 @@ class Mesh:
             mesh_points = np.array(m.points())
             mesh_indices = np.array(m.face_vertex_indices(), dtype=np.int32).flatten()
             mesh = newton.Mesh(mesh_points, mesh_indices)
-
-    Attributes:
-        vertices (np.ndarray): Mesh 3D vertex positions, shape (N, 3).
-        indices (np.ndarray): Flattened triangle indices, shape (3 per triangle).
-        normals (np.ndarray or None): Optional per-vertex normals, shape (N, 3).
-        uvs (np.ndarray or None): Optional per-vertex UV coordinates, shape (N, 2).
-        I (Mat33): 3x3 inertia matrix of the mesh (about the center of mass, assuming density 1.0).
-        mass (float): Total mass of the mesh (assuming density 1.0).
-        com (Vec3): Center of mass of the mesh.
-        is_solid (bool): Whether the mesh is treated as a solid for inertia computation.
-        has_inertia (bool): Whether inertia properties are computed.
-        maxhullvert (int): Maximum number of vertices for convex hull approximation.
-        mesh (wp.Mesh or None): Simulation-ready Warp mesh object (after finalize()).
-        color (Vec3 or None): Optional per-mesh base color (values in [0, 1]).
     """
 
     def __init__(

@@ -139,27 +139,6 @@ class ArticulationView:
         include_joint_types (list[int] | None): List of joint types to include.
         exclude_joint_types (list[int] | None): List of joint types to exclude.
         verbose (bool | None): If True, prints selection summary.
-
-    Attributes:
-        model (Model): The underlying model.
-        device: The device on which arrays are allocated.
-        count (int): Number of selected articulations.
-        joint_count (int): Number of selected joints.
-        joint_dof_count (int): Number of selected joint degrees of freedom.
-        joint_coord_count (int): Number of selected joint coordinates.
-        link_count (int): Number of selected links.
-        shape_count (int): Number of selected shapes.
-        joint_names (list[str]): Names of selected joints.
-        joint_dof_names (list[str]): Names of selected joint DOFs.
-        joint_coord_names (list[str]): Names of selected joint coordinates.
-        body_names (list[str]): Names of selected links.
-        shape_names (list[str]): Names of selected shapes.
-        body_shapes (list[list[int]]): Indices of shapes for each link.
-        is_fixed_base (bool): True if the root joint is fixed.
-        is_floating_base (bool): True if the root joint is floating.
-        articulation_indices (wp.array): Indices of selected articulations.
-        articulation_mask (wp.array): Mask of selected articulations in the model.
-        full_mask (wp.array): Mask of all articulations in this view.
     """
 
     def __init__(

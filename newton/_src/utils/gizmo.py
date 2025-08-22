@@ -633,23 +633,6 @@ class GizmoSystem:
     which are used for translating and rotating objects in a 3D scene. It manages
     GPU resources for collision detection, handles mouse events for picking and
     dragging gizmo components, and updates the visual representation of gizmos.
-
-    Attributes:
-        renderer: Renderer used for drawing and coordinate transforms.
-        scale_factor: Global scaling for gizmo size.
-        rotation_sensitivity: Sensitivity for rotation interactions.
-        targets: Dictionary of gizmo targets, keyed by target_id.
-        drag_state: Current drag state (if any).
-        position_callback: Callback for position changes.
-        rotation_callback: Callback for rotation changes.
-        instancer: Instancer for rendering gizmo shapes.
-        next_body_id: Next available body id for new targets.
-        _needs_reallocation: Whether GPU/collision resources need to be reallocated.
-        device: Device for GPU arrays.
-        MAX_GIZMOS: Maximum number of gizmos.
-        MAX_CAPSULES: Maximum number of collision capsules.
-        num_active_capsules: Number of currently active collision capsules.
-        num_gizmos: Number of currently active gizmos.
     """
 
     def __init__(self, renderer, scale_factor=1.0, rotation_sensitivity=0.01, max_gizmos=800):

@@ -27,10 +27,6 @@ class ViewerNull(ViewerBase):
     or visualization. It is intended for use in headless or automated environments where
     visualization is not required. The viewer runs for a fixed number of frames and provides
     stub implementations for all logging and frame management methods.
-
-    Attributes:
-        num_frames (int): Maximum number of frames to run.
-        frame_count (int): Current frame count.
     """
 
     def __init__(self, num_frames=1000):

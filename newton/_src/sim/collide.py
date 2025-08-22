@@ -69,24 +69,6 @@ class CollisionPipeline:
     This class is responsible for allocating and managing buffers for collision detection,
     generating rigid and soft contacts between shapes and particles, and providing an interface
     for running the collision pipeline on a given simulation state.
-
-    Attributes:
-        contacts (Contacts | None): Buffer for storing generated contacts. Allocated as needed.
-        shape_count (int): Number of shapes in the simulation.
-        shape_pairs_filtered (wp.array): Array of filtered shape pairs to consider for collision.
-        shape_pairs_max (int): Maximum number of shape pairs.
-        rigid_contact_margin (float): Margin for rigid contact generation.
-        rigid_contact_max (int): Maximum number of rigid contacts to allocate.
-        rigid_pair_shape0 (wp.array): Buffer for the first shape index in each rigid contact pair.
-        rigid_pair_shape1 (wp.array): Buffer for the second shape index in each rigid contact pair.
-        rigid_pair_point_limit (None): Placeholder for future use (per-pair point limits).
-        rigid_pair_point_count (None): Placeholder for future use (per-pair point counts).
-        rigid_pair_point_id (wp.array): Buffer for point IDs in rigid contact pairs.
-        soft_contact_margin (float): Margin for soft contact generation.
-        soft_contact_max (int): Maximum number of soft contacts to allocate.
-        iterate_mesh_vertices (bool): Whether to iterate mesh vertices for collision.
-        requires_grad (bool): Whether to enable gradient computation.
-        edge_sdf_iter (int): Number of iterations for edge SDF collision.
     """
 
     def __init__(

@@ -50,23 +50,6 @@ class ViewerGL(ViewerBase):
         - Performance statistics overlay (FPS, object counts, etc.).
         - Selection panel for introspecting and filtering model attributes.
         - Extensible logging of meshes, lines, points, and arrays for custom visualization.
-
-    Attributes:
-        objects (dict): Mapping of object names to MeshGL/MeshInstancerGL instances.
-        lines (dict): Mapping of line batch names to LinesGL instances.
-        renderer (RendererGL): The OpenGL renderer and window manager.
-        camera (Camera): The current camera object.
-        picking (Picking): Picking helper for mouse-based object selection.
-        wind (Wind): Wind force controller.
-        ui (UI): ImGui-based user interface manager.
-        show_ui (bool): Whether to display the UI overlay.
-        _paused (bool): Whether the simulation is paused.
-        _last_state: Cached last simulation state for UI panels.
-        _last_control: Cached last control input for UI panels.
-        _selection_ui_state (dict): State for the selection panel UI.
-        _fps_history (list): Recent FPS values for statistics.
-        _current_fps (float): Most recent FPS value.
-        _point_mesh (MeshGL): Low-resolution sphere mesh for point rendering.
     """
 
     def __init__(self, width=1920, height=1080, vsync=False, headless=False):

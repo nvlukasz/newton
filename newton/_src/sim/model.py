@@ -47,9 +47,6 @@ class Model:
     Note:
         It is strongly recommended to use the :class:`ModelBuilder` to construct a Model.
         Direct instantiation and manual population of Model fields is possible but discouraged.
-
-    Attributes:
-        See the constructor for a full list of attributes and their descriptions.
     """
 
     def __init__(self, device: Devicelike | None = None):

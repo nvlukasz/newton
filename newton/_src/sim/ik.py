@@ -65,12 +65,6 @@ class IKSolver:
         What varies from problem to problem are (1) the corresponding row in `joint_q`, and
         (2) any per-problem data stored internally by the objectives, e.g., an array
         of target positions. Nothing else is duplicated.
-
-    Attributes:
-        model: Shared across problems.
-        objectives: Shared across problems.
-        joint_q: Per-problem data (each row).
-        objective parameters: Per-problem data (e.g., targets).
     """
 
     TILE_N_DOFS = None

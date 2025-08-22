@@ -135,15 +135,6 @@ class ContactSensor:
     and optionally a set of "counterpart" objects (bodies or shapes) to sense contact forces against.
     The sensor can be configured to report the total contact force or per-counterpart readings.
 
-    Attributes:
-        device: The device on which the sensor operates.
-        verbose: Whether to print verbose output.
-        n_shape_pairs (int): Number of unique shape pairs considered by the sensor.
-        sp_sorted (wp.array): Sorted array of shape pairs.
-        sp_reading, sp_ep_offset, sp_ep_count: Arrays for mapping shape pairs to readings.
-        shape (tuple): Shape of the net force array (num_sensors, num_readings).
-        net_force (wp.array): The net force array, shaped according to the sensor configuration.
-
     Raises:
         ValueError: If the configuration of sensing/counterpart objects is invalid.
     """

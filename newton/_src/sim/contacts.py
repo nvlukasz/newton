@@ -28,33 +28,6 @@ class Contacts:
     for both rigid-rigid and soft-rigid contacts. The buffers are allocated on the specified device and can
     optionally require gradients for differentiable simulation.
 
-    Attributes:
-        rigid_contact_count (wp.array): Number of rigid contacts (shape: [1], dtype: wp.int32).
-        rigid_contact_point_id (wp.array): Unique ID for each rigid contact point (shape: [rigid_contact_max], dtype: wp.int32).
-        rigid_contact_shape0 (wp.array): Indices of the first shape in each rigid contact (shape: [rigid_contact_max], dtype: wp.int32).
-        rigid_contact_shape1 (wp.array): Indices of the second shape in each rigid contact (shape: [rigid_contact_max], dtype: wp.int32).
-        rigid_contact_point0 (wp.array): Contact point on shape0 in world coordinates (shape: [rigid_contact_max, 3], dtype: wp.vec3).
-        rigid_contact_point1 (wp.array): Contact point on shape1 in world coordinates (shape: [rigid_contact_max, 3], dtype: wp.vec3).
-        rigid_contact_offset0 (wp.array): Offset from shape0's origin to contact point (shape: [rigid_contact_max, 3], dtype: wp.vec3).
-        rigid_contact_offset1 (wp.array): Offset from shape1's origin to contact point (shape: [rigid_contact_max, 3], dtype: wp.vec3).
-        rigid_contact_normal (wp.array): Contact normal at each rigid contact (shape: [rigid_contact_max, 3], dtype: wp.vec3).
-        rigid_contact_thickness0 (wp.array): Thickness at contact on shape0 (shape: [rigid_contact_max], dtype: wp.float32).
-        rigid_contact_thickness1 (wp.array): Thickness at contact on shape1 (shape: [rigid_contact_max], dtype: wp.float32).
-        rigid_contact_tids (wp.array): Thread IDs for each rigid contact (shape: [rigid_contact_max], dtype: wp.int32).
-        rigid_contact_force (wp.array): Contact force at each rigid contact (currently unused) (shape: [rigid_contact_max, 3], dtype: wp.vec3).
-
-        soft_contact_count (wp.array): Number of soft contacts (shape: [1], dtype: wp.int32).
-        soft_contact_particle (wp.array): Indices of soft particles in contact (shape: [soft_contact_max], dtype: int).
-        soft_contact_shape (wp.array): Indices of shapes in contact with soft particles (shape: [soft_contact_max], dtype: int).
-        soft_contact_body_pos (wp.array): Contact position on the body (shape: [soft_contact_max, 3], dtype: wp.vec3).
-        soft_contact_body_vel (wp.array): Contact velocity on the body (shape: [soft_contact_max, 3], dtype: wp.vec3).
-        soft_contact_normal (wp.array): Contact normal for soft contacts (shape: [soft_contact_max, 3], dtype: wp.vec3).
-        soft_contact_tids (wp.array): Thread IDs for each soft contact (shape: [soft_contact_max], dtype: int).
-
-        requires_grad (bool): Whether buffers require gradients.
-        rigid_contact_max (int): Maximum number of rigid contacts.
-        soft_contact_max (int): Maximum number of soft contacts.
-
     .. note::
         This class is a temporary solution and its interface may change in the future.
     """
