@@ -1868,7 +1868,7 @@ class IKRotationObjective(IKObjective):
 
         Parameters
         ----------
-        model : Articulation
+        model : Model
             The shared articulation model.
         jacobian_mode : IKJacobianMode
             The Jacobian computation mode.

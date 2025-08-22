@@ -55,7 +55,7 @@ class Contacts:
         rigid_contact_max (int): Maximum number of rigid contacts.
         soft_contact_max (int): Maximum number of soft contacts.
 
-    Note:
+    .. note::
         This class is a temporary solution and its interface may change in the future.
     """
 

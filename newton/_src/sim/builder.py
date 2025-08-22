@@ -3921,15 +3921,8 @@ class ModelBuilder:
         """
         Adds a free joint to every rigid body that is not a child in any joint and has positive mass.
 
-        This method is typically called after all other joints have been added to the model.
-        It will iterate over the provided `new_bodies` (or all bodies if `new_bodies` is not None),
-        and for each body that is not already a child in any joint and has mass > 0,
-        it will add a free joint (6-DOF) to that body.
-
         Args:
             new_bodies (Iterable[int] or None, optional): The set of body indices to consider for adding free joints.
-                If None, this method will raise an error. Typically, this should be a set or list of body indices
-                that were recently added to the model.
 
         Note:
             - Bodies that are already a child in any joint will be skipped.

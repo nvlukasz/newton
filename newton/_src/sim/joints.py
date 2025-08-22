@@ -38,10 +38,10 @@ class JointType(IntEnum):
     """Free joint: allows full 6-DoF motion (translation and rotation, 7 coordinates)."""
 
     DISTANCE = 5
-    """Distance constraint: maintains a fixed distance between two points (6 DoF, 7 coordinates)."""
+    """Distance joint: keeps two bodies at a distance within its joint limits (6 DoF, 7 coordinates)."""
 
     D6 = 6
-    """6-DoF joint: allows translation and rotation about all axes, with individual axis locking."""
+    """6-DoF joint: Generic joint with up to 3 translational and 3 rotational degrees of freedom."""
 
 
 def get_joint_dof_count(joint_type: int, num_axes: int) -> tuple[int, int]:
@@ -51,7 +51,7 @@ def get_joint_dof_count(joint_type: int, num_axes: int) -> tuple[int, int]:
 
     Args:
         joint_type (int): The type of the joint (see :class:`JointType`).
-        num_axes (int): The number of axes for the joint (typically 1 for prismatic/revolute, 3 for D6, etc).
+        num_axes (int): The number of axes for the joint.
 
     Returns:
         tuple[int, int]: A tuple (dof_count, coord_count) where:
