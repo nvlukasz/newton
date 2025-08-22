@@ -68,10 +68,9 @@ class ModelBuilder:
     """A helper class for building simulation models at runtime.
 
     Use the ModelBuilder to construct a simulation scene. The ModelBuilder
-    and builds the scene representation using standard Python data structures (lists),
-    this means it is not differentiable. Once :meth:`finalize`
-    has been called the ModelBuilder transfers all data to Warp tensors and returns
-    an object that may be used for simulation.
+    represents the scene using standard Python data structures like lists,
+    which are convenient but unsuitable for efficient simulation.
+    Call :meth:`finalize` to construct a simulation-ready Model.
 
     Example
     -------
