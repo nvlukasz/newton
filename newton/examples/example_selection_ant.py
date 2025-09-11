@@ -75,7 +75,7 @@ class Example:
         # ===========================================================
         # create articulation view
         # ===========================================================
-        self.ants = ArticulationView(self.model, "/World/envs/*/Robot/torso", include_free_joint=True)
+        self.ants = ArticulationView(self.model, "/World/envs/*/Robot/torso")
 
         print(f"articulation count: {self.ants.count}")
         print(f"link_count:         {self.ants.link_count}")
@@ -94,27 +94,14 @@ class Example:
         dof_limit_upper = wp.to_torch(self.ants.get_attribute("joint_limit_upper", self.model))
         default_dof_transforms = 0.5 * (dof_limit_lower + dof_limit_upper)
 
-        if self.ants.include_free_joint:
-            # combined root and dof transforms
-            self.default_transforms = wp.to_torch(self.ants.get_attribute("joint_q", self.model)).clone()
-            self.default_transforms[:, 2] = 0.8  # z-coordinate of articulation root
-            self.default_transforms[:, 7:] = default_dof_transforms
-            # combined root and dof velocities
-            self.default_velocities = wp.to_torch(self.ants.get_attribute("joint_qd", self.model)).clone()
-            self.default_velocities[:, 2] = 0.5 * math.pi  # rotate about z-axis
-            self.default_velocities[:, 5] = 5.0  # move up z-axis
-        else:
-            # root transforms
-            self.default_root_transforms = wp.to_torch(self.ants.get_root_transforms(self.model)).clone()
-            self.default_root_transforms[:, 2] = 0.8
-            # dof transforms
-            self.default_dof_transforms = default_dof_transforms
-            # root velocities
-            self.default_root_velocities = wp.to_torch(self.ants.get_root_velocities(self.model)).clone()
-            self.default_root_velocities[:, 2] = 0.5 * math.pi  # rotate about z-axis
-            self.default_root_velocities[:, 5] = 5.0  # move up z-axis
-            # dof velocities
-            self.default_dof_velocities = wp.to_torch(self.ants.get_attribute("joint_qd", self.model)).clone()
+        # combined root and dof transforms
+        self.default_transforms = wp.to_torch(self.ants.get_attribute("joint_q", self.model)).clone()
+        self.default_transforms[:, 2] = 0.8  # z-coordinate of articulation root
+        self.default_transforms[:, 7:] = default_dof_transforms
+        # combined root and dof velocities
+        self.default_velocities = wp.to_torch(self.ants.get_attribute("joint_qd", self.model)).clone()
+        self.default_velocities[:, 2] = 0.5 * math.pi  # rotate about z-axis
+        self.default_velocities[:, 5] = 5.0  # move up z-axis
 
         # create disjoint index groups to alternate between
         all_indices = torch.arange(num_envs, dtype=torch.int32)
@@ -151,10 +138,9 @@ class Example:
         # =========================
         # apply random controls
         # =========================
-        joint_forces = 300.0 - 600.0 * torch.rand((self.num_envs, 8))
-        if self.ants.include_free_joint:
-            # include the leading root joint (pad with zeros)
-            joint_forces = torch.cat([torch.zeros((self.num_envs, 6)), joint_forces], axis=1)
+        joint_forces = wp.to_torch(self.ants.get_attribute("joint_f", self.control))
+        # skip the free joint
+        joint_forces[:, 6:] = 300.0 - 600.0 * torch.rand((self.num_envs, self.ants.joint_axis_count))
         self.ants.set_attribute("joint_f", self.control, joint_forces)
 
         with wp.ScopedTimer("step", active=False):
@@ -168,18 +154,8 @@ class Example:
         # ==============================
         # set transforms and velocities
         # ==============================
-        if self.ants.include_free_joint:
-            # set root and dof transforms together
-            self.ants.set_attribute("joint_q", self.state_0, self.default_transforms, indices=indices)
-            # set root and dof velocities together
-            self.ants.set_attribute("joint_qd", self.state_0, self.default_velocities, indices=indices)
-        else:
-            # set root and dof transforms separately
-            self.ants.set_root_transforms(self.state_0, self.default_root_transforms, indices=indices)
-            self.ants.set_attribute("joint_q", self.state_0, self.default_dof_transforms, indices=indices)
-            # set root and dof velocities separately
-            self.ants.set_root_velocities(self.state_0, self.default_root_velocities, indices=indices)
-            self.ants.set_attribute("joint_qd", self.state_0, self.default_dof_velocities, indices=indices)
+        self.ants.set_attribute("joint_q", self.state_0, self.default_transforms, indices=indices)
+        self.ants.set_attribute("joint_qd", self.state_0, self.default_velocities, indices=indices)
 
         if not isinstance(self.solver, newton.solvers.MuJoCoSolver):
             self.ants.eval_fk(self.state_0, indices=indices)
