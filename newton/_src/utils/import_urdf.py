@@ -401,6 +401,8 @@ def parse_urdf(
     else:
         base_link_name = next(iter(link_index.keys()))
     root = link_index[base_link_name]
+    root_floating_joint = None
+    root_floating_xform = None
     if base_joint is not None:
         # in case of a given base joint, the position is applied first, the rotation only
         # after the base joint itself to not rotate its axis
@@ -437,19 +439,24 @@ def parse_urdf(
                 "base_joint must be a comma-separated string of joint axes or a dict with joint parameters"
             )
     elif floating:
-        builder.add_joint_free(root, key="floating_base")
+        # builder.add_joint_free(root, key="floating_base")
 
-        # set dofs to transform
-        start = builder.joint_q_start[root]
+        # # set dofs to transform
+        # start = builder.joint_q_start[root]
 
-        builder.joint_q[start + 0] = xform.p[0]
-        builder.joint_q[start + 1] = xform.p[1]
-        builder.joint_q[start + 2] = xform.p[2]
+        # builder.joint_q[start + 0] = xform.p[0]
+        # builder.joint_q[start + 1] = xform.p[1]
+        # builder.joint_q[start + 2] = xform.p[2]
 
-        builder.joint_q[start + 3] = xform.q[0]
-        builder.joint_q[start + 4] = xform.q[1]
-        builder.joint_q[start + 5] = xform.q[2]
-        builder.joint_q[start + 6] = xform.q[3]
+        # builder.joint_q[start + 3] = xform.q[0]
+        # builder.joint_q[start + 4] = xform.q[1]
+        # builder.joint_q[start + 5] = xform.q[2]
+        # builder.joint_q[start + 6] = xform.q[3]
+
+        print(f"~!~!~! {xform}")
+
+        root_floating_joint = builder.add_joint_free(root, key="floating_base")
+        root_floating_xform = xform
     else:
         builder.add_joint_fixed(-1, root, parent_xform=xform, key="fixed_base")
 
@@ -538,6 +545,23 @@ def parse_urdf(
         for i in range(start_shape_count, end_shape_count):
             for j in range(i + 1, end_shape_count):
                 builder.shape_collision_filter_pairs.append((i, j))
+
+    builder.end_articulation()
+
+    if root_floating_joint is not None:
+        # set dofs to transform
+        start = builder.joint_q_start[root_floating_joint]
+
+        print(f"~!~!~! {root_floating_xform}")
+
+        builder.joint_q[start + 0] = root_floating_xform.p[0]
+        builder.joint_q[start + 1] = root_floating_xform.p[1]
+        builder.joint_q[start + 2] = root_floating_xform.p[2]
+
+        builder.joint_q[start + 3] = root_floating_xform.q[0]
+        builder.joint_q[start + 4] = root_floating_xform.q[1]
+        builder.joint_q[start + 5] = root_floating_xform.q[2]
+        builder.joint_q[start + 6] = root_floating_xform.q[3]
 
     if collapse_fixed_joints:
         builder.collapse_fixed_joints()

@@ -36,6 +36,7 @@ def test_revolute_controller(test: TestJointController, device, solver_fn, joint
     box_mass = 1.0
     box_inertia = wp.mat33((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
     # easy case: identity transform, zero center of mass
+    builder.add_articulation()
     b = builder.add_body(armature=0.0, I_m=box_inertia, mass=box_mass)
     builder.add_shape_box(body=b, hx=0.2, hy=0.2, hz=0.2, cfg=newton.ModelBuilder.ShapeConfig(density=1))
     # Create a revolute joint
@@ -55,6 +56,7 @@ def test_revolute_controller(test: TestJointController, device, solver_fn, joint
         target_ke=2000.0,
         target_kd=500.0,
     )
+    builder.end_articulation()
 
     model = builder.finalize(device=device)
     model.ground = False

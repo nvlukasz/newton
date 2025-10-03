@@ -407,6 +407,7 @@ class ModelBuilder:
         self.body_key = []
         self.body_shapes = {-1: []}  # mapping from body to shapes
         self.body_group = []  # environment group index for each body
+        # self.body_joint = []
 
         # rigid joints
         self.joint_parent = []  # index of the parent body                      (constant)
@@ -445,8 +446,10 @@ class ModelBuilder:
         self.joint_group = []  # environment group index for each joint
 
         self.articulation_start = []
+        # self.articulation_end = []
         self.articulation_key = []
         self.articulation_group = []  # environment group index for each articulation
+        self.articulation_builder = None
 
         self.joint_dof_count = 0
         self.joint_coord_count = 0
@@ -642,12 +645,28 @@ class ModelBuilder:
             self.add_builder(builder, xform=xform)
 
     def add_articulation(self, key: str | None = None):
+        # !!!
+        if self.articulation_builder is not None:
+            raise RuntimeError("Already started articulation")
+        self.articulation_builder = ModelBuilder.ArticulationBuilder(self.joint_count)
+
         # an articulation is a set of contiguous bodies bodies from articulation_start[i] to articulation_start[i+1]
         # these are used for computing forward kinematics e.g.:
         # articulations are automatically 'closed' when calling finalize
         self.articulation_start.append(self.joint_count)
         self.articulation_key.append(key or f"articulation_{self.articulation_count}")
         self.articulation_group.append(self.current_env_group)
+
+    def end_articulation(self):
+        if self.articulation_builder is None:
+            raise RuntimeError("Articulation not started")
+
+        for joint_desc in self.articulation_builder.joint_descs:
+            self._add_joint(joint_desc)
+
+        # self.articulation_end.append(self.joint_count)
+
+        self.articulation_builder = None
 
     # region importers
     def add_urdf(
@@ -945,6 +964,9 @@ class ModelBuilder:
                 Note: environment=-1 does not increase num_envs even when update_num_env_count=True.
         """
 
+        if builder.articulation_builder is not None:
+            raise RuntimeError("Builder has an unfinished articulation")
+
         if builder.up_axis != self.up_axis:
             raise ValueError("Cannot add a builder with a different up axis.")
 
@@ -1238,13 +1260,78 @@ class ModelBuilder:
         self.body_key.append(key or f"body_{body_id}")
         self.body_shapes[body_id] = []
         self.body_group.append(self.current_env_group)
+
+        if self.articulation_builder is None:
+            self.add_articulation(key=key)
+            self.add_joint_free(body_id)
+            self.end_articulation()
+        else:
+            self.add_joint_free(body_id)
+
         return body_id
+
+    class JointDesc:
+        def __init__(
+            self,
+            joint_type: JointType,
+            parent: int,
+            child: int,
+            linear_axes: list[ModelBuilder.JointDofConfig] | None = None,
+            angular_axes: list[ModelBuilder.JointDofConfig] | None = None,
+            key: str | None = None,
+            parent_xform: Transform | None = None,
+            child_xform: Transform | None = None,
+            collision_filter_parent: bool = True,
+            enabled: bool = True,                
+        ):
+            self.joint_type = joint_type
+            self.parent = parent
+            self.child = child
+            self.key = key
+            self.collision_filter_parent = collision_filter_parent
+            self.enabled = enabled
+            self.linear_axes = linear_axes
+            self.angular_axes = angular_axes
+            self.parent_xform = parent_xform
+            self.child_xform = child_xform
+
+    class ArticulationBuilder:
+        def __init__(self, joint_start: int):
+            self.joint_start = joint_start
+            self.joint_descs = []
+            self.body_joint_idx = {}
+
+        def add_joint_desc(self, joint_desc: ModelBuilder.JointDesc):
+            # check if this joint replaces a default free joint
+            joint_idx = self.body_joint_idx.get(joint_desc.child)
+            if joint_idx is None:
+                # print(f"~!~!~! joint {joint_desc.key} is a new joint")
+                self.body_joint_idx[joint_desc.child] = self.joint_count
+                # adding a new joint for this child body
+                self.joint_descs.append(joint_desc)
+                return self.joint_count
+            else:
+                old_joint_desc: ModelBuilder.JointDesc = self.joint_descs[joint_idx]
+                if old_joint_desc.joint_type == JointType.FREE:
+                    # print(f"~!~!~! joint {joint_desc.key} replaces a free joint")
+                    # replace default free joint
+                    self.joint_descs[joint_idx] = joint_desc
+                    return joint_idx
+                else:
+                    # print(f"~!~!~! joint {joint_desc.key} is an extra joint")
+                    # adding a new joint for this child body
+                    self.joint_descs.append(joint_desc)
+                    return self.joint_count
+
+        @property
+        def joint_count(self):
+            return len(self.joint_descs)
 
     # region joints
 
     def add_joint(
         self,
-        joint_type: wp.constant,
+        joint_type: JointType,
         parent: int,
         child: int,
         linear_axes: list[JointDofConfig] | None = None,
@@ -1273,6 +1360,10 @@ class ModelBuilder:
         Returns:
             The index of the added joint.
         """
+
+        if self.articulation_builder is None:
+            raise RuntimeError("Joints must be part of an articulation")
+
         if linear_axes is None:
             linear_axes = []
         if angular_axes is None:
@@ -1287,21 +1378,39 @@ class ModelBuilder:
         else:
             child_xform = wp.transform(*child_xform)
 
-        if len(self.articulation_start) == 0:
-            # automatically add an articulation if none exists
-            self.add_articulation()
-        self.joint_type.append(joint_type)
-        self.joint_parent.append(parent)
-        if child not in self.joint_parents:
-            self.joint_parents[child] = [parent]
+        joint_desc = ModelBuilder.JointDesc(
+            joint_type,
+            parent,
+            child,
+            linear_axes=linear_axes,
+            angular_axes=angular_axes,
+            key=key,
+            parent_xform=parent_xform,
+            child_xform=child_xform,
+            collision_filter_parent=collision_filter_parent,
+            enabled=enabled,
+        )
+
+        arti_joint_idx = self.articulation_builder.add_joint_desc(joint_desc)
+
+        return self.joint_count + arti_joint_idx
+
+    def _add_joint(self, desc: JointDesc):
+
+        joint_id = self.joint_count
+
+        self.joint_type.append(desc.joint_type)
+        self.joint_parent.append(desc.parent)
+        if desc.child not in self.joint_parents:
+            self.joint_parents[desc.child] = [desc.parent]
         else:
-            self.joint_parents[child].append(parent)
-        self.joint_child.append(child)
-        self.joint_X_p.append(wp.transform(parent_xform))
-        self.joint_X_c.append(wp.transform(child_xform))
-        self.joint_key.append(key or f"joint_{self.joint_count}")
-        self.joint_dof_dim.append((len(linear_axes), len(angular_axes)))
-        self.joint_enabled.append(enabled)
+            self.joint_parents[desc.child].append(desc.parent)
+        self.joint_child.append(desc.child)
+        self.joint_X_p.append(wp.transform(desc.parent_xform))
+        self.joint_X_c.append(wp.transform(desc.child_xform))
+        self.joint_key.append(desc.key or f"joint_{self.joint_count}")
+        self.joint_dof_dim.append((len(desc.linear_axes), len(desc.angular_axes)))
+        self.joint_enabled.append(desc.enabled)
         self.joint_group.append(self.current_env_group)
 
         def add_axis_dim(dim: ModelBuilder.JointDofConfig):
@@ -1325,12 +1434,12 @@ class ModelBuilder:
             else:
                 self.joint_limit_upper.append(1e6)
 
-        for dim in linear_axes:
+        for dim in desc.linear_axes:
             add_axis_dim(dim)
-        for dim in angular_axes:
+        for dim in desc.angular_axes:
             add_axis_dim(dim)
 
-        dof_count, coord_count = get_joint_dof_count(joint_type, len(linear_axes) + len(angular_axes))
+        dof_count, coord_count = get_joint_dof_count(desc.joint_type, len(desc.linear_axes) + len(desc.angular_axes))
 
         for _ in range(coord_count):
             self.joint_q.append(0.0)
@@ -1338,7 +1447,7 @@ class ModelBuilder:
             self.joint_qd.append(0.0)
             self.joint_f.append(0.0)
 
-        if joint_type == JointType.FREE or joint_type == JointType.DISTANCE or joint_type == JointType.BALL:
+        if desc.joint_type == JointType.FREE or desc.joint_type == JointType.DISTANCE or desc.joint_type == JointType.BALL:
             # ensure that a valid quaternion is used for the angular dofs
             self.joint_q[-1] = 1.0
 
@@ -1348,16 +1457,20 @@ class ModelBuilder:
         self.joint_dof_count += dof_count
         self.joint_coord_count += coord_count
 
-        if collision_filter_parent and parent > -1:
-            for child_shape in self.body_shapes[child]:
-                for parent_shape in self.body_shapes[parent]:
+        if desc.collision_filter_parent and desc.parent > -1:
+            for child_shape in self.body_shapes[desc.child]:
+                for parent_shape in self.body_shapes[desc.parent]:
                     # Ensure canonical order (smaller, larger) for consistent lookup
                     a, b = parent_shape, child_shape
                     if a > b:
                         a, b = b, a
                     self.shape_collision_filter_pairs.append((a, b))
 
-        return self.joint_count - 1
+        # TODO: is this right? combine with above?
+        if desc.joint_type == JointType.FREE:
+            q_start = self.joint_q_start[joint_id]
+            # set the positional dofs to the child body's transform
+            self.joint_q[q_start : q_start + 7] = list(self.body_q[desc.child])
 
     def add_joint_revolute(
         self,
@@ -1630,7 +1743,32 @@ class ModelBuilder:
 
         """
 
-        joint_id = self.add_joint(
+        # joint_id = self.add_joint(
+        #     JointType.FREE,
+        #     parent,
+        #     child,
+        #     parent_xform=parent_xform,
+        #     child_xform=child_xform,
+        #     key=key,
+        #     collision_filter_parent=collision_filter_parent,
+        #     enabled=enabled,
+        #     linear_axes=[
+        #         ModelBuilder.JointDofConfig.create_unlimited(Axis.X),
+        #         ModelBuilder.JointDofConfig.create_unlimited(Axis.Y),
+        #         ModelBuilder.JointDofConfig.create_unlimited(Axis.Z),
+        #     ],
+        #     angular_axes=[
+        #         ModelBuilder.JointDofConfig.create_unlimited(Axis.X),
+        #         ModelBuilder.JointDofConfig.create_unlimited(Axis.Y),
+        #         ModelBuilder.JointDofConfig.create_unlimited(Axis.Z),
+        #     ],
+        # )
+        # q_start = self.joint_q_start[joint_id]
+        # # set the positional dofs to the child body's transform
+        # self.joint_q[q_start : q_start + 7] = list(self.body_q[child])
+        # return joint_id
+
+        return self.add_joint(
             JointType.FREE,
             parent,
             child,
@@ -1650,10 +1788,6 @@ class ModelBuilder:
                 ModelBuilder.JointDofConfig.create_unlimited(Axis.Z),
             ],
         )
-        q_start = self.joint_q_start[joint_id]
-        # set the positional dofs to the child body's transform
-        self.joint_q[q_start : q_start + 7] = list(self.body_q[child])
-        return joint_id
 
     def add_joint_distance(
         self,
@@ -4071,6 +4205,9 @@ class ModelBuilder:
               joints, springs, muscles, constraints, and collision/contact data.
         """
         from .collide import count_rigid_contact_points  # noqa: PLC0415
+
+        if self.articulation_builder is not None:
+            raise RuntimeError("Unfinished articulation")
 
         # ensure the env count is set correctly
         self.num_envs = max(1, self.num_envs)

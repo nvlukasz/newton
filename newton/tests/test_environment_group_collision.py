@@ -271,6 +271,8 @@ class TestEnvironmentGroupCollision(unittest.TestCase):
         # This naturally creates non-canonical filter pairs!
         builder = ModelBuilder()
 
+        builder.add_articulation()
+
         # Create child body with shapes first
         child_body = builder.add_body(xform=wp.transform_identity())
         builder.add_shape_box(body=child_body, hx=0.5, hy=0.5, hz=0.5)  # index 0
@@ -292,6 +294,8 @@ class TestEnvironmentGroupCollision(unittest.TestCase):
             axis=(0, 0, 1),
             collision_filter_parent=True,  # This triggers parent-child shape filtering
         )
+
+        builder.end_articulation()
 
         # Also test merging builders
         sub_builder = ModelBuilder()

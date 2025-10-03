@@ -133,33 +133,37 @@ class TestModel(unittest.TestCase):
         # only fixed joints
         builder.add_articulation()
         add_three_cubes(builder)
+        builder.end_articulation()
         assert builder.joint_count == 3
         assert builder.body_count == 3
 
         # fixed joints followed by a non-fixed joint
         builder.add_articulation()
         last_body = add_three_cubes(builder)
-        assert builder.joint_count == 6
-        assert builder.body_count == 6
-        assert builder.articulation_count == 2
         b3 = builder.add_body()
         builder.add_shape_box(
             body=b3, hx=0.5, hy=0.5, hz=0.5, cfg=shape_cfg, xform=wp.transform(wp.vec3(1.0, 2.0, 3.0))
         )
         builder.add_joint_revolute(parent=last_body, child=b3, axis=wp.vec3(0.0, 1.0, 0.0))
+        builder.end_articulation()
+        assert builder.joint_count == 7
+        assert builder.body_count == 7
+        assert builder.articulation_count == 2
 
         # a non-fixed joint followed by fixed joints
         builder.add_articulation()
         free_xform = wp.transform(wp.vec3(1.0, 2.0, 3.0), wp.quat_rpy(0.4, 0.5, 0.6))
         b4 = builder.add_body(xform=free_xform)
         builder.add_shape_box(body=b4, hx=0.5, hy=0.5, hz=0.5, cfg=shape_cfg)
-        builder.add_joint_free(parent=-1, child=b4, parent_xform=wp.transform(wp.vec3(0.0, -1.0, 0.0)))
-        assert_np_equal(builder.body_q[b4], np.array(free_xform))
-        assert_np_equal(builder.joint_q[-7:], np.array(free_xform))
-        assert builder.joint_count == 8
-        assert builder.body_count == 8
-        assert builder.articulation_count == 3
+        j4 = builder.add_joint_free(parent=-1, child=b4, parent_xform=wp.transform(wp.vec3(0.0, -1.0, 0.0)))
         add_three_cubes(builder, parent_body=b4)
+        builder.end_articulation()
+        assert_np_equal(builder.body_q[b4], np.array(free_xform))
+        j4_start = builder.joint_q_start[j4]
+        assert_np_equal(builder.joint_q[j4_start:j4_start+7], np.array(free_xform))
+        assert builder.joint_count == 11
+        assert builder.body_count == 11
+        assert builder.articulation_count == 3
 
         builder.collapse_fixed_joints()
 
@@ -293,6 +297,7 @@ class TestModel(unittest.TestCase):
         main_builder = ModelBuilder()
 
         # Create global entities (group -1)
+        # NOTE: adding a body automatically adds a free joint and an articulation.
         main_builder.current_env_group = -1
         ground_body = main_builder.add_body(xform=wp.transform(wp.vec3(0.0, 0.0, -1.0), wp.quat_identity()), mass=0.0)
         main_builder.add_shape_box(
@@ -319,6 +324,7 @@ class TestModel(unittest.TestCase):
             env_builder.add_shape_sphere(
                 body=b2, xform=wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()), radius=0.05
             )
+            env_builder.end_articulation()
 
             return env_builder
 
@@ -348,8 +354,8 @@ class TestModel(unittest.TestCase):
         self.assertEqual(model.particle_count, 7)  # 1 global + 2*3 = 7
         self.assertEqual(model.body_count, 7)  # 1 global + 2*3 = 7
         self.assertEqual(model.shape_count, 7)  # 1 global + 2*3 = 7
-        self.assertEqual(model.joint_count, 3)  # 0 global + 1*3 = 3
-        self.assertEqual(model.articulation_count, 3)  # 0 global + 1*3 = 3
+        self.assertEqual(model.joint_count, 7)  # 1 global + 2*3 = 7
+        self.assertEqual(model.articulation_count, 4)  # 1 global + 1*3 = 4
 
         # Verify group assignments
         particle_groups = model.particle_group.numpy() if model.particle_group is not None else []
@@ -384,14 +390,16 @@ class TestModel(unittest.TestCase):
             self.assertTrue(np.all(shape_groups[5:7] == 2))
 
         if len(joint_groups) > 0:
-            self.assertEqual(joint_groups[0], 0)
-            self.assertEqual(joint_groups[1], 1)
-            self.assertEqual(joint_groups[2], 2)
+            self.assertEqual(joint_groups[0], -1)
+            self.assertTrue(np.all(joint_groups[1:3] == 0))
+            self.assertTrue(np.all(joint_groups[3:5] == 1))
+            self.assertTrue(np.all(joint_groups[5:7] == 2))
 
         if len(articulation_groups) > 0:
-            self.assertEqual(articulation_groups[0], 0)
-            self.assertEqual(articulation_groups[1], 1)
-            self.assertEqual(articulation_groups[2], 2)
+            self.assertEqual(articulation_groups[0], -1)
+            self.assertEqual(articulation_groups[1], 0)
+            self.assertEqual(articulation_groups[2], 1)
+            self.assertEqual(articulation_groups[3], 2)
 
     def test_num_envs_tracking(self):
         """Test that num_envs is properly tracked when using add_builder with environment groups."""
@@ -439,6 +447,7 @@ class TestModel(unittest.TestCase):
 
         # Environment 0: Chain with fixed joints
         builder.current_env_group = 0
+        builder.add_articulation()
         b0_0 = builder.add_body(xform=wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()), mass=1.0)
         b0_1 = builder.add_body(xform=wp.transform(wp.vec3(1.0, 0.0, 0.0), wp.quat_identity()), mass=1.0)
         b0_2 = builder.add_body(xform=wp.transform(wp.vec3(2.0, 0.0, 0.0), wp.quat_identity()), mass=1.0)
@@ -465,9 +474,11 @@ class TestModel(unittest.TestCase):
             child_xform=wp.transform_identity(),
             axis=(0.0, 1.0, 0.0),
         )
+        builder.end_articulation()
 
         # Environment 1: Another chain
         builder.current_env_group = 1
+        builder.add_articulation()
         b1_0 = builder.add_body(xform=wp.transform(wp.vec3(0.0, 2.0, 0.0), wp.quat_identity()), mass=1.0)
         b1_1 = builder.add_body(xform=wp.transform(wp.vec3(1.0, 2.0, 0.0), wp.quat_identity()), mass=1.0)
 
@@ -488,14 +499,15 @@ class TestModel(unittest.TestCase):
             child_xform=wp.transform_identity(),
             axis=(0.0, 0.0, 1.0),
         )
+        builder.end_articulation()
 
-        # Global body (not connected to world via joints, will be ignored by collapse)
+        # Global body (connected to world using implicit free joint, will be ignored by collapse)
         builder.current_env_group = -1
-        builder.add_body(xform=wp.transform(wp.vec3(0.0, -5.0, 0.0), wp.quat_identity()), mass=0.0)
+        builder.add_body(xform=wp.transform(wp.vec3(0.0, -5.0, 0.0), wp.quat_identity()), mass=1.0)
 
         # Check groups before collapse
         self.assertEqual(builder.body_group, [0, 0, 0, 1, 1, -1])
-        self.assertEqual(builder.joint_group, [0, 0, 0, 1, 1])  # 5 joints now
+        self.assertEqual(builder.joint_group, [0, 0, 0, 1, 1, -1])  # includes implicit free joint
 
         # Collapse fixed joints
         builder.collapse_fixed_joints(verbose=False)
@@ -504,15 +516,15 @@ class TestModel(unittest.TestCase):
         # - b0_0 and b0_1 are merged (b0_1 removed)
         # - Fixed joint is removed
         # - Remaining bodies: b0_0 (merged), b0_2, b1_0, b1_1
-        # - Note: global_body is removed because it's not connected to world
         # - Remaining joints: world->b0_0, b0_0->b0_2, world->b1_0, b1_0->b1_1
+        # - Note: global_body and it's implicit free joint remain
 
-        self.assertEqual(builder.body_count, 4)  # Two bodies removed (b0_1 merged, global_body removed)
-        self.assertEqual(builder.joint_count, 4)  # One joint removed (fixed joint)
+        self.assertEqual(builder.body_count, 5)  # One body removed (b0_1 merged)
+        self.assertEqual(builder.joint_count, 5)  # One joint removed (fixed joint)
 
         # Check that groups are preserved correctly
-        self.assertEqual(builder.body_group, [0, 0, 1, 1])  # Groups preserved for retained bodies
-        self.assertEqual(builder.joint_group, [0, 0, 1, 1])  # Groups preserved for retained joints
+        self.assertEqual(builder.body_group, [0, 0, 1, 1, -1])  # Groups preserved for retained bodies
+        self.assertEqual(builder.joint_group, [0, 0, 1, 1, -1])  # Groups preserved for retained joints
 
         # Finalize and verify
         model = builder.finalize()
@@ -524,26 +536,32 @@ class TestModel(unittest.TestCase):
         self.assertEqual(body_groups[1], 0)  # b0_2
         self.assertEqual(body_groups[2], 1)  # b1_0
         self.assertEqual(body_groups[3], 1)  # b1_1
+        self.assertEqual(body_groups[4], -1)  # global body
 
         # Verify joint groups (world connections and body-to-body joints)
         self.assertEqual(joint_groups[0], 0)  # world->b0_0 from env 0
         self.assertEqual(joint_groups[1], 0)  # b0_0->b0_2 from env 0
         self.assertEqual(joint_groups[2], 1)  # world->b1_0 from env 1
         self.assertEqual(joint_groups[3], 1)  # b1_0->b1_1 from env 1
+        self.assertEqual(joint_groups[4], -1)  # free joint of global body
 
     def test_add_builder(self):
         orig_xform = wp.transform(wp.vec3(1.0, 2.0, 3.0), wp.quat_rpy(0.5, 0.6, 0.7))
         offset_xform = wp.transform(wp.vec3(4.0, 5.0, 6.0), wp.quat_rpy(-0.7, 0.8, -0.9))
 
         fixed_base = ModelBuilder()
+        fixed_base.add_articulation()
         fixed_base.add_body(xform=orig_xform)
         fixed_base.add_joint_revolute(parent=-1, child=0, parent_xform=orig_xform)
         fixed_base.add_shape_sphere(body=0, xform=orig_xform)
+        fixed_base.end_articulation()
 
         floating_base = ModelBuilder()
+        floating_base.add_articulation()
         floating_base.add_body(xform=orig_xform)
         floating_base.add_joint_free(parent=-1, child=0)
         floating_base.add_shape_sphere(body=0, xform=orig_xform)
+        floating_base.end_articulation()
 
         static_shape = ModelBuilder()
         static_shape.add_shape_sphere(body=-1, xform=orig_xform)

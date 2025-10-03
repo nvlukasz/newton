@@ -108,7 +108,6 @@ def test_shapes_on_plane(test: TestRigidContact, device, solver_fn):
         y_pos = i * 1.5
 
         b = builder.add_body(xform=wp.transform(wp.vec3(0.0, y_pos, 1.0), wp.quat_identity()))
-        builder.add_joint_free(b)
         builder.add_shape_sphere(
             body=b,
             radius=0.1 * scale,
@@ -116,7 +115,6 @@ def test_shapes_on_plane(test: TestRigidContact, device, solver_fn):
         expected_end_positions.append(wp.vec3(0.0, y_pos, 0.1 * scale))
 
         b = builder.add_body(xform=wp.transform(wp.vec3(2.0, y_pos, 1.0), wp.quat_identity()))
-        builder.add_joint_free(b)
         # Apply Y-axis rotation to capsule
         xform = wp.transform(wp.vec3(), quat_between_axes(newton.Axis.Z, newton.Axis.Y))
         builder.add_shape_capsule(
@@ -128,7 +126,6 @@ def test_shapes_on_plane(test: TestRigidContact, device, solver_fn):
         expected_end_positions.append(wp.vec3(2.0, y_pos, 0.1 * scale))
 
         b = builder.add_body(xform=wp.transform(wp.vec3(4.0, y_pos, 1.0), wp.quat_identity()))
-        builder.add_joint_free(b)
         builder.add_shape_box(
             body=b,
             hx=0.2 * scale,
@@ -138,7 +135,6 @@ def test_shapes_on_plane(test: TestRigidContact, device, solver_fn):
         expected_end_positions.append(wp.vec3(4.0, y_pos, 0.3 * scale))
 
         b = builder.add_body(xform=wp.transform(wp.vec3(6.0, y_pos, 1.0), wp.quat_identity()))
-        builder.add_joint_free(b)
         builder.add_shape_mesh(
             body=b,
             mesh=cube_mesh,

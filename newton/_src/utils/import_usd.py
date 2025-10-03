@@ -957,25 +957,25 @@ def parse_usd(
                 # We have an articulation without joints, i.e. only free rigid bodies
                 if bodies_follow_joint_ordering:
                     for i in body_ids.values():
-                        builder.add_articulation(body_data[i]["key"])
+                        # builder.add_articulation(body_data[i]["key"])
                         child_body_id = add_body(**body_data[i])
                         # apply the articulation transform to the body
                         builder.body_q[child_body_id] = articulation_xform
-                        builder.add_joint_free(child=child_body_id)
+                        # builder.add_joint_free(child=child_body_id)
                         # note the free joint's coordinates will be initialized by the body_q of the
                         # child body
                 else:
                     for i, child_body_id in enumerate(art_bodies):
-                        builder.add_articulation(body_keys[i])
+                        # builder.add_articulation(body_keys[i])
                         # apply the articulation transform to the body
                         builder.body_q[child_body_id] = articulation_xform
-                        builder.add_joint_free(child=child_body_id)
+                        # builder.add_joint_free(child=child_body_id)
                         # note the free joint's coordinates will be initialized by the body_q of the
                         # child body
                 sorted_joints = []
             else:
                 # we have an articulation with joints, we need to sort them topologically
-                builder.add_articulation(articulation_path)
+                # builder.add_articulation(articulation_path)
                 if joint_ordering is not None:
                     if verbose:
                         print(f"Sorting joints using {joint_ordering} ordering...")
@@ -984,6 +984,8 @@ def parse_usd(
                         print("Joint ordering:", sorted_joints)
                 else:
                     sorted_joints = np.arange(len(joint_names))
+
+            builder.add_articulation(articulation_path)
 
             if len(sorted_joints) > 0:
                 # insert the bodies in the order of the joints
@@ -1043,6 +1045,8 @@ def parse_usd(
             )
             articulation_id += 1
 
+            builder.end_articulation()
+
     # insert remaining bodies that were not part of any articulation so far
     for path, rigid_body_desc in body_specs.items():
         key = str(path)
@@ -1052,9 +1056,9 @@ def parse_usd(
             incoming_xform=incoming_world_xform,
             add_body_to_builder=True,
         )
-        # add articulation and free joint for this body
-        builder.add_articulation(key)
-        builder.add_joint_free(child=body_id)
+        # # add articulation and free joint for this body
+        # builder.add_articulation(key)
+        # builder.add_joint_free(child=body_id)
 
     # parse shapes attached to the rigid bodies
     path_collision_filters = set()

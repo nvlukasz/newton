@@ -36,9 +36,11 @@ def test_floating_body(test: TestControlForce, device, solver_fn, test_angular=T
     builder = newton.ModelBuilder(up_axis=newton.Axis.Y, gravity=0.0)
 
     # easy case: identity transform, zero center of mass
+    builder.add_articulation()
     b = builder.add_body()
     builder.add_shape_box(b)
     builder.add_joint_free(b)
+    builder.end_articulation()
     builder.joint_q = [1.0, 2.0, 3.0, *wp.quat_rpy(-1.3, 0.8, 2.4)]
 
     model = builder.finalize(device=device)
@@ -79,6 +81,7 @@ def test_3d_articulation(test: TestControlForce, device, solver_fn):
     builder = newton.ModelBuilder(gravity=0.0)
     builder.default_shape_cfg.density = 100.0
 
+    builder.add_articulation()
     b = builder.add_body()
     builder.add_shape_sphere(b)
     builder.add_joint_d6(
@@ -90,6 +93,7 @@ def test_3d_articulation(test: TestControlForce, device, solver_fn):
             newton.ModelBuilder.JointDofConfig(axis=newton.Axis.Z, armature=0.0),
         ],
     )
+    builder.end_articulation()
 
     model = builder.finalize(device=device)
 

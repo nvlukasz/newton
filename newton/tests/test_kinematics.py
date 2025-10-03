@@ -91,6 +91,7 @@ def test_fk_with_indices(test, device):
             parent_xform=wp.transform(wp.vec3(1.0, 0.0, 0.0), wp.quat_identity()),
             child_xform=wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
         )
+        builder.end_articulation()
 
     model = builder.finalize(device=device)
     state = model.state()
@@ -169,6 +170,7 @@ def test_ik_with_indices(test, device):
             parent_xform=wp.transform(wp.vec3(1.0, 0.0, 0.0), wp.quat_identity()),
             child_xform=wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
         )
+        builder.end_articulation()
 
     model = builder.finalize(device=device)
     state = model.state()
@@ -208,6 +210,7 @@ def test_fk_error_mask_and_indices(test, device):
     builder.add_articulation()
     b1 = builder.add_body()
     builder.add_joint_revolute(parent=-1, child=b1, axis=wp.vec3(0.0, 0.0, 1.0))
+    builder.end_articulation()
 
     model = builder.finalize(device=device)
     state = model.state()
@@ -249,6 +252,7 @@ def test_isaac_lab_use_case(test, device):
             parent_xform=wp.transform(wp.vec3(1.0, 0.0, 0.0), wp.quat_identity()),
             child_xform=wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
         )
+        builder.end_articulation()
 
     model = builder.finalize(device=device)
 
@@ -297,6 +301,7 @@ def test_bounds_checking(test, device):
         builder.add_articulation()
         b1 = builder.add_body()
         builder.add_joint_revolute(parent=-1, child=b1, axis=wp.vec3(0.0, 0.0, 1.0))
+        builder.end_articulation()
 
     model = builder.finalize(device=device)
     state = model.state()
@@ -337,6 +342,7 @@ def test_ik_with_mask(test, device):
             parent_xform=wp.transform(wp.vec3(1.0, 0.0, 0.0), wp.quat_identity()),
             child_xform=wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
         )
+        builder.end_articulation()
 
     model = builder.finalize(device=device)
     state = model.state()
@@ -385,6 +391,7 @@ def test_ik_error_mask_and_indices(test, device):
         parent_xform=wp.transform_identity(),
         child_xform=wp.transform_identity(),
     )
+    builder.end_articulation()
 
     model = builder.finalize(device=device)
     state = model.state()
@@ -419,3 +426,4 @@ add_function_test(TestSimKinematics, "test_ik_error_mask_and_indices", test_ik_e
 if __name__ == "__main__":
     wp.clear_kernel_cache()
     unittest.main(verbosity=2, failfast=True)
+    # test_fk_with_indices(None, wp.get_device())

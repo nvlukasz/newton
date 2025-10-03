@@ -95,7 +95,6 @@ def _test_model_and_state_recorder_with_format(test: TestRecorder, device, file_
     builder = newton.ModelBuilder()
     body = builder.add_body()
     builder.add_shape_capsule(body)
-    builder.add_joint_free(body)
     model = builder.finalize(device=device)
 
     states = []

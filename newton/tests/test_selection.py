@@ -26,14 +26,12 @@ class TestSelection(unittest.TestCase):
         model = builder.finalize()
         self.assertRaises(KeyError, ArticulationView, model, pattern="no_match")
 
-    def test_empty_selection(self):
+    def test_body_selection(self):
         builder = newton.ModelBuilder()
-        builder.add_articulation("my_articulation")
-        body = builder.add_body()
-        builder.add_joint_free(child=body)
+        builder.add_body(key="my_body")
         model = builder.finalize()
         control = model.control()
-        selection = ArticulationView(model, pattern="my_articulation", exclude_joint_types=[newton.JointType.FREE])
+        selection = ArticulationView(model, pattern="my_body", exclude_joint_types=[newton.JointType.FREE])
         self.assertEqual(selection.count, 1)
         self.assertEqual(selection.get_root_transforms(model).shape, (1,))
         self.assertEqual(selection.get_dof_positions(model).shape, (1, 0))

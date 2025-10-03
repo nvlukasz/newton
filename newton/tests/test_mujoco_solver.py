@@ -46,8 +46,10 @@ class TestMuJoCoSolver(unittest.TestCase):
         """Test that ls_parallel option is properly set on the MuJoCo Warp model."""
         # Create minimal model with proper inertia
         builder = newton.ModelBuilder()
+        builder.add_articulation()
         body = builder.add_body(mass=1.0, com=(0.0, 0.0, 0.0), I_m=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
         builder.add_joint_revolute(-1, body)
+        builder.end_articulation()
         model = builder.finalize()
 
         # Test with ls_parallel=True
@@ -165,8 +167,7 @@ class TestMuJoCoSolverPropertiesBase(TestMuJoCoSolver):
 
         # --- Free-floating body (e.g., a box) ---
         free_body_initial_pos = wp.transform((0.5, 0.5, 0.0), wp.quat_identity())
-        free_body_idx = template_builder.add_body(mass=0.2)
-        template_builder.add_joint_free(child=free_body_idx, parent_xform=free_body_initial_pos)
+        free_body_idx = template_builder.add_body(xform=free_body_initial_pos, mass=0.2)
         template_builder.add_shape_box(
             body=free_body_idx,
             xform=wp.transform(),  # Shape at body's local origin
@@ -181,6 +182,8 @@ class TestMuJoCoSolverPropertiesBase(TestMuJoCoSolver):
         link_half_length = 0.15
         tree_root_initial_pos_y = link_half_length * 2.0
         tree_root_initial_transform = wp.transform((0.0, tree_root_initial_pos_y, 0.0), wp.quat_identity())
+
+        template_builder.add_articulation()
 
         body1_idx = template_builder.add_body(mass=0.1)
         template_builder.add_joint_free(child=body1_idx, parent_xform=tree_root_initial_transform)
@@ -223,6 +226,8 @@ class TestMuJoCoSolverPropertiesBase(TestMuJoCoSolver):
             child_xform=wp.transform((0.0, -link_half_length, 0.0), wp.quat_identity()),
             axis=(1.0, 0.0, 0.0),
         )
+
+        template_builder.end_articulation()
 
         self.builder = newton.ModelBuilder()
         self.builder.add_shape_plane()
@@ -1091,10 +1096,6 @@ class TestMuJoCoSolverGeomProperties(TestMuJoCoSolverPropertiesBase):
         body2 = builder.add_body(mass=1.0)
         builder.add_shape_mesh(body=body2, mesh=mesh2)
 
-        # Add joints to make MuJoCo happy
-        builder.add_joint_free(body1)
-        builder.add_joint_free(body2)
-
         model = builder.finalize()
 
         # Create MuJoCo solver
@@ -1120,7 +1121,6 @@ class TestMuJoCoSolverNewtonContacts(unittest.TestCase):
 
         self.sphere_radius = 0.5
         sphere_body_idx = builder.add_body(xform=wp.transform(wp.vec3(0.0, 0.0, 1.0), wp.quat_identity()))
-        builder.add_joint_free(sphere_body_idx)
         builder.add_shape_sphere(
             body=sphere_body_idx,
             radius=self.sphere_radius,
@@ -1168,8 +1168,10 @@ class TestMuJoCoSolverNewtonContacts(unittest.TestCase):
 class TestMuJoCoConversion(unittest.TestCase):
     def test_no_shapes(self):
         builder = newton.ModelBuilder()
+        builder.add_articulation()
         b = builder.add_body(mass=1.0, com=(1.0, 2.0, 3.0), I_m=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
         builder.add_joint_prismatic(-1, b)
+        builder.end_articulation()
         model = builder.finalize()
         solver = SolverMuJoCo(model)
         self.assertEqual(solver.mj_model.nv, 1)
@@ -1181,13 +1183,14 @@ class TestMuJoCoConversion(unittest.TestCase):
         """
         builder = newton.ModelBuilder()
 
+        builder.add_articulation()
+
         # Add parent body (root) with identity transform and inertia
         parent_body = builder.add_body(
             mass=1.0,
             com=wp.vec3(0.0, 0.0, 0.0),
             I_m=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
         )
-        builder.add_joint_free(parent_body)  # Make parent the root
 
         # Add child body with identity transform and inertia
         child_body = builder.add_body(
@@ -1222,6 +1225,8 @@ class TestMuJoCoConversion(unittest.TestCase):
         # Add simple box shapes for both bodies (not strictly needed for kinematics)
         builder.add_shape_box(body=parent_body, hx=0.1, hy=0.1, hz=0.1)
         builder.add_shape_box(body=child_body, hx=0.1, hy=0.1, hz=0.1)
+
+        builder.end_articulation()
 
         # Set the joint angle (joint_q) for the revolute joint
         joint_angle = 0.5 * wp.pi  # 90 degrees
@@ -1306,6 +1311,8 @@ class TestMuJoCoConversion(unittest.TestCase):
         length = 1.0
         I_sphere = wp.diag([2.0 / 5.0 * mass * 0.1**2, 2.0 / 5.0 * mass * 0.1**2, 2.0 / 5.0 * mass * 0.1**2])
 
+        builder.add_articulation()
+
         pendulum = builder.add_body(
             mass=mass,
             I_m=I_sphere,
@@ -1321,6 +1328,8 @@ class TestMuJoCoConversion(unittest.TestCase):
             limit_lower=0.0,  # Lower limit at 0 degrees
             limit_upper=np.pi / 2,  # Upper limit at 90 degrees
         )
+
+        builder.end_articulation()
 
         model = builder.finalize(requires_grad=False)
         state = model.state()
@@ -1388,6 +1397,8 @@ class TestMuJoCoConversion(unittest.TestCase):
         # Create a simple model with one revolute joint
         builder = newton.ModelBuilder()
 
+        builder.add_articulation()
+
         body = builder.add_body(mass=1.0, I_m=wp.diag(wp.vec3(1.0, 1.0, 1.0)))
 
         # Add joint with known transforms
@@ -1401,6 +1412,8 @@ class TestMuJoCoConversion(unittest.TestCase):
             child_xform=child_xform,
             axis=newton.Axis.X,
         )
+
+        builder.end_articulation()
 
         model = builder.finalize(requires_grad=False)
         solver = newton.solvers.SolverMuJoCo(model)

@@ -927,5 +927,7 @@ def parse_mjcf(
             for j in range(i + 1, end_shape_count):
                 builder.shape_collision_filter_pairs.append((i, j))
 
+    builder.end_articulation()
+
     if collapse_fixed_joints:
         builder.collapse_fixed_joints()

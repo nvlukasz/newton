@@ -71,6 +71,8 @@ class Example:
             child_xform=wp.transform(p=wp.vec3(-hx, 0.0, 0.0), q=wp.quat_identity()),
         )
 
+        builder.end_articulation()
+
         # add ground plane
         builder.add_ground_plane()
 

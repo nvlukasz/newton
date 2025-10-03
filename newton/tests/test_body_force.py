@@ -36,12 +36,14 @@ def test_floating_body(test: TestBodyForce, device, solver_fn, test_angular=True
     rot = wp.quat_from_axis_angle(wp.vec3(1.0, 0.0, 0.0), wp.pi * 0.0)
     # rot = wp.quat_identity()
 
+    builder.add_articulation()
     b = builder.add_body(xform=wp.transform(pos, rot))
     builder.add_shape_box(
         b, xform=wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()), hx=0.25, hy=0.5, hz=1.0
     )  # density = 1000.0, mass = 1000.0. Ixx = 1000/6 *
     builder.add_joint_free(b)
     builder.joint_q = [*pos, *rot]
+    builder.end_articulation()
 
     model = builder.finalize(device=device)
     # print("model.body_inv_inertia\n", model.body_inv_inertia)
@@ -95,6 +97,7 @@ def test_3d_articulation(test: TestBodyForce, device, solver_fn, test_angular, u
     builder = newton.ModelBuilder(gravity=0.0, up_axis=up_axis)
     builder.default_shape_cfg.density = 1000.0
 
+    builder.add_articulation()
     b = builder.add_body()
     builder.add_shape_box(
         b, xform=wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()), hx=0.25, hy=0.5, hz=1.0
@@ -125,6 +128,7 @@ def test_3d_articulation(test: TestBodyForce, device, solver_fn, test_angular, u
         #     newton.ModelBuilder.JointDofConfig(axis=newton.Axis.Z, target_ke=ke, target_kd=kd),
         # ],
     )
+    builder.end_articulation()
 
     model = builder.finalize(device=device)
     # print("model.body_inertia_inv\n", model.body_inv_inertia)
