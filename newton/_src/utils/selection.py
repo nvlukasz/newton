@@ -231,7 +231,7 @@ class ArticulationView:
         include_joint_types: list[int] | None = None,
         exclude_joint_types: list[int] | None = None,
         verbose: bool | None = None,
-        squeeze_axes: bool | tuple[int] = True,
+        squeeze_axes: bool | tuple[int] = (1,),
     ):
         self.model = model
         self.device = model.device
@@ -260,10 +260,11 @@ class ArticulationView:
         model_joint_qd_start = model.joint_qd_start.numpy()
 
         # get articulation ids grouped by world
-        articulation_ids, _ = find_matching_ids(
+        articulation_ids, global_articulation_ids = find_matching_ids(
             pattern, model.articulation_key, model_articulation_world, model.num_worlds
         )
 
+        # determine articulation counts per world
         world_count = model.num_worlds
         articulation_count = 0
         counts_per_world = [0] * world_count
@@ -271,6 +272,13 @@ class ArticulationView:
             count = len(articulation_ids[world_id])
             counts_per_world[world_id] += count
             articulation_count += count
+
+        # handle scenes with only global articulations
+        if articulation_count == 0 and global_articulation_ids:
+            world_count = 1
+            articulation_count = len(global_articulation_ids)
+            counts_per_world = [articulation_count]
+            articulation_ids = [global_articulation_ids]
 
         if articulation_count == 0:
             raise KeyError("No matching articulations")
@@ -322,54 +330,60 @@ class ArticulationView:
         for shape_id in arti_shape_ids:
             arti_shape_names.append(get_name_from_key(model.shape_key[shape_id]))
 
-        # compute counts of joints, links, etc.
+        # compute counts and offsets of joints, links, etc.
         joint_starts = list_of_lists(world_count)
-        joint_ends = list_of_lists(world_count)
         joint_counts = list_of_lists(world_count)
         joint_dof_starts = list_of_lists(world_count)
-        joint_dof_ends = list_of_lists(world_count)
         joint_dof_counts = list_of_lists(world_count)
         joint_coord_starts = list_of_lists(world_count)
-        joint_coord_ends = list_of_lists(world_count)
         joint_coord_counts = list_of_lists(world_count)
         root_joint_types = list_of_lists(world_count)
         link_starts = list_of_lists(world_count)
         shape_starts = list_of_lists(world_count)
+        shape_counts = list_of_lists(world_count)
         for world_id in range(world_count):
             for arti_id in articulation_ids[world_id]:
                 # joints
                 joint_start = int(model_articulation_start[arti_id])
                 joint_end = int(model_articulation_start[arti_id + 1])
                 joint_starts[world_id].append(joint_start)
-                joint_ends[world_id].append(joint_end)
                 joint_counts[world_id].append(joint_end - joint_start)
                 # joint dofs
                 joint_dof_start = int(model_joint_qd_start[joint_start])
                 joint_dof_end = int(model_joint_qd_start[joint_end])
                 joint_dof_starts[world_id].append(joint_dof_start)
-                joint_dof_ends[world_id].append(joint_dof_end)
                 joint_dof_counts[world_id].append(joint_dof_end - joint_dof_start)
                 # joint coords
                 joint_coord_start = int(model_joint_q_start[joint_start])
                 joint_coord_end = int(model_joint_q_start[joint_end])
                 joint_coord_starts[world_id].append(joint_coord_start)
-                joint_coord_ends[world_id].append(joint_coord_end)
                 joint_coord_counts[world_id].append(joint_coord_end - joint_coord_start)
                 # root joint types
                 root_joint_types[world_id].append(int(model_joint_type[joint_start]))
-                # links
-                link_start = int(model_joint_child[joint_start])
-                link_starts[world_id].append(link_start)
-                # shapes
-                link_shapes = model.body_shapes[link_start]
-                shape_starts[world_id].append(link_shapes[0])  # TODO: handle bodies without shapes?
+                # links and shapes
+                link_ids = []
+                shape_ids = []
+                for j in range(joint_start, joint_end):
+                    link_id = int(model_joint_child[j])
+                    link_ids.append(link_id)
+                    link_shapes = model.body_shapes.get(link_id, [])
+                    shape_ids.extend(link_shapes)
+                link_starts[world_id].append(min(link_ids))
+                num_shapes = len(shape_ids)
+                if num_shapes > 0:
+                    shape_starts[world_id].append(min(shape_ids))
+                else:
+                    shape_starts[world_id].append(-1)
+                shape_counts[world_id].append(num_shapes)
 
         # make sure counts are the same for all articulations
+        # NOTE: we currently assume that link count is the same as joint count
         if not (
             all_equal(joint_counts)
             and all_equal(joint_dof_counts)
             and all_equal(joint_coord_counts)
             and all_equal(root_joint_types)
+            and all_equal(shape_counts)
         ):
             raise ValueError("Articulations are not identical")
 
@@ -383,37 +397,47 @@ class ArticulationView:
         joint_offset = joint_starts[0][0]
         joint_dof_offset = joint_dof_starts[0][0]
         joint_coord_offset = joint_coord_starts[0][0]
-        link_offset = arti_link_ids[0]
-        shape_offset = arti_shape_ids[0]
+        link_offset = link_starts[0][0]
+        if arti_shape_count > 0:
+            shape_offset = shape_starts[0][0]
+        else:
+            shape_offset = 0
 
         # compute "outer" strides (strides between worlds)
-        outer_joint_strides = []
-        outer_joint_dof_strides = []
-        outer_joint_coord_strides = []
-        outer_link_strides = []
-        outer_shape_strides = []
-        for world_id in range(1, world_count):
-            outer_joint_strides.append(joint_starts[world_id][0] - joint_starts[world_id - 1][0])
-            outer_joint_dof_strides.append(joint_dof_starts[world_id][0] - joint_dof_starts[world_id - 1][0])
-            outer_joint_coord_strides.append(joint_coord_starts[world_id][0] - joint_coord_starts[world_id - 1][0])
-            outer_link_strides.append(link_starts[world_id][0] - link_starts[world_id - 1][0])
-            outer_shape_strides.append(shape_starts[world_id][0] - shape_starts[world_id - 1][0])
+        if world_count > 1:
+            outer_joint_strides = []
+            outer_joint_dof_strides = []
+            outer_joint_coord_strides = []
+            outer_link_strides = []
+            outer_shape_strides = []
+            for world_id in range(1, world_count):
+                outer_joint_strides.append(joint_starts[world_id][0] - joint_starts[world_id - 1][0])
+                outer_joint_dof_strides.append(joint_dof_starts[world_id][0] - joint_dof_starts[world_id - 1][0])
+                outer_joint_coord_strides.append(joint_coord_starts[world_id][0] - joint_coord_starts[world_id - 1][0])
+                outer_link_strides.append(link_starts[world_id][0] - link_starts[world_id - 1][0])
+                outer_shape_strides.append(shape_starts[world_id][0] - shape_starts[world_id - 1][0])
 
-        # make sure outer strides are uniform
-        if not (
-            all_equal(outer_joint_strides)
-            and all_equal(outer_joint_dof_strides)
-            and all_equal(outer_joint_coord_strides)
-            and all_equal(outer_link_strides)
-            and all_equal(outer_shape_strides)
-        ):
-            raise ValueError("Non-homogeneous worlds are not supported yet")
+            # make sure outer strides are uniform
+            if not (
+                all_equal(outer_joint_strides)
+                and all_equal(outer_joint_dof_strides)
+                and all_equal(outer_joint_coord_strides)
+                and all_equal(outer_link_strides)
+                and all_equal(outer_shape_strides)
+            ):
+                raise ValueError("Non-uniform strides between worlds are not supported")
 
-        outer_joint_stride = outer_joint_strides[0]
-        outer_joint_dof_stride = outer_joint_dof_strides[0]
-        outer_joint_coord_stride = outer_joint_coord_strides[0]
-        outer_link_stride = outer_link_strides[0]
-        outer_shape_stride = outer_shape_strides[0]
+            outer_joint_stride = outer_joint_strides[0]
+            outer_joint_dof_stride = outer_joint_dof_strides[0]
+            outer_joint_coord_stride = outer_joint_coord_strides[0]
+            outer_link_stride = outer_link_strides[0]
+            outer_shape_stride = outer_shape_strides[0]
+        else:
+            outer_joint_stride = arti_joint_count
+            outer_joint_dof_stride = arti_joint_dof_count
+            outer_joint_coord_stride = arti_joint_coord_count
+            outer_link_stride = arti_link_count
+            outer_shape_stride = arti_shape_count
 
         # compute "inner" strides (strides within worlds)
         if count_per_world > 1:
@@ -442,7 +466,7 @@ class ArticulationView:
                 and all_equal(inner_link_strides)
                 and all_equal(inner_shape_strides)
             ):
-                raise ValueError("Non-homogeneous worlds are not supported yet")
+                raise ValueError("Non-uniform strides within worlds are not supported")
 
             inner_joint_stride = inner_joint_strides[0][0]
             inner_joint_dof_stride = inner_joint_dof_strides[0][0]
