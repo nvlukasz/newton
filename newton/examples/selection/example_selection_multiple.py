@@ -88,7 +88,7 @@ def random_forces_kernel(
     seed: int,  # random seed
 ):
     world, arti, dof = wp.tid()
-    num_artis, num_dofs = dof_forces.shape[1], dof_forces.shape[0]
+    num_artis, num_dofs = dof_forces.shape[1], dof_forces.shape[2]
     rng = wp.rand_init(seed, num_dofs * (world * num_artis + arti) + dof)
     dof_forces[world, arti, dof] = max_magnitude * (1.0 - 2.0 * wp.randf(rng))
 
@@ -271,7 +271,7 @@ class Example:
         self.ants.set_dof_positions(self.state_0, self.default_dof_positions, mask=mask)
         self.ants.set_dof_velocities(self.state_0, self.default_dof_velocities, mask=mask)
 
-        if True or not isinstance(self.solver, newton.solvers.SolverMuJoCo):
+        if not isinstance(self.solver, newton.solvers.SolverMuJoCo):
             self.ants.eval_fk(self.state_0, mask=mask)
 
     def render(self):
