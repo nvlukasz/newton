@@ -281,10 +281,10 @@ class ArticulationView:
             articulation_ids = [global_articulation_ids]
 
         if articulation_count == 0:
-            raise KeyError("No matching articulations")
+            raise KeyError(f"No articulations matching pattern '{pattern}'")
 
         if not all_equal(counts_per_world):
-            raise ValueError("Varying articulation count per world is not supported yet")
+            raise ValueError("Varying articulation counts per world are not supported")
 
         count_per_world = counts_per_world[0]
 
@@ -686,7 +686,7 @@ class ArticulationView:
         self.articulation_mask = wp.zeros(model.articulation_count, dtype=bool, device=self.device)
         wp.launch(
             set_model_articulation_mask_kernel,
-            dim=(world_count, count_per_world),
+            dim=self.articulation_ids.shape,
             inputs=[self.full_mask, self.articulation_ids, self.articulation_mask],
             device=self.device,
         )
@@ -1059,7 +1059,7 @@ class ArticulationView:
             articulation_mask = wp.zeros(self.model.articulation_count, dtype=bool, device=self.device)
             wp.launch(
                 set_model_articulation_mask_kernel,
-                dim=mask.size,
+                dim=self.articulation_ids.shape,
                 inputs=[mask, self.articulation_ids, articulation_mask],
             )
             return articulation_mask
