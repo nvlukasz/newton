@@ -27,9 +27,7 @@ from ..sim.model import ModelAttributeFrequency
 @wp.kernel
 def set_model_articulation_mask_kernel(
     view_mask: wp.array(dtype=bool),  # mask in ArticulationView (per world)
-    view_to_model_map: wp.array2d(
-        dtype=int
-    ),  # maps (world, arti) indices in ArticulationView to articulation indices in Model
+    view_to_model_map: wp.array2d(dtype=int),  # map (world, arti) indices to Model articulation id
     articulation_mask: wp.array(dtype=bool),  # output: mask of Model articulation indices
 ):
     """
