@@ -27,7 +27,9 @@ from ..sim.model import ModelAttributeFrequency
 @wp.kernel
 def set_model_articulation_mask_kernel(
     view_mask: wp.array(dtype=bool),  # mask in ArticulationView (per world)
-    view_to_model_map: wp.array2d(dtype=int),  # maps (world, arti) indices in ArticulationView to articulation indices in Model
+    view_to_model_map: wp.array2d(
+        dtype=int
+    ),  # maps (world, arti) indices in ArticulationView to articulation indices in Model
     articulation_mask: wp.array(dtype=bool),  # output: mask of Model articulation indices
 ):
     """
@@ -125,7 +127,13 @@ class Slice:
 
 class FrequencyLayout:
     def __init__(
-        self, offset: int, stride_between_worlds: int, stride_within_worlds: int, value_count: int, indices: list[int], device
+        self,
+        offset: int,
+        stride_between_worlds: int,
+        stride_within_worlds: int,
+        value_count: int,
+        indices: list[int],
+        device,
     ):
         self.offset = offset  # number of values to skip at the beginning of attribute array
         self.stride_between_worlds = stride_between_worlds
@@ -147,7 +155,6 @@ class FrequencyLayout:
     def __str__(self):
         indices = self.indices if self.indices is not None else self.slice
         return f"FrequencyLayout(\n    offset: {self.offset}\n    stride_between_worlds: {self.stride_between_worlds}\n    stride_within_worlds: {self.stride_within_worlds}\n    indices: {indices}\n)"
-
 
 
 def get_name_from_key(key: str):
@@ -325,7 +332,7 @@ class ArticulationView:
         joint_coord_starts = list_of_lists(world_count)
         joint_coord_ends = list_of_lists(world_count)
         joint_coord_counts = list_of_lists(world_count)
-        root_joint_types =  list_of_lists(world_count)
+        root_joint_types = list_of_lists(world_count)
         link_starts = list_of_lists(world_count)
         shape_starts = list_of_lists(world_count)
         for world_id in range(world_count):
@@ -359,10 +366,10 @@ class ArticulationView:
 
         # make sure counts are the same for all articulations
         if not (
-            all_equal(joint_counts) and
-            all_equal(joint_dof_counts) and
-            all_equal(joint_coord_counts) and
-            all_equal(root_joint_types)
+            all_equal(joint_counts)
+            and all_equal(joint_dof_counts)
+            and all_equal(joint_coord_counts)
+            and all_equal(root_joint_types)
         ):
             raise ValueError("Articulations are not identical")
 
@@ -394,11 +401,11 @@ class ArticulationView:
 
         # make sure outer strides are uniform
         if not (
-            all_equal(outer_joint_strides) and
-            all_equal(outer_joint_dof_strides) and
-            all_equal(outer_joint_coord_strides) and
-            all_equal(outer_link_strides) and
-            all_equal(outer_shape_strides)
+            all_equal(outer_joint_strides)
+            and all_equal(outer_joint_dof_strides)
+            and all_equal(outer_joint_coord_strides)
+            and all_equal(outer_link_strides)
+            and all_equal(outer_shape_strides)
         ):
             raise ValueError("Non-homogeneous worlds are not supported yet")
 
@@ -418,26 +425,30 @@ class ArticulationView:
             for world_id in range(world_count):
                 for i in range(1, count_per_world):
                     inner_joint_strides[world_id].append(joint_starts[world_id][i] - joint_starts[world_id][i - 1])
-                    inner_joint_dof_strides[world_id].append(joint_dof_starts[world_id][i] - joint_dof_starts[world_id][i - 1])
-                    inner_joint_coord_strides[world_id].append(joint_coord_starts[world_id][i] - joint_coord_starts[world_id][i - 1])
+                    inner_joint_dof_strides[world_id].append(
+                        joint_dof_starts[world_id][i] - joint_dof_starts[world_id][i - 1]
+                    )
+                    inner_joint_coord_strides[world_id].append(
+                        joint_coord_starts[world_id][i] - joint_coord_starts[world_id][i - 1]
+                    )
                     inner_link_strides[world_id].append(link_starts[world_id][i] - link_starts[world_id][i - 1])
                     inner_shape_strides[world_id].append(shape_starts[world_id][i] - shape_starts[world_id][i - 1])
 
             # make sure inner strides are uniform
             if not (
-                all_equal(inner_joint_strides) and
-                all_equal(inner_joint_dof_strides) and
-                all_equal(inner_joint_coord_strides) and
-                all_equal(inner_link_strides) and
-                all_equal(inner_shape_strides)
+                all_equal(inner_joint_strides)
+                and all_equal(inner_joint_dof_strides)
+                and all_equal(inner_joint_coord_strides)
+                and all_equal(inner_link_strides)
+                and all_equal(inner_shape_strides)
             ):
                 raise ValueError("Non-homogeneous worlds are not supported yet")
-            
+
             inner_joint_stride = inner_joint_strides[0][0]
             inner_joint_dof_stride = inner_joint_dof_strides[0][0]
             inner_joint_coord_stride = inner_joint_coord_strides[0][0]
             inner_link_stride = inner_link_strides[0][0]
-            inner_shape_stride = inner_shape_strides[0][0]            
+            inner_shape_stride = inner_shape_strides[0][0]
         else:
             inner_joint_stride = arti_joint_count
             inner_joint_dof_stride = arti_joint_dof_count
@@ -599,19 +610,39 @@ class ArticulationView:
 
         self.frequency_layouts = {
             ModelAttributeFrequency.JOINT: FrequencyLayout(
-                joint_offset, outer_joint_stride, inner_joint_stride, arti_joint_count, selected_joint_indices, self.device
+                joint_offset,
+                outer_joint_stride,
+                inner_joint_stride,
+                arti_joint_count,
+                selected_joint_indices,
+                self.device,
             ),
             ModelAttributeFrequency.JOINT_DOF: FrequencyLayout(
-                joint_dof_offset, outer_joint_dof_stride, inner_joint_dof_stride, arti_joint_dof_count, selected_joint_dof_indices, self.device
+                joint_dof_offset,
+                outer_joint_dof_stride,
+                inner_joint_dof_stride,
+                arti_joint_dof_count,
+                selected_joint_dof_indices,
+                self.device,
             ),
             ModelAttributeFrequency.JOINT_COORD: FrequencyLayout(
-                joint_coord_offset, outer_joint_coord_stride, inner_joint_coord_stride, arti_joint_coord_count, selected_joint_coord_indices, self.device
+                joint_coord_offset,
+                outer_joint_coord_stride,
+                inner_joint_coord_stride,
+                arti_joint_coord_count,
+                selected_joint_coord_indices,
+                self.device,
             ),
             ModelAttributeFrequency.BODY: FrequencyLayout(
                 link_offset, outer_link_stride, inner_link_stride, arti_link_count, selected_link_indices, self.device
             ),
             ModelAttributeFrequency.SHAPE: FrequencyLayout(
-                shape_offset, outer_shape_stride, inner_shape_stride, arti_shape_count, selected_shape_indices, self.device
+                shape_offset,
+                outer_shape_stride,
+                inner_shape_stride,
+                arti_shape_count,
+                selected_shape_indices,
+                self.device,
             ),
         }
 
@@ -657,7 +688,6 @@ class ArticulationView:
                 shape_names = [self.shape_names[shape_idx] for shape_idx in self.body_shapes[link_idx]]
                 print(f"  Link '{self.body_names[link_idx]}': {shape_names}")
 
-
     # ========================================================================================
     # Generic attribute API
 
@@ -671,11 +701,17 @@ class ArticulationView:
         frequency = self.model.get_attribute_frequency(name)
         layout = self.frequency_layouts.get(frequency)
         if layout is None:
-            raise AttributeError(f"Unable to determine the layout of frequency '{frequency.name}' for attribute '{name}'")
+            raise AttributeError(
+                f"Unable to determine the layout of frequency '{frequency.name}' for attribute '{name}'"
+            )
 
         value_stride = attrib.strides[0]
         shape = (self.world_count, self.count_per_world, layout.value_count)
-        strides = (layout.stride_between_worlds * value_stride, layout.stride_within_worlds * value_stride, value_stride)
+        strides = (
+            layout.stride_between_worlds * value_stride,
+            layout.stride_within_worlds * value_stride,
+            value_stride,
+        )
 
         # squeeze the articulation and value axes if needed
         if self.squeeze[2] and layout.value_count == 1:
@@ -724,14 +760,16 @@ class ArticulationView:
 
         if _slice is not None:
             # create strided array
-            attrib = attrib[*leading_slices, _slice, *trailing_slices]
+            index_tuple = (*leading_slices, _slice, *trailing_slices)
+            attrib = attrib[index_tuple]
             # fixup for empty slices - FIXME: this should be handled by Warp, above
             if attrib.size == 0:
                 attrib.ptr = None
         else:
             # create indexed array + contiguous staging array
             assert layout.indices is not None
-            attrib = attrib[*leading_slices, layout.indices, *trailing_slices]
+            index_tuple = (*leading_slices, layout.indices, *trailing_slices)
+            attrib = attrib[index_tuple]
             attrib._staging_array = wp.empty_like(attrib)
 
         return attrib

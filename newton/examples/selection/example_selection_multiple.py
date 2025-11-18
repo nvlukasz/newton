@@ -256,7 +256,9 @@ class Example:
             # random jump speed per world
             self.default_root_velocities[..., 2] = 3.0 * torch.rand((self.num_worlds, 1))
             # random spin speed per articulation
-            self.default_root_velocities[..., 5] = 4.0 * torch.pi * (0.5 - torch.rand((self.num_worlds, self.num_per_world)))
+            self.default_root_velocities[..., 5] = (
+                4.0 * torch.pi * (0.5 - torch.rand((self.num_worlds, self.num_per_world)))
+            )
         else:
             wp.launch(
                 reset_kernel,
