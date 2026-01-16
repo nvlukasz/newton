@@ -278,6 +278,10 @@ class ArticulationView:
             counts_per_world[world_id] += count
             articulation_count += count
 
+        # can't mix global and per-world articulations in the same view
+        if articulation_count > 0 and global_articulation_ids:
+            raise ValueError(f"Articulation pattern '{pattern}' matches global and per-world articulations, which is currently not supported")
+
         # handle scenes with only global articulations
         if articulation_count == 0 and global_articulation_ids:
             world_count = 1
