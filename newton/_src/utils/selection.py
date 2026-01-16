@@ -570,10 +570,8 @@ class ArticulationView:
         self.joint_dof_counts = []
         self.joint_coord_names = []
         self.joint_coord_counts = []
-        self.body_names = []
-        self.body_shapes = []
-        self.link_names = self.body_names  # alias, FIXME: pick one?
-        self.link_shapes = self.body_shapes  # alias, FIXME: pick one?
+        self.link_names = []
+        self.link_shapes = []
         self.shape_names = []
 
         # populate info for selected joints and dofs
@@ -613,19 +611,19 @@ class ArticulationView:
         shape_link_idx = {}  # map arti_shape_idx to local link index in the view
         for link_idx, arti_link_idx in enumerate(selected_link_indices):
             body_id = arti_link_ids[arti_link_idx]
-            self.body_names.append(arti_link_names[arti_link_idx])
+            self.link_names.append(arti_link_names[arti_link_idx])
             shape_ids = model.body_shapes[body_id]
             for shape_id in shape_ids:
                 arti_shape_idx = arti_shape_ids.index(shape_id)
                 selected_shape_indices.append(arti_shape_idx)
                 shape_link_idx[arti_shape_idx] = link_idx
-            self.body_shapes.append([])
+            self.link_shapes.append([])
 
         selected_shape_indices = sorted(selected_shape_indices)
         for shape_idx, arti_shape_idx in enumerate(selected_shape_indices):
             self.shape_names.append(arti_shape_names[arti_shape_idx])
             link_idx = shape_link_idx[arti_shape_idx]
-            self.body_shapes[link_idx].append(shape_idx)
+            self.link_shapes[link_idx].append(shape_idx)
 
         # selection counts
         self.count = articulation_count
@@ -713,15 +711,25 @@ class ArticulationView:
             print(f"  Fixed base?     {self.is_fixed_base}")
             print(f"  Floating base?  {self.is_floating_base}")
             print("Link names:")
-            print(f"  {self.body_names}")
+            print(f"  {self.link_names}")
             print("Joint names:")
             print(f"  {self.joint_names}")
             print("Joint DOF names:")
             print(f"  {self.joint_dof_names}")
             print("Shapes:")
             for link_idx in range(self.link_count):
-                shape_names = [self.shape_names[shape_idx] for shape_idx in self.body_shapes[link_idx]]
-                print(f"  Link '{self.body_names[link_idx]}': {shape_names}")
+                shape_names = [self.shape_names[shape_idx] for shape_idx in self.link_shapes[link_idx]]
+                print(f"  Link '{self.link_names[link_idx]}': {shape_names}")
+
+    @property
+    def body_names(self):
+        """Alias for `link_names`."""
+        return self.link_names
+
+    @property
+    def body_shapes(self):
+        """Alias for `link_shapes`."""
+        return self.link_shapes
 
     # ========================================================================================
     # Generic attribute API
