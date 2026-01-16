@@ -150,6 +150,13 @@ class FrequencyLayout:
     def is_contiguous(self):
         return self.slice is not None
 
+    @property
+    def selected_value_count(self):
+        if self.slice is not None:
+            return self.slice.stop - self.slice.start
+        else:
+            return len(self.indices)
+
     def __str__(self):
         indices = self.indices if self.indices is not None else self.slice
         return f"FrequencyLayout(\n    offset: {self.offset}\n    stride_between_worlds: {self.stride_between_worlds}\n    stride_within_worlds: {self.stride_within_worlds}\n    indices: {indices}\n)"
@@ -738,37 +745,61 @@ class ArticulationView:
             )
 
         value_stride = attrib.strides[0]
-        shape = (self.world_count, self.count_per_world, layout.value_count)
-        strides = (
-            layout.stride_between_worlds * value_stride,
-            layout.stride_within_worlds * value_stride,
-            value_stride,
-        )
+        is_indexed = layout.indices is not None
 
-        # squeeze the articulation and value axes if needed
-        if self.squeeze[2] and layout.value_count == 1:
-            if self.squeeze[1] and self.count_per_world == 1:
-                shape = shape[:1]
-                strides = strides[:1]
+        # handle custom slice
+        if isinstance(_slice, Slice):
+            _slice = _slice.get()
+        elif isinstance(_slice, int):
+            _slice = slice(_slice, _slice + 1)
+
+        if _slice is None:
+            value_count = layout.value_count
+            if is_indexed:
+                value_slice = layout.indices
             else:
-                shape = shape[:2]
-                strides = strides[:2]
-        elif self.squeeze[1] and self.count_per_world == 1:
-            shape = (shape[0], shape[2])
-            strides = (strides[0], strides[2])
+                value_slice = layout.slice
+        else:
+            value_count = _slice.stop - _slice.start
+            if is_indexed:
+                value_slice = layout.indices[_slice]
+            else:
+                value_slice = _slice
 
-        # squeeze the world axis if needed, but ensure the resulting array has at least one dimension
-        if self.squeeze[0] and self.world_count == 1 and len(shape) > 1:
-            shape = shape[1:]
-            strides = strides[1:]
+        # construct result shape by squeezing as needed
+        shape = []
+        strides = []
+        index_tuple = []
 
-        leading_shape = shape[:-1]
+        # world dimension
+        if not (self.squeeze[0] and self.world_count == 1):
+            shape.append(self.world_count)
+            strides.append(layout.stride_between_worlds * value_stride)
+            index_tuple.append(slice(self.world_count))
+
+        # articulation dimension
+        if not (self.squeeze[1] and self.count_per_world == 1):
+            shape.append(self.count_per_world)
+            strides.append(layout.stride_within_worlds * value_stride)
+            index_tuple.append(slice(self.count_per_world))
+
+        # value dimension (e.g. link or DOF)
+        # NOTE: ensure the result has at least one dimension
+        if not (self.squeeze[2] and value_count == 1) or len(shape) == 0:
+            shape.append(value_count)
+            strides.append(value_stride)
+            index_tuple.append(value_slice)
+
+        # trailing dimensions for multidimensional attributes
         trailing_shape = attrib.shape[1:]
         trailing_strides = attrib.strides[1:]
+        trailing_slices = [slice(s) for s in trailing_shape]
 
         shape = (*shape, *trailing_shape)
         strides = (*strides, *trailing_strides)
+        index_tuple = (*index_tuple, *trailing_slices)
 
+        # construct reshaped attribute array
         attrib = wp.array(
             ptr=int(attrib.ptr) + layout.offset * value_stride,
             dtype=attrib.dtype,
@@ -778,31 +809,16 @@ class ArticulationView:
             copy=False,
         )
 
-        if _slice is None:
-            _slice = layout.slice
-        elif isinstance(_slice, Slice):
-            _slice = _slice.get()
-        elif isinstance(_slice, int):
-            _slice = slice(_slice, _slice + 1)
+        # apply selection (slices or indices)
+        attrib = attrib[index_tuple]
+
+        if is_indexed:
+            # create a contiguous staging array
+            attrib._staging_array = wp.empty_like(attrib)
         else:
-            raise TypeError(f"Invalid slice type: expected Slice or int, got {type(_slice)}")
-
-        leading_slices = [slice(s) for s in leading_shape]
-        trailing_slices = [slice(s) for s in trailing_shape]
-
-        if _slice is not None:
-            # create strided array
-            index_tuple = (*leading_slices, _slice, *trailing_slices)
-            attrib = attrib[index_tuple]
             # fixup for empty slices - FIXME: this should be handled by Warp, above
             if attrib.size == 0:
                 attrib.ptr = None
-        else:
-            # create indexed array + contiguous staging array
-            assert layout.indices is not None
-            index_tuple = (*leading_slices, layout.indices, *trailing_slices)
-            attrib = attrib[index_tuple]
-            attrib._staging_array = wp.empty_like(attrib)
 
         return attrib
 
