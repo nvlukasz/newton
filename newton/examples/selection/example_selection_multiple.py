@@ -141,7 +141,7 @@ class Example:
         # create multi-articulation view
         # ===========================================================
         self.ants = ArticulationView(
-            self.model, "ant", verbose=VERBOSE, exclude_joint_types=[newton.JointType.FREE], squeeze_axes=False
+            self.model, "ant", verbose=VERBOSE, exclude_joint_types=[newton.JointType.FREE]
         )
 
         self.num_per_world = self.ants.count_per_world

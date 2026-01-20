@@ -288,7 +288,6 @@ class ArticulationView:
         include_joint_types (list[int] | None): List of joint types to include.
         exclude_joint_types (list[int] | None): List of joint types to exclude.
         verbose (bool | None): If True, prints selection summary.
-        squeeze_axes (bool | tuple[int]): Squeeze (remove) singleton dimensions from attribute arrays.
     """
 
     def __init__(
@@ -302,25 +301,12 @@ class ArticulationView:
         include_joint_types: list[int] | None = None,
         exclude_joint_types: list[int] | None = None,
         verbose: bool | None = None,
-        squeeze_axes: bool | tuple[int] = (1,),
     ):
         self.model = model
         self.device = model.device
 
         if verbose is None:
             verbose = wp.config.verbose
-
-        if squeeze_axes is True:
-            self.squeeze = [True, True, True]
-        elif squeeze_axes is False:
-            self.squeeze = [False, False, False]
-        else:
-            self.squeeze = [False, False, False]
-            for axis in squeeze_axes:
-                if isinstance(axis, int) and axis >= 0 and axis < 3:
-                    self.squeeze[axis] = True
-                else:
-                    raise ValueError(f"Invalid squeeze axis: {axis}")
 
         # FIXME: avoid/reduce this readback?
         model_articulation_start = model.articulation_start.numpy()
@@ -846,29 +832,13 @@ class ArticulationView:
             else:
                 value_slice = _slice
 
-        # construct result shape by squeezing as needed
-        shape = []
-        strides = []
-        index_tuple = []
-
-        # world dimension
-        if not (self.squeeze[0] and self.world_count == 1):
-            shape.append(self.world_count)
-            strides.append(layout.stride_between_worlds * value_stride)
-            index_tuple.append(slice(self.world_count))
-
-        # articulation dimension
-        if not (self.squeeze[1] and self.count_per_world == 1):
-            shape.append(self.count_per_world)
-            strides.append(layout.stride_within_worlds * value_stride)
-            index_tuple.append(slice(self.count_per_world))
-
-        # value dimension (e.g. link or DOF)
-        # NOTE: ensure the result has at least one dimension
-        if not (self.squeeze[2] and value_count == 1) or len(shape) == 0:
-            shape.append(value_count)
-            strides.append(value_stride)
-            index_tuple.append(value_slice)
+        shape = (self.world_count, self.count_per_world, value_count)
+        strides = (
+            layout.stride_between_worlds * value_stride,
+            layout.stride_within_worlds * value_stride,
+            value_stride,
+        )
+        slices = (slice(self.world_count), slice(self.count_per_world), value_slice)
 
         # trailing dimensions for multidimensional attributes
         trailing_shape = attrib.shape[1:]
@@ -877,7 +847,7 @@ class ArticulationView:
 
         shape = (*shape, *trailing_shape)
         strides = (*strides, *trailing_strides)
-        index_tuple = (*index_tuple, *trailing_slices)
+        slices = (*slices, *trailing_slices)
 
         # construct reshaped attribute array
         attrib = wp.array(
@@ -890,7 +860,7 @@ class ArticulationView:
         )
 
         # apply selection (slices or indices)
-        attrib = attrib[index_tuple]
+        attrib = attrib[slices]
 
         if is_indexed:
             # create a contiguous staging array
@@ -931,9 +901,6 @@ class ArticulationView:
         # get mask
         if mask is None:
             mask = self.full_mask
-        # elif not isinstance(mask, wp.array):
-        #     mask = wp.array(mask, dtype=bool, shape=(self.world_count,), device=self.device, copy=False)
-        #     assert mask.shape == (self.world_count,)
         else:
             mask = self._parse_mask(mask)
 
