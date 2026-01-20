@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import numpy as np
 import unittest
 
 import warp as wp
@@ -20,6 +21,7 @@ import warp as wp
 import newton
 import newton.examples
 from newton.selection import ArticulationView
+from newton.tests.unittest_utils import assert_np_equal
 
 
 class TestSelection(unittest.TestCase):
@@ -483,6 +485,51 @@ class TestSelection(unittest.TestCase):
         self.assertEqual(
             multi_cube_per_world_squeeze_true.get_attribute("body_mass", multi_cube_per_world_model).shape, (W, A)
         )
+
+    def test_selection_mask(self):
+        # load articulation
+        ant = newton.ModelBuilder()
+        ant.add_mjcf(
+            newton.examples.get_asset("nv_ant.xml"),
+            ignore_names=["floor", "ground"],
+        )
+
+        num_worlds = 4
+        num_per_world = 3
+        num_artis = num_worlds * num_per_world
+
+        # scene with multiple ants per world
+        world = newton.ModelBuilder()
+        for i in range(num_per_world):
+            world.add_builder(ant, xform=wp.transform((0.0, 0.0, 1.0 + i), wp.quat_identity()))
+        scene = newton.ModelBuilder()
+        scene.replicate(world, num_worlds=num_worlds)
+        model = scene.finalize()
+
+        view = ArticulationView(model, "ant", squeeze_axes=False)
+
+        # test default mask
+        model_mask = view.get_model_articulation_mask()
+        expected = np.full(num_artis, 1, dtype=np.bool)
+        assert_np_equal(model_mask.numpy(), expected)
+
+        # test per-world mask
+        model_mask = view.get_model_articulation_mask(mask=[0, 1, 1, 0])
+        expected = np.array([0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0], dtype=np.bool)
+        assert_np_equal(model_mask.numpy(), expected)
+
+        # test world-arti mask
+        m = [
+            [0, 1, 0],
+            [1, 0, 1],
+            [1, 1, 1],
+            [0, 0, 0],
+        ]
+        model_mask = view.get_model_articulation_mask(mask=m)
+        expected = np.array([0, 1, 0, 1, 0, 1, 1, 1, 1, 0, 0, 0], dtype=np.bool)
+        assert_np_equal(model_mask.numpy(), expected)
+
+
 
 
 if __name__ == "__main__":

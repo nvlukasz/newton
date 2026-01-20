@@ -26,43 +26,101 @@ from ..sim.model import ModelAttributeFrequency
 
 @wp.kernel
 def set_model_articulation_mask_kernel(
-    view_mask: wp.array(dtype=bool),  # mask in ArticulationView (per world)
+    world_arti_mask: wp.array2d(dtype=bool),  # (world, arti) mask in ArticulationView
     view_to_model_map: wp.array2d(dtype=int),  # map (world, arti) indices to Model articulation id
-    articulation_mask: wp.array(dtype=bool),  # output: mask of Model articulation indices
+    model_articulation_mask: wp.array(dtype=bool),  # output: mask of Model articulation indices
 ):
     """
-    Set Model articulation mask from a view mask in an ArticulationView.
+    Set Model articulation mask from a 2D (world, arti) mask in an ArticulationView.
     """
     world, arti = wp.tid()
-    if view_mask[world]:
-        articulation_mask[view_to_model_map[world, arti]] = True
+    if world_arti_mask[world, arti]:
+        model_articulation_mask[view_to_model_map[world, arti]] = True
 
 
 @wp.kernel
-def set_articulation_attribute_1d_kernel(
-    view_mask: wp.array(dtype=bool),  # mask in ArticulationView
-    values: Any,  # 1d array or indexedarray
-    attrib: Any,  # 1d array or indexedarray
+def set_model_articulation_mask_per_world_kernel(
+    world_mask: wp.array(dtype=bool),  # world mask in ArticulationView
+    view_to_model_map: wp.array2d(dtype=int),  # map (world, arti) indices to Model articulation id
+    model_articulation_mask: wp.array(dtype=bool),  # output: mask of Model articulation indices
 ):
-    i = wp.tid()
-    if view_mask[i]:
-        attrib[i] = values[i]
+    """
+    Set Model articulation mask from a 1D world mask in an ArticulationView.
+    """
+    world, arti = wp.tid()
+    if world_mask[world]:
+        model_articulation_mask[view_to_model_map[world, arti]] = True
 
 
-@wp.kernel
-def set_articulation_attribute_2d_kernel(
-    view_mask: wp.array(dtype=bool),  # mask in ArticulationView
-    values: Any,  # 2d array or indexedarray
-    attrib: Any,  # 2d array or indexedarray
-):
-    i, j = wp.tid()
-    if view_mask[i]:
-        attrib[i, j] = values[i, j]
+# @wp.kernel
+# def set_articulation_attribute_1d_kernel(
+#     view_mask: wp.array2d(dtype=bool),  # (world, arti) mask in ArticulationView
+#     values: Any,  # 1d array or indexedarray
+#     attrib: Any,  # 1d array or indexedarray
+# ):
+#     i = wp.tid()
+#     if view_mask[i]:
+#         attrib[i] = values[i]
+
+
+# @wp.kernel
+# def set_articulation_attribute_2d_kernel(
+#     view_mask: wp.array2d(dtype=bool),  # (world, arti) mask in ArticulationView
+#     values: Any,  # 2d array or indexedarray
+#     attrib: Any,  # 2d array or indexedarray
+# ):
+#     i, j = wp.tid()
+#     if view_mask[i, j]:
+#         attrib[i, j] = values[i, j]
 
 
 @wp.kernel
 def set_articulation_attribute_3d_kernel(
-    view_mask: wp.array(dtype=bool),  # mask in ArticulationView
+    view_mask: wp.array2d(dtype=bool),  # (world, arti) mask in ArticulationView
+    values: Any,  # 3d array or indexedarray
+    attrib: Any,  # 3d array or indexedarray
+):
+    i, j, k = wp.tid()
+    if view_mask[i, j]:
+        attrib[i, j, k] = values[i, j, k]
+
+
+@wp.kernel
+def set_articulation_attribute_4d_kernel(
+    view_mask: wp.array2d(dtype=bool),  # (world, arti) mask in ArticulationView
+    values: Any,  # 4d array or indexedarray
+    attrib: Any,  # 4d array or indexedarray
+):
+    i, j, k, l = wp.tid()
+    if view_mask[i, j]:
+        attrib[i, j, k, l] = values[i, j, k, l]
+
+
+# @wp.kernel
+# def set_articulation_attribute_1d_per_world_kernel(
+#     view_mask: wp.array(dtype=bool),  # world mask in ArticulationView
+#     values: Any,  # 1d array or indexedarray
+#     attrib: Any,  # 1d array or indexedarray
+# ):
+#     i = wp.tid()
+#     if view_mask[i]:
+#         attrib[i] = values[i]
+
+
+# @wp.kernel
+# def set_articulation_attribute_2d_per_world_kernel(
+#     view_mask: wp.array(dtype=bool),  # world mask in ArticulationView
+#     values: Any,  # 2d array or indexedarray
+#     attrib: Any,  # 2d array or indexedarray
+# ):
+#     i, j = wp.tid()
+#     if view_mask[i]:
+#         attrib[i, j] = values[i, j]
+
+
+@wp.kernel
+def set_articulation_attribute_3d_per_world_kernel(
+    view_mask: wp.array(dtype=bool),  # world mask in ArticulationView
     values: Any,  # 3d array or indexedarray
     attrib: Any,  # 3d array or indexedarray
 ):
@@ -72,8 +130,8 @@ def set_articulation_attribute_3d_kernel(
 
 
 @wp.kernel
-def set_articulation_attribute_4d_kernel(
-    view_mask: wp.array(dtype=bool),  # mask in ArticulationView
+def set_articulation_attribute_4d_per_world_kernel(
+    view_mask: wp.array(dtype=bool),  # world mask in ArticulationView
     values: Any,  # 4d array or indexedarray
     attrib: Any,  # 4d array or indexedarray
 ):
@@ -86,20 +144,28 @@ def set_articulation_attribute_4d_kernel(
 for dtype in [float, int, wp.transform, wp.spatial_vector]:
     for src_array_type in [wp.array, wp.indexedarray]:
         for dst_array_type in [wp.array, wp.indexedarray]:
-            wp.overload(
-                set_articulation_attribute_1d_kernel,
-                {"values": src_array_type(dtype=dtype, ndim=1), "attrib": dst_array_type(dtype=dtype, ndim=1)},
-            )
-            wp.overload(
-                set_articulation_attribute_2d_kernel,
-                {"values": src_array_type(dtype=dtype, ndim=2), "attrib": dst_array_type(dtype=dtype, ndim=2)},
-            )
+            # wp.overload(
+            #     set_articulation_attribute_1d_kernel,
+            #     {"values": src_array_type(dtype=dtype, ndim=1), "attrib": dst_array_type(dtype=dtype, ndim=1)},
+            # )
+            # wp.overload(
+            #     set_articulation_attribute_2d_kernel,
+            #     {"values": src_array_type(dtype=dtype, ndim=2), "attrib": dst_array_type(dtype=dtype, ndim=2)},
+            # )
             wp.overload(
                 set_articulation_attribute_3d_kernel,
                 {"values": src_array_type(dtype=dtype, ndim=3), "attrib": dst_array_type(dtype=dtype, ndim=3)},
             )
             wp.overload(
                 set_articulation_attribute_4d_kernel,
+                {"values": src_array_type(dtype=dtype, ndim=4), "attrib": dst_array_type(dtype=dtype, ndim=4)},
+            )
+            wp.overload(
+                set_articulation_attribute_3d_per_world_kernel,
+                {"values": src_array_type(dtype=dtype, ndim=3), "attrib": dst_array_type(dtype=dtype, ndim=3)},
+            )
+            wp.overload(
+                set_articulation_attribute_4d_per_world_kernel,
                 {"values": src_array_type(dtype=dtype, ndim=4), "attrib": dst_array_type(dtype=dtype, ndim=4)},
             )
 
@@ -688,13 +754,13 @@ class ArticulationView:
         # articulation ids grouped by world
         self.articulation_ids = wp.array(articulation_ids, dtype=int, device=self.device)
 
-        # TODO: this mask is per world, should we support 2d masks (world, arti)?
+        # default mask includes all articulations in all worlds
         self.full_mask = wp.full(world_count, True, dtype=bool, device=self.device)
 
         # create articulation mask
         self.articulation_mask = wp.zeros(model.articulation_count, dtype=bool, device=self.device)
         wp.launch(
-            set_model_articulation_mask_kernel,
+            set_model_articulation_mask_per_world_kernel,
             dim=self.articulation_ids.shape,
             inputs=[self.full_mask, self.articulation_ids, self.articulation_mask],
             device=self.device,
@@ -865,42 +931,48 @@ class ArticulationView:
         # get mask
         if mask is None:
             mask = self.full_mask
-        elif not isinstance(mask, wp.array):
-            mask = wp.array(mask, dtype=bool, shape=(self.world_count,), device=self.device, copy=False)
-            assert mask.shape == (self.world_count,)
+        # elif not isinstance(mask, wp.array):
+        #     mask = wp.array(mask, dtype=bool, shape=(self.world_count,), device=self.device, copy=False)
+        #     assert mask.shape == (self.world_count,)
+        else:
+            mask = self._parse_mask(mask)
 
         # launch appropriate kernel based on attribute dimensionality
         # TODO: cache concrete overload per attribute?
-        if attrib.ndim == 1:
-            wp.launch(
-                set_articulation_attribute_1d_kernel,
-                dim=attrib.shape,
-                inputs=[mask, values, attrib],
-                device=self.device,
-            )
-        elif attrib.ndim == 2:
-            wp.launch(
-                set_articulation_attribute_2d_kernel,
-                dim=attrib.shape,
-                inputs=[mask, values, attrib],
-                device=self.device,
-            )
-        elif attrib.ndim == 3:
-            wp.launch(
-                set_articulation_attribute_3d_kernel,
-                dim=attrib.shape,
-                inputs=[mask, values, attrib],
-                device=self.device,
-            )
-        elif attrib.ndim == 4:
-            wp.launch(
-                set_articulation_attribute_4d_kernel,
-                dim=attrib.shape,
-                inputs=[mask, values, attrib],
-                device=self.device,
-            )
-        else:
-            raise NotImplementedError(f"Unsupported attribute with ndim={attrib.ndim}")
+        if mask.ndim == 1:
+            if attrib.ndim == 3:
+                wp.launch(
+                    set_articulation_attribute_3d_per_world_kernel,
+                    dim=attrib.shape,
+                    inputs=[mask, values, attrib],
+                    device=self.device,
+                )
+            elif attrib.ndim == 4:
+                wp.launch(
+                    set_articulation_attribute_4d_per_world_kernel,
+                    dim=attrib.shape,
+                    inputs=[mask, values, attrib],
+                    device=self.device,
+                )
+            else:
+                raise NotImplementedError(f"Unsupported attribute with ndim={attrib.ndim}")
+        else:  # mask.ndim == 2
+            if attrib.ndim == 3:
+                wp.launch(
+                    set_articulation_attribute_3d_kernel,
+                    dim=attrib.shape,
+                    inputs=[mask, values, attrib],
+                    device=self.device,
+                )
+            elif attrib.ndim == 4:
+                wp.launch(
+                    set_articulation_attribute_4d_kernel,
+                    dim=attrib.shape,
+                    inputs=[mask, values, attrib],
+                    device=self.device,
+                )
+            else:
+                raise NotImplementedError(f"Unsupported attribute with ndim={attrib.ndim}")
 
     def get_attribute(self, name: str, source: Model | State | Control):
         """
@@ -1101,6 +1173,27 @@ class ArticulationView:
     # ========================================================================================
     # Utilities
 
+    def _parse_mask(self, mask):
+        if isinstance(mask, wp.array):
+            assert mask.dtype is wp.bool
+            if mask.ndim == 1:
+                assert mask.size == self.world_count
+                return mask
+            if mask.ndim == 2:
+                assert mask.shape == (self.world_count, self.count_per_world)
+                return mask
+            raise ValueError("Invalid mask dimensionality")
+        else:
+            # try interpreting as a 1D world mask
+            try:
+                return wp.array(mask, dtype=bool, shape=self.world_count, device=self.device, copy=False)
+            except:
+                # try interpreting as a 2D (world, arti) mask
+                try:
+                    return wp.array(mask, dtype=bool, shape=(self.world_count, self.count_per_world), device=self.device, copy=False)
+                except:
+                    raise ValueError("Invalid mask")
+
     def get_model_articulation_mask(self, mask=None):
         """
         Get Model articulation mask from a mask in this ArticulationView.
@@ -1111,16 +1204,22 @@ class ArticulationView:
         if mask is None:
             return self.articulation_mask
         else:
-            if not isinstance(mask, wp.array):
-                mask = wp.array(mask, dtype=bool, device=self.device, copy=False)
-            assert mask.shape == (self.world_count,)
+            mask = self._parse_mask(mask)
             articulation_mask = wp.zeros(self.model.articulation_count, dtype=bool, device=self.device)
-            wp.launch(
-                set_model_articulation_mask_kernel,
-                dim=self.articulation_ids.shape,
-                inputs=[mask, self.articulation_ids, articulation_mask],
-                device=self.device,
-            )
+            if mask.ndim == 1:
+                wp.launch(
+                    set_model_articulation_mask_per_world_kernel,
+                    dim=self.articulation_ids.shape,
+                    inputs=[mask, self.articulation_ids, articulation_mask],
+                    device=self.device,
+                )
+            else:
+                wp.launch(
+                    set_model_articulation_mask_kernel,
+                    dim=self.articulation_ids.shape,
+                    inputs=[mask, self.articulation_ids, articulation_mask],
+                    device=self.device,
+                )
             return articulation_mask
 
     def eval_fk(self, target: Model | State, mask=None):
