@@ -13,9 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import numpy as np
 import unittest
 
+import numpy as np
 import warp as wp
 
 import newton
@@ -95,11 +95,21 @@ class TestSelection(unittest.TestCase):
         self.assertEqual(single_ant_per_world_view.get_link_velocities(single_ant_per_world_model).shape, (W, 1, L))
         self.assertEqual(single_ant_per_world_view.get_dof_positions(single_ant_per_world_model).shape, (W, 1, C))
         self.assertEqual(single_ant_per_world_view.get_dof_velocities(single_ant_per_world_model).shape, (W, 1, D))
-        self.assertEqual(single_ant_per_world_view.get_attribute("body_mass", single_ant_per_world_model).shape, (W, 1, L))
-        self.assertEqual(single_ant_per_world_view.get_attribute("joint_type", single_ant_per_world_model).shape, (W, 1, J))
-        self.assertEqual(single_ant_per_world_view.get_attribute("joint_dof_dim", single_ant_per_world_model).shape, (W, 1, J, 2))
-        self.assertEqual(single_ant_per_world_view.get_attribute("joint_limit_ke", single_ant_per_world_model).shape, (W, 1, D))
-        self.assertEqual(single_ant_per_world_view.get_attribute("shape_thickness", single_ant_per_world_model).shape, (W, 1, S))
+        self.assertEqual(
+            single_ant_per_world_view.get_attribute("body_mass", single_ant_per_world_model).shape, (W, 1, L)
+        )
+        self.assertEqual(
+            single_ant_per_world_view.get_attribute("joint_type", single_ant_per_world_model).shape, (W, 1, J)
+        )
+        self.assertEqual(
+            single_ant_per_world_view.get_attribute("joint_dof_dim", single_ant_per_world_model).shape, (W, 1, J, 2)
+        )
+        self.assertEqual(
+            single_ant_per_world_view.get_attribute("joint_limit_ke", single_ant_per_world_model).shape, (W, 1, D)
+        )
+        self.assertEqual(
+            single_ant_per_world_view.get_attribute("shape_thickness", single_ant_per_world_model).shape, (W, 1, S)
+        )
 
         A = 3  # num articulations per world
 
@@ -121,11 +131,21 @@ class TestSelection(unittest.TestCase):
         self.assertEqual(multi_ant_per_world_view.get_link_velocities(multi_ant_per_world_model).shape, (W, A, L))
         self.assertEqual(multi_ant_per_world_view.get_dof_positions(multi_ant_per_world_model).shape, (W, A, C))
         self.assertEqual(multi_ant_per_world_view.get_dof_velocities(multi_ant_per_world_model).shape, (W, A, D))
-        self.assertEqual(multi_ant_per_world_view.get_attribute("body_mass", multi_ant_per_world_model).shape, (W, A, L))
-        self.assertEqual(multi_ant_per_world_view.get_attribute("joint_type", multi_ant_per_world_model).shape, (W, A, J))
-        self.assertEqual(multi_ant_per_world_view.get_attribute("joint_dof_dim", multi_ant_per_world_model).shape, (W, A, J, 2))
-        self.assertEqual(multi_ant_per_world_view.get_attribute("joint_limit_ke", multi_ant_per_world_model).shape, (W, A, D))
-        self.assertEqual(multi_ant_per_world_view.get_attribute("shape_thickness", multi_ant_per_world_model).shape, (W, A, S))
+        self.assertEqual(
+            multi_ant_per_world_view.get_attribute("body_mass", multi_ant_per_world_model).shape, (W, A, L)
+        )
+        self.assertEqual(
+            multi_ant_per_world_view.get_attribute("joint_type", multi_ant_per_world_model).shape, (W, A, J)
+        )
+        self.assertEqual(
+            multi_ant_per_world_view.get_attribute("joint_dof_dim", multi_ant_per_world_model).shape, (W, A, J, 2)
+        )
+        self.assertEqual(
+            multi_ant_per_world_view.get_attribute("joint_limit_ke", multi_ant_per_world_model).shape, (W, A, D)
+        )
+        self.assertEqual(
+            multi_ant_per_world_view.get_attribute("shape_thickness", multi_ant_per_world_model).shape, (W, A, S)
+        )
 
     def test_selection_mask(self):
         # load articulation

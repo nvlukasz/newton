@@ -1157,7 +1157,9 @@ class ArticulationView:
             except:
                 # try interpreting as a 2D (world, arti) mask
                 try:
-                    return wp.array(mask, dtype=bool, shape=(self.world_count, self.count_per_world), device=self.device, copy=False)
+                    return wp.array(
+                        mask, dtype=bool, shape=(self.world_count, self.count_per_world), device=self.device, copy=False
+                    )
                 except:
                     raise ValueError("Invalid mask")
 
