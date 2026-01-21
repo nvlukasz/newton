@@ -902,7 +902,7 @@ class ArticulationView:
         if mask is None:
             mask = self.full_mask
         else:
-            mask = self._parse_mask(mask)
+            mask = self._resolve_mask(mask)
 
         # launch appropriate kernel based on attribute dimensionality
         # TODO: cache concrete overload per attribute?
@@ -1140,28 +1140,29 @@ class ArticulationView:
     # ========================================================================================
     # Utilities
 
-    def _parse_mask(self, mask):
+    def _resolve_mask(self, mask):
+        # accept 1D and 2D Boolean masks
         if isinstance(mask, wp.array):
-            assert mask.dtype is wp.bool
-            if mask.ndim == 1:
-                assert mask.size == self.world_count
+            if mask.dtype is wp.bool and mask.ndim < 3:
                 return mask
-            if mask.ndim == 2:
-                assert mask.shape == (self.world_count, self.count_per_world)
-                return mask
-            raise ValueError("Invalid mask dimensionality")
         else:
             # try interpreting as a 1D world mask
             try:
                 return wp.array(mask, dtype=bool, shape=self.world_count, device=self.device, copy=False)
-            except:
-                # try interpreting as a 2D (world, arti) mask
-                try:
-                    return wp.array(
-                        mask, dtype=bool, shape=(self.world_count, self.count_per_world), device=self.device, copy=False
-                    )
-                except:
-                    raise ValueError("Invalid mask")
+            except Exception:
+                pass
+            # try interpreting as a 2D (world, arti) mask
+            try:
+                return wp.array(
+                    mask, dtype=bool, shape=(self.world_count, self.count_per_world), device=self.device, copy=False
+                )
+            except Exception:
+                pass
+
+        # no match
+        raise ValueError(
+            f"Expected Boolean mask with shape ({self.world_count}, {self.count_per_world}) or ({self.world_count},)"
+        )
 
     def get_model_articulation_mask(self, mask=None):
         """
@@ -1173,7 +1174,7 @@ class ArticulationView:
         if mask is None:
             return self.articulation_mask
         else:
-            mask = self._parse_mask(mask)
+            mask = self._resolve_mask(mask)
             articulation_mask = wp.zeros(self.model.articulation_count, dtype=bool, device=self.device)
             if mask.ndim == 1:
                 wp.launch(
