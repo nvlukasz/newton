@@ -105,7 +105,7 @@ class TestSelection(unittest.TestCase):
         if floating:
             self.assertEqual(single_ant_per_world_view.get_root_velocities(single_ant_per_world_model).shape, (W, 1))
         else:
-            self.assertIsNone(single_ant_per_world_view.get_root_velocities(single_ant_model))
+            self.assertIsNone(single_ant_per_world_view.get_root_velocities(single_ant_per_world_model))
         self.assertEqual(single_ant_per_world_view.get_link_transforms(single_ant_per_world_model).shape, (W, 1, L))
         self.assertEqual(single_ant_per_world_view.get_link_velocities(single_ant_per_world_model).shape, (W, 1, L))
         self.assertEqual(single_ant_per_world_view.get_dof_positions(single_ant_per_world_model).shape, (W, 1, C))
