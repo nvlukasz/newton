@@ -15,6 +15,7 @@
 
 import functools
 from fnmatch import fnmatch
+from types import NoneType
 from typing import Any
 
 import warp as wp
@@ -989,21 +990,15 @@ class ArticulationView:
         # handle custom slice
         if isinstance(_slice, Slice):
             _slice = _slice.get()
-        elif isinstance(_slice, int):
-            _slice = slice(_slice, _slice + 1)
+        elif not isinstance(_slice, (NoneType, int)):
+            raise ValueError(f"Invalid slice type: expected Slice or int, got {type(_slice)}")
 
         if _slice is None:
+            value_slice = layout.indices if is_indexed else layout.slice
             value_count = layout.value_count
-            if is_indexed:
-                value_slice = layout.indices
-            else:
-                value_slice = layout.slice
         else:
-            value_count = _slice.stop - _slice.start
-            if is_indexed:
-                value_slice = layout.indices[_slice]
-            else:
-                value_slice = _slice
+            value_slice = _slice
+            value_count = 1 if isinstance(_slice, int) else _slice.stop - _slice.start
 
         shape = (self.world_count, self.count_per_world, value_count)
         strides = (
