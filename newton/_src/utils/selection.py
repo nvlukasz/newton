@@ -1000,22 +1000,19 @@ class ArticulationView:
             value_slice = _slice
             value_count = 1 if isinstance(_slice, int) else _slice.stop - _slice.start
 
-        shape = (self.world_count, self.count_per_world, value_count)
-        strides = (
-            layout.stride_between_worlds * value_stride,
-            layout.stride_within_worlds * value_stride,
-            value_stride,
-        )
-        slices = (slice(self.world_count), slice(self.count_per_world), value_slice)
-
         # trailing dimensions for multidimensional attributes
         trailing_shape = attrib.shape[1:]
         trailing_strides = attrib.strides[1:]
         trailing_slices = [slice(s) for s in trailing_shape]
 
-        shape = (*shape, *trailing_shape)
-        strides = (*strides, *trailing_strides)
-        slices = (*slices, *trailing_slices)
+        shape = (self.world_count, self.count_per_world, value_count, *trailing_shape)
+        strides = (
+            layout.stride_between_worlds * value_stride,
+            layout.stride_within_worlds * value_stride,
+            value_stride,
+            *trailing_strides,
+        )
+        slices = (slice(self.world_count), slice(self.count_per_world), value_slice, *trailing_slices)
 
         # construct reshaped attribute array
         attrib = wp.array(
