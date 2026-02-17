@@ -57,15 +57,14 @@ class TestSelection(unittest.TestCase):
 
         L = 9  # num links
         J = 9  # num joints
+        S = 13  # num shapes
 
         if floating:
             D = 14  # num joint dofs
             C = 15  # num joint coords
-            S = 13  # num shapes
         else:
             D = 8  # num joint dofs
             C = 8  # num joint coords
-            S = 13  # num shapes
 
         # scene with just one ant
         single_ant_model = ant.finalize()

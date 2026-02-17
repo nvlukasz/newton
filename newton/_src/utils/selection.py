@@ -990,8 +990,8 @@ class ArticulationView:
         # handle custom slice
         if isinstance(_slice, Slice):
             _slice = _slice.get()
-        elif not isinstance(_slice, (NoneType, int)):
-            raise ValueError(f"Invalid slice type: expected Slice or int, got {type(_slice)}")
+        elif not isinstance(_slice, (NoneType, int, slice)):
+            raise ValueError(f"Invalid slice type: expected slice or int, got {type(_slice)}")
 
         if _slice is None:
             value_slice = layout.indices if is_indexed else layout.slice
