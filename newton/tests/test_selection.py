@@ -55,15 +55,14 @@ class TestSelection(unittest.TestCase):
             floating=floating,
         )
 
+        L = 9  # num links
+        J = 9  # num joints
+
         if floating:
-            L = 9  # num links
-            J = 9  # num joints
             D = 14  # num joint dofs
             C = 15  # num joint coords
             S = 13  # num shapes
         else:
-            L = 9  # num links
-            J = 9  # num joints
             D = 8  # num joint dofs
             C = 8  # num joint coords
             S = 13  # num shapes
