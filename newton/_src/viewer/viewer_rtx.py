@@ -156,6 +156,10 @@ class ViewerRTX(ViewerUSD):
         )
         gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
 
+        self._registered_tex = wp.RegisteredGLTexture(
+            self._gl_texture, gl.GL_TEXTURE_2D, flags=wp.TextureResourceFlags.WRITE_DISCARD
+        )
+
         # Compile fullscreen-triangle shader (sRGB→linear + Y-flip in fragment)
         _VS = b"""#version 330
 out vec2 uv;
@@ -754,8 +758,8 @@ void main() {
                 for frame in product.frames:
                     if "LdrColor" in frame.render_vars:
                         with wp.ScopedTimer("ViewerRTX::fb_map", active=PROFILE_ENABLED, use_nvtx=True):
-                            with frame.render_vars["LdrColor"].map(device=Device.CPU) as mapping:
-                                pixels = mapping.tensor.numpy()
+                            with frame.render_vars["LdrColor"].map(device=Device.CUDA) as mapping:
+                                pixels = wp.from_dlpack(mapping.tensor, dtype=wp.vec4ub)
                                 with wp.ScopedTimer("ViewerRTX::blit_to_window", active=PROFILE_ENABLED, use_nvtx=True):
                                     self._blit_to_window(pixels)
 
@@ -770,27 +774,15 @@ void main() {
         if self._window is None or self._window.context is None:
             return
 
-        h, w = pixels.shape[:2]
-        if not pixels.flags["C_CONTIGUOUS"]:
-            pixels = np.ascontiguousarray(pixels)
-
         self._window.switch_to()
         fb_w, fb_h = self._window.get_framebuffer_size()
         gl.glViewport(0, 0, fb_w, fb_h)
 
         with wp.ScopedTimer("ViewerRTX::gl_tex_upload", active=PROFILE_ENABLED, use_nvtx=True):
+            tex = self._registered_tex.map()
+            tex.copy_from_array(pixels)
+            self._registered_tex.unmap()
             gl.glBindTexture(gl.GL_TEXTURE_2D, self._gl_texture)
-            gl.glTexSubImage2D(
-                gl.GL_TEXTURE_2D,
-                0,
-                0,
-                0,
-                w,
-                h,
-                gl.GL_RGBA,
-                gl.GL_UNSIGNED_BYTE,
-                pixels.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte)),
-            )
 
         with wp.ScopedTimer("ViewerRTX::gl_draw", active=PROFILE_ENABLED, use_nvtx=True):
             gl.glUseProgram(self._gl_program)
