@@ -50,8 +50,20 @@ class ViewerRTX(ViewerUSD):
     _PHASE_BUILD = 0
     _PHASE_RENDER = 1
 
+    # Available lighting environment presets.
+    ENVIRONMENTS = ("default", "studio", "none")
+
     def __init__(
-        self, width=1920, height=1080, fps=60, up_axis="Z", num_frames=None, scaling=1.0, headless=False, paused=False
+        self,
+        width=1920,
+        height=1080,
+        fps=60,
+        up_axis="Z",
+        num_frames=None,
+        scaling=1.0,
+        headless=False,
+        paused=False,
+        environment="default",
     ):
         os.environ["OVRTX_SKIP_USD_CHECK"] = "1"
 
@@ -62,6 +74,12 @@ class ViewerRTX(ViewerUSD):
 
         if UsdGeom is None:
             raise ImportError("usd-core package is required for ViewerRTX. Install with: pip install usd-core")
+
+        self._environment = environment.lower()
+        if self._environment not in self.ENVIRONMENTS:
+            raise ValueError(
+                f"Unknown RTX environment {self._environment!r}. Choose from: {', '.join(self.ENVIRONMENTS)}"
+            )
 
         self._tmp_usd_path = os.path.abspath("_tmp_rtx_scene.usd")
 
@@ -156,7 +174,7 @@ class ViewerRTX(ViewerUSD):
         )
         gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
 
-        # Compile fullscreen-triangle shader (sRGB→linear + Y-flip in fragment)
+        # Compile fullscreen-triangle shader (linear→sRGB gamma + Y-flip in fragment)
         _VS = b"""#version 330
 out vec2 uv;
 void main() {
@@ -170,7 +188,7 @@ in vec2 uv;
 out vec4 fragColor;
 void main() {
     vec4 c = texture(tex, vec2(uv.x, 1.0 - uv.y));
-    fragColor = vec4(pow(c.rgb, vec3(2.2)), c.a);
+    fragColor = vec4(pow(c.rgb, vec3(1.0/2.2)), c.a);
 }
 \x00"""
 
@@ -324,7 +342,7 @@ void main() {
 
     def _add_camera_lights_and_render_product(self):
         """Insert camera, lights, and RenderProduct into the stage before serialisation."""
-        from pxr import Sdf, UsdLux
+        from pxr import Sdf
 
         # ---- Camera ----------------------------------------------------------
         cam = UsdGeom.Camera.Define(self.stage, self._camera_prim_path)
@@ -348,19 +366,10 @@ void main() {
         mat_op.Set(gf_mat)
 
         # ---- Lights ----------------------------------------------------------
-        dome = UsdLux.DomeLight.Define(self.stage, "/root/_RTXDomeLight")
-        dome.GetIntensityAttr().Set(1000.0)
-
-        distant = UsdLux.DistantLight.Define(self.stage, "/root/_RTXDistantLight")
-        distant.GetIntensityAttr().Set(3000.0)
-        distant.GetAngleAttr().Set(0.53)
-        dx = UsdGeom.Xform(distant.GetPrim())
-        dx.ClearXformOpOrder()
-        rot = dx.AddRotateXYZOp()
-        if self.camera.up_axis == 2:
-            rot.Set(Gf.Vec3f(-45.0, 30.0, 0.0))
-        else:
-            rot.Set(Gf.Vec3f(-45.0, 0.0, 30.0))
+        if self._environment == "studio":
+            self._add_studio_lights()
+        elif self._environment == "default":
+            self._add_default_lights()
 
         # ---- Render hierarchy (must match Kit convention for OVRTX) ------------
         # Structure: /Render/OmniverseKit/HydraTextures/<product>
@@ -452,6 +461,91 @@ void main() {
         )
         rs.CreateRelationship("products").SetTargets([Sdf.Path(self._render_product_path)])
 
+    def _add_default_lights(self):
+        """Default lighting: dome light + distant directional light."""
+        from pxr import UsdLux
+
+        dome = UsdLux.DomeLight.Define(self.stage, "/root/_RTXDomeLight")
+        dome.GetIntensityAttr().Set(62.0)
+
+        distant = UsdLux.DistantLight.Define(self.stage, "/root/_RTXDistantLight")
+        distant.GetIntensityAttr().Set(375.0)
+        distant.GetAngleAttr().Set(0.53)
+        dx = UsdGeom.Xform(distant.GetPrim())
+        dx.ClearXformOpOrder()
+        rot = dx.AddRotateXYZOp()
+        if self.camera.up_axis == 2:
+            rot.Set(Gf.Vec3f(-45.0, 30.0, 0.0))
+        else:
+            rot.Set(Gf.Vec3f(-45.0, 0.0, 30.0))
+
+    def _add_studio_lights(self):
+        """Studio lighting: dim dome ambient + two sphere lights (cool fill + warm key).
+
+        Matches the lighting setup from overlay.usda: a dimmed dome for soft
+        ambient, with a cool-toned fill and a warm-toned key sphere light.
+        """
+        from pxr import Sdf, UsdLux
+
+        # Dim dome for ambient fill
+        dome = UsdLux.DomeLight.Define(self.stage, "/root/_RTXDomeLight")
+        dome.GetIntensityAttr().Set(1000.0)
+        dome.GetColorAttr().Set(Gf.Vec3f(0.203, 0.203, 0.203))
+
+        # Distant light kept but invisible (disabled), matching overlay
+        distant = UsdLux.DistantLight.Define(self.stage, "/root/_RTXDistantLight")
+        distant.GetIntensityAttr().Set(3000.0)
+        UsdGeom.Imageable(distant.GetPrim()).GetVisibilityAttr().Set("invisible")
+
+        # Cool fill sphere light (blue-white)
+        fill = UsdLux.SphereLight.Define(self.stage, "/root/_RTXFillLight")
+        fill.GetPrim().SetMetadata("apiSchemas", Sdf.TokenListOp.Create(prependedItems=["ShapingAPI"]))
+        fill.GetColorAttr().Set(Gf.Vec3f(0.468, 0.684, 1.0))
+        fill.GetIntensityAttr().Set(60000.0)
+        fill.GetRadiusAttr().Set(0.5)
+        fx = UsdGeom.Xform(fill.GetPrim())
+        fx.ClearXformOpOrder()
+        if self.camera.up_axis == 2:
+            fx.AddTranslateOp().Set(Gf.Vec3d(5.0, 0.0, 5.5))
+        else:
+            fx.AddTranslateOp().Set(Gf.Vec3d(5.0, 5.5, 0.0))
+
+        # Warm key sphere light (orange-white)
+        key = UsdLux.SphereLight.Define(self.stage, "/root/_RTXKeyLight")
+        key.GetPrim().SetMetadata("apiSchemas", Sdf.TokenListOp.Create(prependedItems=["ShapingAPI"]))
+        key.GetColorAttr().Set(Gf.Vec3f(1.0, 0.906, 0.722))
+        key.GetIntensityAttr().Set(60000.0)
+        key.GetRadiusAttr().Set(0.5)
+        kx = UsdGeom.Xform(key.GetPrim())
+        kx.ClearXformOpOrder()
+        if self.camera.up_axis == 2:
+            kx.AddTranslateOp().Set(Gf.Vec3d(-1.5, 3.0, 5.0))
+        else:
+            kx.AddTranslateOp().Set(Gf.Vec3d(-1.5, 5.0, -3.0))
+
+    def _apply_ground_material(self):
+        """Bind a dark, shiny UsdPreviewSurface material to ground-plane meshes."""
+        from pxr import Sdf, UsdShade
+
+        plane_prims = [prim for name, prim in self._meshes.items() if "plane" in name.lower()]
+        if not plane_prims:
+            return
+
+        mat_path = "/root/Materials/mat_ground"
+        self._ensure_scopes_for_path(self.stage, mat_path)
+
+        material = UsdShade.Material.Define(self.stage, mat_path)
+        surface = UsdShade.Shader.Define(self.stage, f"{mat_path}/PreviewSurface")
+        surface.CreateIdAttr("UsdPreviewSurface")
+        surface.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.05, 0.05, 0.06))
+        surface.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.15)
+        surface.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+        material.CreateSurfaceOutput().ConnectToSource(surface.ConnectableAPI(), "surface")
+
+        for prim in plane_prims:
+            UsdShade.MaterialBindingAPI.Apply(prim.GetPrim())
+            UsdShade.MaterialBindingAPI(prim).Bind(material)
+
     def add_background_usd(self, path: str):
         """Add a reference to a background USD (e.g. Gaussian splat scan).
 
@@ -473,6 +567,8 @@ void main() {
         import ovrtx
 
         self._add_camera_lights_and_render_product()
+        if self._environment != "none":
+            self._apply_ground_material()
         self.stage.GetRootLayer().Save()
 
         config = ovrtx.RendererConfig()

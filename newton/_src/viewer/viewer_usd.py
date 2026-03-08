@@ -23,9 +23,9 @@ import warp as wp
 from ..core.types import override
 
 try:
-    from pxr import Gf, Sdf, Usd, UsdGeom, Vt
+    from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade, Vt
 except ImportError:
-    Gf = Sdf = Usd = UsdGeom = Vt = None
+    Gf = Sdf = Usd = UsdGeom = UsdShade = Vt = None
 
 from .viewer import ViewerBase
 
@@ -248,6 +248,17 @@ class ViewerUSD(ViewerBase):
             mesh_prim.GetFaceVertexCountsAttr().Set(face_vertex_counts)
             mesh_prim.GetFaceVertexIndicesAttr().Set(indices_np)
 
+            # Set UVs as the "st" primvar
+            if uvs is not None:
+                uvs_np = uvs.numpy().astype(np.float32)
+                primvar_api = UsdGeom.PrimvarsAPI(mesh_prim)
+                st_primvar = primvar_api.CreatePrimvar("st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.vertex)
+                st_primvar.Set(uvs_np)
+
+            # Create and bind a textured material
+            if texture is not None:
+                self._apply_texture_material(mesh_prim, name, texture)
+
             # Store the prototype path
             self._meshes[name] = mesh_prim
 
@@ -260,13 +271,79 @@ class ViewerUSD(ViewerBase):
             mesh_prim.GetNormalsAttr().Set(normals_np, self._frame_index)
             mesh_prim.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
 
-        # Set UVs if provided (simplified for now)
-        if uvs is not None:
-            # TODO: Implement UV support for USD meshes
-            pass
-
         # how to hide the prototype mesh but not the instances in USD?
         mesh_prim.GetVisibilityAttr().Set("inherited" if not hidden else "invisible", self._frame_index)
+
+    def _resolve_texture_to_file(self, texture, name: str) -> str | None:
+        """Resolve a texture input to an absolute file path for USD referencing.
+
+        If the texture is a numpy array, it is saved as a PNG next to the output USD.
+        """
+        if isinstance(texture, (str, os.PathLike)):
+            path = os.fspath(texture) if isinstance(texture, os.PathLike) else texture
+            if os.path.isfile(path):
+                return os.path.abspath(path)
+            return path
+
+        if isinstance(texture, np.ndarray):
+            texture_dir = os.path.join(os.path.dirname(self.output_path), "textures")
+            os.makedirs(texture_dir, exist_ok=True)
+            safe_name = name.replace("/", "_").replace("\\", "_").strip("_")
+            texture_file = os.path.join(texture_dir, f"{safe_name}.png")
+            try:
+                from PIL import Image
+
+                Image.fromarray(texture).save(texture_file)
+                return os.path.abspath(texture_file)
+            except Exception:
+                return None
+
+        return None
+
+    def _apply_texture_material(self, mesh_prim, name: str, texture):
+        """Create a UsdPreviewSurface material with a diffuse texture and bind it to the mesh."""
+        if UsdShade is None:
+            return
+
+        texture_path = self._resolve_texture_to_file(texture, name)
+        if texture_path is None:
+            return
+
+        safe_name = name.replace("/", "_").replace("\\", "_").strip("_")
+        mat_path = f"/root/Materials/mat_{safe_name}"
+        self._ensure_scopes_for_path(self.stage, mat_path)
+
+        material = UsdShade.Material.Define(self.stage, mat_path)
+
+        # UsdPreviewSurface
+        surface = UsdShade.Shader.Define(self.stage, f"{mat_path}/PreviewSurface")
+        surface.CreateIdAttr("UsdPreviewSurface")
+        surface.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.5)
+        surface.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+        material.CreateSurfaceOutput().ConnectToSource(surface.ConnectableAPI(), "surface")
+
+        # UsdUVTexture for diffuse color
+        tex_shader = UsdShade.Shader.Define(self.stage, f"{mat_path}/DiffuseTexture")
+        tex_shader.CreateIdAttr("UsdUVTexture")
+        tex_shader.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(texture_path)
+        tex_shader.CreateInput("wrapS", Sdf.ValueTypeNames.Token).Set("repeat")
+        tex_shader.CreateInput("wrapT", Sdf.ValueTypeNames.Token).Set("repeat")
+        tex_shader.CreateOutput("rgb", Sdf.ValueTypeNames.Float3)
+
+        # UsdPrimvarReader to read the "st" texcoords
+        uv_reader = UsdShade.Shader.Define(self.stage, f"{mat_path}/UVReader")
+        uv_reader.CreateIdAttr("UsdPrimvarReader_float2")
+        uv_reader.CreateInput("varname", Sdf.ValueTypeNames.Token).Set("st")
+        uv_reader.CreateOutput("result", Sdf.ValueTypeNames.Float2)
+
+        # Wire: UVReader -> Texture.st, Texture.rgb -> Surface.diffuseColor
+        tex_shader.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(uv_reader.ConnectableAPI(), "result")
+        surface.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).ConnectToSource(
+            tex_shader.ConnectableAPI(), "rgb"
+        )
+
+        UsdShade.MaterialBindingAPI.Apply(mesh_prim.GetPrim())
+        UsdShade.MaterialBindingAPI(mesh_prim).Bind(material)
 
     # log a set of instances as individual mesh prims, slower but makes it easier
     # to do post-editing of instance materials etc. default for Newton shapes
