@@ -14,10 +14,10 @@
 # limitations under the License.
 
 ###########################################################################
-# Treadmill Cloth Simulation
+# Cloth Rollers
 #
 # A rolled cloth mesh that unrolls as the inner seam rotates.
-# Command: uv run -m newton.examples cloth.example_rolling_cloth
+# Command: uv run -m newton.examples cloth_rollers
 #
 ###########################################################################
 
@@ -186,7 +186,7 @@ def cylinder_mesh(radius=9.5, height=120.0, segments=64):
 
 
 class Example:
-    def __init__(self, viewer, args=None):
+    def __init__(self, viewer, args):
         self.viewer = viewer
         self.sim_time = 0.0
         self.args = args

@@ -17,6 +17,7 @@ import warp as wp
 
 from ...core.types import override
 from ...sim import Contacts, Control, Model, State
+from ..flags import SolverNotifyFlags
 from ..solver import SolverBase
 from .kernels import (
     apply_body_delta_velocities,
@@ -26,6 +27,7 @@ from .kernels import (
     apply_particle_shape_restitution,
     apply_rigid_restitution,
     bending_constraint,
+    copy_kinematic_body_state_kernel,
     solve_body_contact_positions,
     solve_body_joints,
     solve_particle_particle_contacts,
@@ -96,6 +98,8 @@ class SolverXPBD(SolverBase):
 
         self.compute_body_velocity_from_position_delta = False
 
+        self._init_kinematic_state()
+
         # helper variables to track constraint resolution vars
         self._particle_delta_counter = 0
         self._body_delta_counter = 0
@@ -105,7 +109,23 @@ class SolverXPBD(SolverBase):
             with wp.ScopedDevice(model.device):
                 model.particle_grid.reserve(model.particle_count)
 
-    def apply_particle_deltas(
+    @override
+    def notify_model_changed(self, flags: int):
+        if flags & (SolverNotifyFlags.BODY_PROPERTIES | SolverNotifyFlags.BODY_INERTIAL_PROPERTIES):
+            self._refresh_kinematic_state()
+
+    def copy_kinematic_body_state(self, model: Model, state_in: State, state_out: State):
+        if model.body_count == 0:
+            return
+        wp.launch(
+            kernel=copy_kinematic_body_state_kernel,
+            dim=model.body_count,
+            inputs=[model.body_flags, state_in.body_q, state_in.body_qd],
+            outputs=[state_out.body_q, state_out.body_qd],
+            device=model.device,
+        )
+
+    def _apply_particle_deltas(
         self,
         model: Model,
         state_in: State,
@@ -151,7 +171,7 @@ class SolverXPBD(SolverBase):
 
         return new_particle_q, new_particle_qd
 
-    def apply_body_deltas(
+    def _apply_body_deltas(
         self,
         model: Model,
         state_in: State,
@@ -188,8 +208,8 @@ class SolverXPBD(SolverBase):
                     body_qd,
                     model.body_com,
                     model.body_inertia,
-                    model.body_inv_mass,
-                    model.body_inv_inertia,
+                    self.body_inv_mass_effective,
+                    self.body_inv_inertia_effective,
                     body_deltas,
                     rigid_contact_inv_weight,
                     dt,
@@ -331,8 +351,8 @@ class SolverXPBD(SolverBase):
                                     body_q,
                                     body_qd,
                                     model.body_com,
-                                    model.body_inv_mass,
-                                    model.body_inv_inertia,
+                                    self.body_inv_mass_effective,
+                                    self.body_inv_inertia_effective,
                                     model.shape_body,
                                     model.shape_material_mu,
                                     model.soft_contact_mu,
@@ -436,7 +456,7 @@ class SolverXPBD(SolverBase):
                                 device=model.device,
                             )
 
-                        particle_q, particle_qd = self.apply_particle_deltas(
+                        particle_q, particle_qd = self._apply_particle_deltas(
                             model, state_in, state_out, particle_deltas, dt
                         )
 
@@ -485,8 +505,8 @@ class SolverXPBD(SolverBase):
                                 body_q,
                                 body_qd,
                                 model.body_com,
-                                model.body_inv_mass,
-                                model.body_inv_inertia,
+                                self.body_inv_mass_effective,
+                                self.body_inv_inertia_effective,
                                 model.joint_type,
                                 model.joint_enabled,
                                 model.joint_parent,
@@ -512,7 +532,7 @@ class SolverXPBD(SolverBase):
                             device=model.device,
                         )
 
-                        body_q, body_qd = self.apply_body_deltas(model, state_in, state_out, body_deltas, dt)
+                        body_q, body_qd = self._apply_body_deltas(model, state_in, state_out, body_deltas, dt)
 
                     # Solve rigid contact constraints
                     if model.body_count and contacts is not None:
@@ -526,9 +546,10 @@ class SolverXPBD(SolverBase):
                             inputs=[
                                 body_q,
                                 body_qd,
+                                model.body_flags,
                                 model.body_com,
-                                model.body_inv_mass,
-                                model.body_inv_inertia,
+                                self.body_inv_mass_effective,
+                                self.body_inv_inertia_effective,
                                 model.shape_body,
                                 contacts.rigid_contact_count,
                                 contacts.rigid_contact_point0,
@@ -569,7 +590,7 @@ class SolverXPBD(SolverBase):
                             else:
                                 rigid_contact_inv_weight_init = None
 
-                        body_q, body_qd = self.apply_body_deltas(
+                        body_q, body_qd = self._apply_body_deltas(
                             model, state_in, state_out, body_deltas, dt, rigid_contact_inv_weight
                         )
 
@@ -644,8 +665,8 @@ class SolverXPBD(SolverBase):
                             body_q_init,
                             body_qd_init,
                             model.body_com,
-                            model.body_inv_mass,
-                            model.body_inv_inertia,
+                            self.body_inv_mass_effective,
+                            self.body_inv_inertia_effective,
                             model.body_world,
                             model.shape_body,
                             contacts.rigid_contact_count,
@@ -678,5 +699,8 @@ class SolverXPBD(SolverBase):
                         outputs=[state_out.body_qd],
                         device=model.device,
                     )
+
+            if model.body_count:
+                self.copy_kinematic_body_state(model, state_in, state_out)
 
             return state_out

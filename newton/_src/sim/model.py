@@ -296,12 +296,12 @@ class Model:
         # computed once during finalization, not per-frame contact data.
         self.shape_collision_aabb_lower = None
         """Local-space AABB lower bound [m] for each shape, shape [shape_count, 3], float.
-        Computed from base geometry only (excludes thickness - thickness is added during contact
-        margin calculations). Used for voxel-based contact reduction."""
+        Computed from base geometry only (excludes shape margin; shape margin and gap are applied
+        during contact margin calculations). Used for voxel-based contact reduction."""
         self.shape_collision_aabb_upper = None
         """Local-space AABB upper bound [m] for each shape, shape [shape_count, 3], float.
-        Computed from base geometry only (excludes thickness - thickness is added during contact
-        margin calculations). Used for voxel-based contact reduction."""
+        Computed from base geometry only (excludes shape margin; shape margin and gap are applied
+        during contact margin calculations). Used for voxel-based contact reduction."""
         self._shape_voxel_resolution = None
         """Voxel grid resolution (nx, ny, nz) for each shape, shape [shape_count, 3], int. Used for voxel-based contact reduction."""
 
@@ -381,6 +381,8 @@ class Model:
         """Rigid body mass [kg], shape [body_count], float."""
         self.body_inv_mass = None
         """Rigid body inverse mass [1/kg], shape [body_count], float."""
+        self.body_flags = None
+        """Rigid body flags (:class:`~newton.BodyFlags`), shape [body_count], int."""
         self.body_label = []
         """Rigid body labels, shape [body_count], str."""
         self.body_world = None
@@ -429,8 +431,8 @@ class Model:
         """Joint axis in child frame, shape [joint_dof_count, 3], float."""
         self.joint_armature = None
         """Armature [kg·m² (rotational) or kg (translational)] for each joint axis (used by :class:`~newton.solvers.SolverMuJoCo` and :class:`~newton.solvers.SolverFeatherstone`), shape [joint_dof_count], float."""
-        self.joint_act_mode = None
-        """Actuator mode per DOF, see :class:`newton.ActuatorMode`. Shape [joint_dof_count], dtype int32."""
+        self.joint_target_mode = None
+        """Joint target mode per DOF, see :class:`newton.JointTargetMode`. Shape [joint_dof_count], dtype int32."""
         self.joint_target_ke = None
         """Joint stiffness [N/m or N·m/rad, depending on joint type], shape [joint_dof_count], float."""
         self.joint_target_kd = None
@@ -685,7 +687,12 @@ class Model:
         self.attribute_frequency["body_inv_inertia"] = Model.AttributeFrequency.BODY
         self.attribute_frequency["body_mass"] = Model.AttributeFrequency.BODY
         self.attribute_frequency["body_inv_mass"] = Model.AttributeFrequency.BODY
+        self.attribute_frequency["body_flags"] = Model.AttributeFrequency.BODY
         self.attribute_frequency["body_f"] = Model.AttributeFrequency.BODY
+        # Extended state attributes — these live on State (not Model) and are only
+        # allocated when explicitly requested via request_state_attributes().
+        self.attribute_frequency["body_qdd"] = Model.AttributeFrequency.BODY
+        self.attribute_frequency["body_parent_f"] = Model.AttributeFrequency.BODY
 
         # attributes per joint
         self.attribute_frequency["joint_type"] = Model.AttributeFrequency.JOINT
@@ -711,7 +718,7 @@ class Model:
         self.attribute_frequency["joint_target_vel"] = Model.AttributeFrequency.JOINT_DOF
         self.attribute_frequency["joint_act"] = Model.AttributeFrequency.JOINT_DOF
         self.attribute_frequency["joint_axis"] = Model.AttributeFrequency.JOINT_DOF
-        self.attribute_frequency["joint_act_mode"] = Model.AttributeFrequency.JOINT_DOF
+        self.attribute_frequency["joint_target_mode"] = Model.AttributeFrequency.JOINT_DOF
         self.attribute_frequency["joint_target_ke"] = Model.AttributeFrequency.JOINT_DOF
         self.attribute_frequency["joint_target_kd"] = Model.AttributeFrequency.JOINT_DOF
         self.attribute_frequency["joint_limit_lower"] = Model.AttributeFrequency.JOINT_DOF
@@ -721,6 +728,7 @@ class Model:
         self.attribute_frequency["joint_effort_limit"] = Model.AttributeFrequency.JOINT_DOF
         self.attribute_frequency["joint_friction"] = Model.AttributeFrequency.JOINT_DOF
         self.attribute_frequency["joint_velocity_limit"] = Model.AttributeFrequency.JOINT_DOF
+        self.attribute_frequency["mujoco:qfrc_actuator"] = Model.AttributeFrequency.JOINT_DOF
 
         # attributes per shape
         self.attribute_frequency["shape_transform"] = Model.AttributeFrequency.SHAPE

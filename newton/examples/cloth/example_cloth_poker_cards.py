@@ -14,7 +14,7 @@
 # limitations under the License.
 
 ###########################################################################
-# Example Poker Cards Stacking
+# Cloth Poker Cards
 #
 # This simulation demonstrates 52 poker cards (13 ranks x 4 suits) dropping
 # and stacking on a cube, then being knocked off by a sphere. The cards use
@@ -26,7 +26,7 @@
 # - Height: 8.89 cm (3.5 inches) = 0.0889 m
 # - Resolution: 4x6 cells per card
 #
-# Command: uv run -m newton.examples multiphysics.example_poker_cards_stacking
+# Command: uv run -m newton.examples cloth_poker_cards
 #
 ###########################################################################
 
@@ -38,7 +38,7 @@ import newton.examples
 
 
 class Example:
-    def __init__(self, viewer, args=None):
+    def __init__(self, viewer, args):
         self.viewer = viewer
         self.sim_time = 0.0
 
@@ -232,11 +232,11 @@ class Example:
         # Set camera to view the stacking
         self.viewer.set_camera(
             pos=wp.vec3(0.5, -0.5, 0.3),
-            pitch=-20.0,
-            yaw=90.0,
+            pitch=-15.0,
+            yaw=140.0,
         )
         if hasattr(self.viewer, "camera") and hasattr(self.viewer.camera, "fov"):
-            self.viewer.camera.fov = 60.0
+            self.viewer.camera.fov = 70.0
 
         self.capture()
 
