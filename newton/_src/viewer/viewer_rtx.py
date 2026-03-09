@@ -853,8 +853,10 @@ void main() {
                     if name in self._pending_xforms:
                         xf, sc = self._pending_xforms[name]
                         n = min(count, len(xf))
-                        wp.launch(write_transforms, dim=n, inputs=[xf, sc, offset, matrices])
+                        wp.launch(write_transforms, dim=n, inputs=[xf, sc, offset, matrices], device=matrices.device)
                     offset += count
+
+                mapping.unmap(stream=matrices.device.stream.cuda_stream)
 
     @staticmethod
     def _make_point3f_dltensor(points_np):
