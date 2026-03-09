@@ -248,6 +248,9 @@ class ViewerUSD(ViewerBase):
             mesh_prim.GetFaceVertexCountsAttr().Set(face_vertex_counts)
             mesh_prim.GetFaceVertexIndicesAttr().Set(indices_np)
 
+            if not backface_culling:
+                mesh_prim.GetDoubleSidedAttr().Set(True)
+
             # Set UVs as the "st" primvar
             if uvs is not None:
                 uvs_np = uvs.numpy().astype(np.float32)
@@ -255,9 +258,11 @@ class ViewerUSD(ViewerBase):
                 st_primvar = primvar_api.CreatePrimvar("st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.vertex)
                 st_primvar.Set(uvs_np)
 
-            # Create and bind a textured material
+            # Create and bind a textured material, or a default material for bare meshes
             if texture is not None:
                 self._apply_texture_material(mesh_prim, name, texture)
+            else:
+                self._apply_default_material(mesh_prim, name)
 
             # Store the prototype path
             self._meshes[name] = mesh_prim
@@ -342,6 +347,51 @@ class ViewerUSD(ViewerBase):
             tex_shader.ConnectableAPI(), "rgb"
         )
 
+        UsdShade.MaterialBindingAPI.Apply(mesh_prim.GetPrim())
+        UsdShade.MaterialBindingAPI(mesh_prim).Bind(material)
+
+    _default_material_path: str | None = None
+
+    def _apply_default_material(self, mesh_prim, name: str):
+        """Bind a displayColor-driven UsdPreviewSurface and set a fallback color.
+
+        The material reads the ``displayColor`` primvar so per-instance color
+        overrides (set in :meth:`log_instances`) are respected while standalone
+        meshes (e.g. cloth) get the fallback color.
+        """
+        if UsdShade is None:
+            return
+
+        # Set a fallback displayColor on the mesh prototype
+        primvar_api = UsdGeom.PrimvarsAPI(mesh_prim)
+        dc = primvar_api.CreatePrimvar("displayColor", Sdf.ValueTypeNames.Color3fArray, UsdGeom.Tokens.constant)
+        dc.Set([Gf.Vec3f(0.7, 0.5, 0.3)])
+
+        # Reuse a single shared material across all default meshes
+        if self._default_material_path is None:
+            mat_path = "/root/Materials/_defaultDisplayColor"
+            self._ensure_scopes_for_path(self.stage, mat_path)
+
+            material = UsdShade.Material.Define(self.stage, mat_path)
+            surface = UsdShade.Shader.Define(self.stage, f"{mat_path}/PreviewSurface")
+            surface.CreateIdAttr("UsdPreviewSurface")
+            surface.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.5)
+            surface.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+            material.CreateSurfaceOutput().ConnectToSource(surface.ConnectableAPI(), "surface")
+
+            # Read displayColor primvar into diffuseColor
+            reader = UsdShade.Shader.Define(self.stage, f"{mat_path}/DisplayColorReader")
+            reader.CreateIdAttr("UsdPrimvarReader_float3")
+            reader.CreateInput("varname", Sdf.ValueTypeNames.Token).Set("displayColor")
+            reader.CreateInput("fallback", Sdf.ValueTypeNames.Float3).Set(Gf.Vec3f(0.7, 0.5, 0.3))
+            reader.CreateOutput("result", Sdf.ValueTypeNames.Float3)
+
+            surface.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).ConnectToSource(
+                reader.ConnectableAPI(), "result"
+            )
+            self._default_material_path = mat_path
+
+        material = UsdShade.Material.Get(self.stage, self._default_material_path)
         UsdShade.MaterialBindingAPI.Apply(mesh_prim.GetPrim())
         UsdShade.MaterialBindingAPI(mesh_prim).Bind(material)
 
