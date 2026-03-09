@@ -55,8 +55,8 @@ class ViewerRTX(ViewerUSD):
 
     def __init__(
         self,
-        width=1920,
-        height=1080,
+        width=1280,
+        height=720,
         fps=60,
         up_axis="Z",
         num_frames=None,
@@ -466,10 +466,10 @@ void main() {
         from pxr import UsdLux
 
         dome = UsdLux.DomeLight.Define(self.stage, "/root/_RTXDomeLight")
-        dome.GetIntensityAttr().Set(62.0)
+        dome.GetIntensityAttr().Set(150.0)
 
         distant = UsdLux.DistantLight.Define(self.stage, "/root/_RTXDistantLight")
-        distant.GetIntensityAttr().Set(375.0)
+        distant.GetIntensityAttr().Set(900.0)
         distant.GetAngleAttr().Set(0.53)
         dx = UsdGeom.Xform(distant.GetPrim())
         dx.ClearXformOpOrder()
@@ -480,48 +480,33 @@ void main() {
             rot.Set(Gf.Vec3f(-45.0, 0.0, 30.0))
 
     def _add_studio_lights(self):
-        """Studio lighting: dim dome ambient + two sphere lights (cool fill + warm key).
-
-        Matches the lighting setup from overlay.usda: a dimmed dome for soft
-        ambient, with a cool-toned fill and a warm-toned key sphere light.
-        """
+        """Studio lighting rig from dome + warm distant + cool fill sphere."""
         from pxr import Sdf, UsdLux
 
-        # Dim dome for ambient fill
-        dome = UsdLux.DomeLight.Define(self.stage, "/root/_RTXDomeLight")
-        dome.GetIntensityAttr().Set(1000.0)
-        dome.GetColorAttr().Set(Gf.Vec3f(0.203, 0.203, 0.203))
+        # Dome light — cool-tinted low ambient
+        dome_xf = UsdGeom.Xform.Define(self.stage, "/root/_RTXDomeLight")
+        dome_xf.ClearXformOpOrder()
+        dome = UsdLux.DomeLight.Define(self.stage, "/root/_RTXDomeLight/_RTXDomeLight")
+        dome.GetColorAttr().Set(Gf.Vec3f(0.250, 0.319, 0.409))
+        dome.GetIntensityAttr().Set(200.0)
 
-        # Distant light kept but invisible (disabled), matching overlay
-        distant = UsdLux.DistantLight.Define(self.stage, "/root/_RTXDistantLight")
+        # Distant light — warm key, angled from above-behind
+        dist_xf = UsdGeom.Xform.Define(self.stage, "/root/_RTXDistantLight")
+        dist_xf.ClearXformOpOrder()
+        dist_xf.AddRotateXYZOp().Set(Gf.Vec3f(41.4, 0.0, -175.7))
+        distant = UsdLux.DistantLight.Define(self.stage, "/root/_RTXDistantLight/_RTXDistantLight")
+        distant.GetColorAttr().Set(Gf.Vec3f(1.0, 0.906, 0.722))
         distant.GetIntensityAttr().Set(3000.0)
-        UsdGeom.Imageable(distant.GetPrim()).GetVisibilityAttr().Set("invisible")
 
         # Cool fill sphere light (blue-white)
-        fill = UsdLux.SphereLight.Define(self.stage, "/root/_RTXFillLight")
+        fill_xf = UsdGeom.Xform.Define(self.stage, "/root/_RTXFillLight")
+        fill_xf.ClearXformOpOrder()
+        fill_xf.AddTranslateOp().Set(Gf.Vec3d(5.0, 0.0, 5.5))
+        fill = UsdLux.SphereLight.Define(self.stage, "/root/_RTXFillLight/_RTXFillLight")
         fill.GetPrim().SetMetadata("apiSchemas", Sdf.TokenListOp.Create(prependedItems=["ShapingAPI"]))
         fill.GetColorAttr().Set(Gf.Vec3f(0.468, 0.684, 1.0))
-        fill.GetIntensityAttr().Set(60000.0)
+        fill.GetIntensityAttr().Set(300000.0)
         fill.GetRadiusAttr().Set(0.5)
-        fx = UsdGeom.Xform(fill.GetPrim())
-        fx.ClearXformOpOrder()
-        if self.camera.up_axis == 2:
-            fx.AddTranslateOp().Set(Gf.Vec3d(5.0, 0.0, 5.5))
-        else:
-            fx.AddTranslateOp().Set(Gf.Vec3d(5.0, 5.5, 0.0))
-
-        # Warm key sphere light (orange-white)
-        key = UsdLux.SphereLight.Define(self.stage, "/root/_RTXKeyLight")
-        key.GetPrim().SetMetadata("apiSchemas", Sdf.TokenListOp.Create(prependedItems=["ShapingAPI"]))
-        key.GetColorAttr().Set(Gf.Vec3f(1.0, 0.906, 0.722))
-        key.GetIntensityAttr().Set(60000.0)
-        key.GetRadiusAttr().Set(0.5)
-        kx = UsdGeom.Xform(key.GetPrim())
-        kx.ClearXformOpOrder()
-        if self.camera.up_axis == 2:
-            kx.AddTranslateOp().Set(Gf.Vec3d(-1.5, 3.0, 5.0))
-        else:
-            kx.AddTranslateOp().Set(Gf.Vec3d(-1.5, 5.0, -3.0))
 
     def _apply_ground_material(self):
         """Bind a dark, shiny UsdPreviewSurface material to ground-plane meshes."""
@@ -567,8 +552,8 @@ void main() {
         import ovrtx
 
         self._add_camera_lights_and_render_product()
-        if self._environment != "none":
-            self._apply_ground_material()
+        self._apply_ground_material()
+
         self.stage.GetRootLayer().Save()
 
         config = ovrtx.RendererConfig()
@@ -629,6 +614,45 @@ void main() {
         self.camera.pitch = pitch
         self.camera.yaw = yaw
         self._camera_dirty = True
+
+    @override
+    def is_key_down(self, key: str | int) -> bool:
+        try:
+            import pyglet
+        except Exception:
+            return False
+
+        if isinstance(key, str):
+            key = key.lower()
+            if len(key) == 1 and key.isalpha():
+                key_code = getattr(pyglet.window.key, key.upper(), None)
+            elif len(key) == 1 and key.isdigit():
+                key_code = getattr(pyglet.window.key, f"_{key}", None)
+            else:
+                special_keys = {
+                    "space": pyglet.window.key.SPACE,
+                    "escape": pyglet.window.key.ESCAPE,
+                    "esc": pyglet.window.key.ESCAPE,
+                    "enter": pyglet.window.key.ENTER,
+                    "return": pyglet.window.key.ENTER,
+                    "tab": pyglet.window.key.TAB,
+                    "shift": pyglet.window.key.LSHIFT,
+                    "ctrl": pyglet.window.key.LCTRL,
+                    "alt": pyglet.window.key.LALT,
+                    "up": pyglet.window.key.UP,
+                    "down": pyglet.window.key.DOWN,
+                    "left": pyglet.window.key.LEFT,
+                    "right": pyglet.window.key.RIGHT,
+                    "backspace": pyglet.window.key.BACKSPACE,
+                    "delete": pyglet.window.key.DELETE,
+                }
+                key_code = special_keys.get(key, None)
+            if key_code is None:
+                return False
+        else:
+            key_code = key
+
+        return key_code in self._keys_down
 
     @override
     def log_gizmo(self, name, transform):
