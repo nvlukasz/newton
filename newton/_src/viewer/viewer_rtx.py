@@ -37,6 +37,21 @@ from .viewer_usd import ViewerUSD
 PROFILE_ENABLED = os.environ.get("NEWTON_PROFILE", "0") != "0"
 
 
+@wp.kernel(enable_backward=False)
+def write_transforms(
+    xform: wp.array(dtype=wp.transform), scale: wp.array(dtype=wp.vec3), offset: int, m_out: wp.array(dtype=wp.mat44d)
+):
+    tid = wp.tid()
+    xf32 = xform[tid]
+    sc32 = scale[tid]
+    # convert to float64
+    p64 = wp.vec3d(wp.float64(xf32[0]), wp.float64(xf32[1]), wp.float64(xf32[2]))
+    q64 = wp.quatd(wp.float64(xf32[3]), wp.float64(xf32[4]), wp.float64(xf32[5]), wp.float64(xf32[6]))
+    s64 = wp.vec3d(wp.float64(sc32[0]), wp.float64(sc32[1]), wp.float64(sc32[2]))
+    # NOTE: transpose needed
+    m_out[offset + tid] = wp.transpose(wp.transform_compose(p64, q64, s64))
+
+
 class ViewerRTX(ViewerUSD):
     """Real-time ray-traced viewer using NVIDIA OVRTX.
 
@@ -141,6 +156,9 @@ class ViewerRTX(ViewerUSD):
         self._fps_frame_count: int = 0
         self._current_fps: float = 0.0
 
+        # async rendering
+        self._render_result = None
+
         # Window is deferred until _init_ovrtx to avoid pyglet/Warp
         # kernel compilation deadlock on Windows.
 
@@ -161,6 +179,7 @@ class ViewerRTX(ViewerUSD):
             caption="Newton RTX Viewer",
             resizable=True,
             visible=not self._headless,
+            vsync=False,
         )
         self._pyglet_app = pyglet.app
 
@@ -743,12 +762,9 @@ void main() {
                 self._instance_prim_paths[name] = paths
         else:
             if xforms is not None:
-                xf = xforms.numpy() if isinstance(xforms, wp.array) else np.asarray(xforms)
-                if scales is not None:
-                    sc = scales.numpy() if isinstance(scales, wp.array) else np.asarray(scales)
-                else:
-                    sc = np.ones((len(xf), 3), dtype=np.float32)
-                self._pending_xforms[name] = (xf, sc)
+                if scales is None:
+                    scales = wp.ones(len(xforms), dtype=wp.vec3)
+                self._pending_xforms[name] = (xforms, scales)
 
     @override
     def log_lines(self, name, starts, ends, colors, width: float = 0.01, hidden=False):
@@ -798,8 +814,8 @@ void main() {
         with wp.ScopedTimer("ViewerRTX::update_transforms", active=PROFILE_ENABLED, use_nvtx=True):
             from ovrtx import Device
 
-            with self._transform_binding.map(device=Device.CPU) as mapping:
-                matrices = np.from_dlpack(mapping.tensor)  # (N, 4, 4) float64
+            with self._transform_binding.map(device=Device.CUDA) as mapping:
+                matrices = wp.from_dlpack(mapping.tensor, dtype=wp.mat44d)  # (N, 4, 4) float64
 
                 offset = 0
                 for name, paths in self._instance_prim_paths.items():
@@ -807,8 +823,7 @@ void main() {
                     if name in self._pending_xforms:
                         xf, sc = self._pending_xforms[name]
                         n = min(count, len(xf))
-                        for i in range(n):
-                            matrices[offset + i] = self._xform_to_mat44(xf[i][:3], xf[i][3:7], sc[i])
+                        wp.launch(write_transforms, dim=n, inputs=[xf, sc, offset, matrices])
                     offset += count
 
     @staticmethod
@@ -899,27 +914,28 @@ void main() {
         with wp.ScopedTimer("ViewerRTX::render_and_display", active=PROFILE_ENABLED, use_nvtx=True):
             from ovrtx import Device
 
+            # wait for async rendering to complete
+            with wp.ScopedTimer("ViewerRTX::rtx_wait", active=PROFILE_ENABLED, use_nvtx=True):
+                products = self._render_result.wait() if self._render_result is not None else None
+
+            if products is not None:
+                for _pname, product in products.items():
+                    for frame in product.frames:
+                        if "LdrColor" in frame.render_vars:
+                            with wp.ScopedTimer("ViewerRTX::fb_map", active=PROFILE_ENABLED, use_nvtx=True):
+                                with frame.render_vars["LdrColor"].map(device=Device.CPU) as mapping:
+                                    pixels = np.from_dlpack(mapping.tensor)
+                                    with wp.ScopedTimer(
+                                        "ViewerRTX::blit_to_window", active=PROFILE_ENABLED, use_nvtx=True
+                                    ):
+                                        self._blit_to_window(pixels)
+
+            # kick off next async rendering frame
             with wp.ScopedTimer("ViewerRTX::rtx_step", active=PROFILE_ENABLED, use_nvtx=True):
-                result = self._rtx.step_async(
+                self._render_result = self._rtx.step_async(
                     render_products={self._render_product_path},
                     delta_time=1.0 / self.fps,
                 )
-                products = result.wait()
-
-            if products is None:
-                return
-
-            for _pname, product in products.items():
-                for frame in product.frames:
-                    if "LdrColor" in frame.render_vars:
-                        with wp.ScopedTimer("ViewerRTX::fb_map", active=PROFILE_ENABLED, use_nvtx=True):
-                            with frame.render_vars["LdrColor"].map(device=Device.CPU) as mapping:
-                                pixels = mapping.tensor.numpy()
-                                self._last_frame_pixels = np.ascontiguousarray(np.copy(pixels))
-                                with wp.ScopedTimer("ViewerRTX::blit_to_window", active=PROFILE_ENABLED, use_nvtx=True):
-                                    self._blit_to_window(pixels)
-
-                        return
 
     def _blit_to_window(self, pixels: np.ndarray):
         """Upload *pixels* to a GL texture and draw a fullscreen triangle (GPU sRGB + flip)."""
