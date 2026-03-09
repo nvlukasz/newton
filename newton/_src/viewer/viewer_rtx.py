@@ -188,7 +188,7 @@ in vec2 uv;
 out vec4 fragColor;
 void main() {
     vec4 c = texture(tex, vec2(uv.x, 1.0 - uv.y));
-    fragColor = vec4(pow(c.rgb, vec3(1.0/2.2)), c.a);
+    fragColor = c;
 }
 \x00"""
 
