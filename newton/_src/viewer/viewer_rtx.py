@@ -83,13 +83,16 @@ class ViewerRTX(ViewerUSD):
 
         self._tmp_usd_path = os.path.abspath("_tmp_rtx_scene.usd")
 
+        # Pre-initialize fields that clear_model() (called from super().__init__) touches
+        self._ui_callbacks: dict[str, list] = {"side": [], "stats": [], "free": [], "panel": []}
+        self._paused = False
+
         super().__init__(
             output_path=self._tmp_usd_path,
             fps=fps,
             up_axis=up_axis,
             num_frames=num_frames,
             scaling=scaling,
-            paused=paused,
         )
 
         self._width = width
@@ -119,6 +122,9 @@ class ViewerRTX(ViewerUSD):
         self._pending_xforms: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         self._pending_mesh_points: dict[str, np.ndarray] = {}
 
+        # Last rendered frame pixels (set in _render_and_display for save_screenshot)
+        self._last_frame_pixels: np.ndarray | None = None
+
         # Camera (shared Camera class with ViewerGL)
         self.camera = Camera(width=self._width, height=self._height, up_axis=up_axis)
         self._camera_prim_path = "/World/Camera"
@@ -128,6 +134,12 @@ class ViewerRTX(ViewerUSD):
         self._keys_down: set[int] = set()
         self._last_perf_time: float | None = None
         self.gui = None
+
+        # FPS tracking (used by ViewerGui.render_frame)
+        self._fps_history: list[float] = []
+        self._last_fps_time: float = perf_counter()
+        self._fps_frame_count: int = 0
+        self._current_fps: float = 0.0
 
         # Window is deferred until _init_ovrtx to avoid pyglet/Warp
         # kernel compilation deadlock on Windows.
@@ -311,22 +323,32 @@ void main() {
         min_bounds = np.array([float("inf")] * 3)
         max_bounds = np.array([float("-inf")] * 3)
         found_objects = False
-        if hasattr(self, "_last_state") and self._last_state is not None:
-            if hasattr(self._last_state, "body_q") and self._last_state.body_q is not None:
-                body_q = self._last_state.body_q.numpy()
-                for i in range(len(body_q)):
-                    pos = body_q[i, :3]
-                    min_bounds = np.minimum(min_bounds, pos)
-                    max_bounds = np.maximum(max_bounds, pos)
+
+        state = getattr(self, "_last_state", None)
+        if state is not None:
+            if getattr(state, "body_q", None) is not None:
+                body_q = state.body_q.numpy()
+                positions = body_q[:, :3]
+                min_bounds = np.minimum(min_bounds, positions.min(axis=0))
+                max_bounds = np.maximum(max_bounds, positions.max(axis=0))
+                found_objects = True
+            if getattr(state, "particle_q", None) is not None:
+                pq = state.particle_q.numpy()
+                if len(pq) > 0:
+                    min_bounds = np.minimum(min_bounds, pq.min(axis=0))
+                    max_bounds = np.maximum(max_bounds, pq.max(axis=0))
                     found_objects = True
+
         if not found_objects:
             min_bounds = np.array([-5.0, -5.0, -5.0])
             max_bounds = np.array([5.0, 5.0, 5.0])
+
         center = (min_bounds + max_bounds) * 0.5
         size = max_bounds - min_bounds
         max_extent = float(np.max(size))
         if max_extent < 1.0:
             max_extent = 1.0
+
         fov_rad = np.radians(self.camera.fov)
         padding = 1.5
         distance = max_extent / (2.0 * np.tan(fov_rad / 2.0)) * padding
@@ -659,6 +681,11 @@ void main() {
         self._gizmo_log[name] = transform
 
     @override
+    def log_state(self, state):
+        self._last_state = state
+        super().log_state(state)
+
+    @override
     def begin_frame(self, time):
         with wp.ScopedTimer("ViewerRTX::begin_frame", active=PROFILE_ENABLED, use_nvtx=True):
             super().begin_frame(time)
@@ -854,6 +881,18 @@ void main() {
 
     # ------------------------------------------------------- render + display
 
+    def _update_fps(self):
+        current_time = perf_counter()
+        self._fps_frame_count += 1
+        if current_time - self._last_fps_time >= 1.0:
+            time_delta = current_time - self._last_fps_time
+            self._current_fps = self._fps_frame_count / time_delta
+            self._fps_history.append(self._current_fps)
+            if len(self._fps_history) > 60:
+                self._fps_history.pop(0)
+            self._last_fps_time = current_time
+            self._fps_frame_count = 0
+
     def _render_and_display(self):
         if self._rtx is None or self._should_close:
             return
@@ -876,6 +915,7 @@ void main() {
                         with wp.ScopedTimer("ViewerRTX::fb_map", active=PROFILE_ENABLED, use_nvtx=True):
                             with frame.render_vars["LdrColor"].map(device=Device.CPU) as mapping:
                                 pixels = mapping.tensor.numpy()
+                                self._last_frame_pixels = np.ascontiguousarray(np.copy(pixels))
                                 with wp.ScopedTimer("ViewerRTX::blit_to_window", active=PROFILE_ENABLED, use_nvtx=True):
                                     self._blit_to_window(pixels)
 
@@ -927,7 +967,40 @@ void main() {
         with wp.ScopedTimer("ViewerRTX::swap_buffers", active=PROFILE_ENABLED, use_nvtx=True):
             self._window.flip()
 
+    def save_screenshot(self, path: str) -> None:
+        """Save the last rendered frame to a JPEG file.
+
+        Call this after at least one frame has been rendered (e.g. after the
+        simulation loop). Works in headless mode.
+        """
+        if self._last_frame_pixels is None:
+            return
+        from PIL import Image
+
+        img = self._last_frame_pixels
+        if img.ndim == 3 and img.shape[2] == 4:
+            img = img[:, :, :3]  # drop alpha for JPEG
+        Image.fromarray(img).save(path, "JPEG", quality=92)
+
     # ----------------------------------------------------------- viewer API
+
+    def register_ui_callback(self, callback, position="side"):
+        if position not in self._ui_callbacks:
+            valid = list(self._ui_callbacks.keys())
+            raise ValueError(f"Invalid position {position!r}. Valid: {valid}")
+        self._ui_callbacks[position].append(callback)
+
+    def clear_model(self):
+        self._ui_callbacks["side"] = []
+        self._ui_callbacks["free"] = []
+        self.picking = None
+        self._last_state = None
+        self._last_control = None
+        super().clear_model()
+
+    @override
+    def is_paused(self) -> bool:
+        return self._paused
 
     @override
     def is_running(self) -> bool:
