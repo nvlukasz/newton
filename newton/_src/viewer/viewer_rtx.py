@@ -79,6 +79,7 @@ class ViewerRTX(ViewerUSD):
         headless=False,
         paused=False,
         environment="default",
+        vsync=False,
     ):
         os.environ["OVRTX_SKIP_USD_CHECK"] = "1"
 
@@ -162,6 +163,9 @@ class ViewerRTX(ViewerUSD):
         # Window is deferred until _init_ovrtx to avoid pyglet/Warp
         # kernel compilation deadlock on Windows.
 
+        # initial value for vsync (applied once window is created)
+        self._vsync_init = vsync
+
     # ------------------------------------------------------------------ window
 
     def _init_window(self):
@@ -179,7 +183,7 @@ class ViewerRTX(ViewerUSD):
             caption="Newton RTX Viewer",
             resizable=True,
             visible=not self._headless,
-            vsync=False,
+            vsync=self._vsync_init,
         )
         self._pyglet_app = pyglet.app
 
@@ -312,6 +316,32 @@ void main() {
         if self.gui is None:
             return None
         return self.gui.ui
+
+    @property
+    def vsync(self) -> bool:
+        """
+        Get the current vsync state.
+
+        Returns:
+            bool: True if vsync is enabled, False otherwise.
+        """
+        if self._window is not None:
+            return self._window.vsync
+        else:
+            return self._vsync_init
+
+    @vsync.setter
+    def vsync(self, enabled: bool):
+        """
+        Set the vsync state.
+
+        Args:
+            enabled: Enable or disable vsync.
+        """
+        if self._window is not None:
+            self._window.set_vsync(enabled)
+        else:
+            self._vsync_init = enabled
 
     # ------------------------------------------------------------------ camera
 

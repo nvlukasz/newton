@@ -334,6 +334,11 @@ class ViewerGui:
                     )
 
             imgui.set_next_item_open(True, imgui.Cond_.appearing)
+            if imgui.collapsing_header("Rendering Options"):
+                imgui.separator()
+                _changed, viewer.vsync = imgui.checkbox("VSync", viewer.vsync)
+
+            imgui.set_next_item_open(True, imgui.Cond_.appearing)
             if imgui.collapsing_header("Example Options"):
                 for callback in viewer._ui_callbacks["side"]:
                     callback(self.ui.imgui)
