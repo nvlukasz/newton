@@ -31,8 +31,10 @@ except ImportError:
     Gf = UsdGeom = None
 
 from .camera import Camera
+from .picking import Picking
 from .viewer_gui import ViewerGui
 from .viewer_usd import ViewerUSD
+from .wind import Wind
 
 PROFILE_ENABLED = os.environ.get("NEWTON_PROFILE", "0") != "0"
 
@@ -676,6 +678,24 @@ void main() {
             else:
                 self.camera.pos = PyVec3(0.0, 2.0, 10.0)
 
+        self.picking = Picking(model, world_offsets=self.world_offsets)
+        self.wind = Wind(model)
+
+        if model is not None:
+            try:
+                from ..geometry import raycast as _raycast_module  # noqa: PLC0415
+
+                wp.load_module(module=_raycast_module, device=model.device)
+                wp.load_module(module="newton._src.viewer.kernels", device=model.device)
+            except Exception:
+                pass
+
+    @override
+    def set_world_offsets(self, spacing):
+        super().set_world_offsets(spacing)
+        if self.picking is not None:
+            self.picking.world_offsets = self.world_offsets
+
     @override
     def set_camera(self, pos, pitch: float, yaw: float):
         from pyglet.math import Vec3 as PyVec3
@@ -735,6 +755,14 @@ void main() {
         super().log_state(state)
 
     @override
+    def apply_forces(self, state):
+        if self.picking_enabled and self.picking is not None:
+            self.picking._apply_picking_force(state)
+
+        if self.wind is not None:
+            self.wind._apply_wind_force(state)
+
+    @override
     def begin_frame(self, time):
         with wp.ScopedTimer("ViewerRTX::begin_frame", active=PROFILE_ENABLED, use_nvtx=True):
             super().begin_frame(time)
@@ -754,6 +782,8 @@ void main() {
                 dt = min(now - self._last_perf_time, 0.1)
                 if self.gui:
                     self.gui.update_camera_from_keys(dt, lambda k: k in self._keys_down)
+                if self.wind is not None:
+                    self.wind.update(dt)
             self._last_perf_time = now
 
     @override
@@ -1042,6 +1072,7 @@ void main() {
         self._ui_callbacks["side"] = []
         self._ui_callbacks["free"] = []
         self.picking = None
+        self.wind = None
         self._last_state = None
         self._last_control = None
         super().clear_model()
