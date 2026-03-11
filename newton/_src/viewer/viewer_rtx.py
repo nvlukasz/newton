@@ -34,7 +34,7 @@ except ImportError:
 from .camera import Camera
 from .picking import Picking
 from .viewer_gui import ViewerGui
-from .viewer_usd import ViewerUSD
+from .viewer_usd import ViewerUSD, _compute_segment_xform
 from .wind import Wind
 
 PROFILE_ENABLED = os.environ.get("NEWTON_PROFILE", "0") != "0"
@@ -108,6 +108,12 @@ class ViewerRTX(ViewerUSD):
         # Pre-initialize fields that clear_model() (called from super().__init__) touches
         self._ui_callbacks: dict[str, list] = {"side": [], "stats": [], "free": [], "panel": []}
         self._paused = False
+        self._rtx = None
+        self._pending_line_batches: dict[str, tuple[Any, Any, Any, float, bool]] = {}
+        self._line_batch_paths: dict[str, str] = {}
+        self._line_batch_proto_paths: dict[str, str] = {}
+        self._line_batch_widths: dict[str, float] = {}
+        self._line_batch_handles: dict[str, Any] = {}
 
         super().__init__(
             output_path=self._tmp_usd_path,
@@ -121,8 +127,6 @@ class ViewerRTX(ViewerUSD):
         self._height = height
         self._headless = headless
 
-        # OVRTX renderer (created at end of first frame)
-        self._rtx = None
         self._phase = self._PHASE_BUILD
 
         # Pyglet window state
@@ -143,6 +147,8 @@ class ViewerRTX(ViewerUSD):
         # Per-frame pending data (cleared each begin_frame)
         self._pending_xforms: dict[str, tuple[Any, Any]] = {}
         self._pending_mesh_points: dict[str, np.ndarray] = {}
+
+        # Build-time line instancers plus runtime-authored capsule layers
 
         # Last rendered frame pixels (set in _render_and_display for save_screenshot)
         self._last_frame_pixels: np.ndarray | None = None
@@ -750,6 +756,90 @@ void main() {
 
         self._instance_prim_paths[self._PICKING_LINE_NAME] = [path]
 
+    def _remove_runtime_line_batch_layer(self, name: str):
+        if self._rtx is None:
+            return
+
+        handle = self._line_batch_handles.pop(name, None)
+        if handle is not None:
+            self._rtx.remove_usd(handle)
+
+    def _rebuild_runtime_line_batch_layer(self, name: str, starts, ends, colors, width: float, hidden: bool) -> bool:
+        if self._rtx is None or Gf is None or UsdGeom is None:
+            return False
+
+        self._remove_runtime_line_batch_layer(name)
+
+        (
+            positions,
+            orientations,
+            scales,
+            _proto_indices,
+            _ids,
+            colors_np,
+            color_indices,
+        ) = self._build_line_batch_arrays(starts, ends, colors, hidden)
+
+        if hidden or len(positions) == 0:
+            return True
+
+        try:
+            from pxr import Sdf as _Sdf
+            from pxr import Usd as _Usd
+            from pxr import UsdGeom as _UsdGeom
+            from pxr import UsdShade as _UsdShade
+        except ImportError:
+            return False
+
+        target_path = self._get_path(name)
+        prim_name = target_path.rsplit("/", 1)[-1]
+        stage = _Usd.Stage.CreateInMemory()
+        root = _UsdGeom.Xform.Define(stage, f"/{prim_name}")
+        stage.SetDefaultPrim(root.GetPrim())
+
+        # OVRTX reliably renders fully authored runtime capsule prims, whereas
+        # runtime PointInstancer color updates fell back to gray.
+        material_paths: dict[tuple[float, float, float], str] = {}
+
+        for i in range(len(positions)):
+            color_index = int(color_indices[i]) if len(color_indices) > i else min(i, len(colors_np) - 1)
+            color = colors_np[color_index].astype(np.float32)
+            color_key = (float(color[0]), float(color[1]), float(color[2]))
+
+            seg_path = f"/{prim_name}/seg_{i}"
+            xform = _UsdGeom.Xform.Define(stage, seg_path)
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(Gf.Vec3d(*positions[i].astype(np.float64).tolist()))
+            orient = orientations[i].astype(np.float32)
+            xform.AddOrientOp().Set(Gf.Quatf(float(orient[3]), float(orient[0]), float(orient[1]), float(orient[2])))
+            xform.AddScaleOp().Set(Gf.Vec3d(*scales[i].astype(np.float64).tolist()))
+
+            capsule = _UsdGeom.Capsule.Define(stage, f"{seg_path}/capsule")
+            capsule.GetAxisAttr().Set(_UsdGeom.Tokens.z)
+            capsule.GetRadiusAttr().Set(float(width))
+            capsule.GetHeightAttr().Set(1.0)
+            capsule.GetDisplayColorAttr().Set([Gf.Vec3f(*color.tolist())])
+
+            mat_path = material_paths.get(color_key)
+            if mat_path is None:
+                mat_path = f"/{prim_name}/Materials/mat_{len(material_paths)}"
+                material_paths[color_key] = mat_path
+                material = _UsdShade.Material.Define(stage, mat_path)
+                surface = _UsdShade.Shader.Define(stage, f"{mat_path}/PreviewSurface")
+                surface.CreateIdAttr("UsdPreviewSurface")
+                surface.CreateInput("diffuseColor", _Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*color.tolist()))
+                surface.CreateInput("emissiveColor", _Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*color.tolist()))
+                surface.CreateInput("roughness", _Sdf.ValueTypeNames.Float).Set(1.0)
+                surface.CreateInput("metallic", _Sdf.ValueTypeNames.Float).Set(0.0)
+                material.CreateSurfaceOutput().ConnectToSource(surface.ConnectableAPI(), "surface")
+
+            _UsdShade.MaterialBindingAPI.Apply(capsule.GetPrim())
+            _UsdShade.MaterialBindingAPI(capsule).Bind(_UsdShade.Material.Get(stage, mat_path))
+
+        handle = self._rtx.add_usd_layer(stage.GetRootLayer().ExportToString(), path_prefix=target_path)
+        self._line_batch_handles[name] = handle
+        return True
+
     @staticmethod
     def _build_line_instance_buffers(
         starts_np: np.ndarray, ends_np: np.ndarray, capacity: int
@@ -800,6 +890,88 @@ void main() {
             np.zeros((1, 3), dtype=np.float32),
             np.zeros((1, 3), dtype=np.float32),
         )
+
+    def _build_line_batch_arrays(
+        self, starts, ends, colors, hidden: bool
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        empty_positions = np.zeros((0, 3), dtype=np.float32)
+        empty_orientations = np.zeros((0, 4), dtype=np.float16)
+        empty_scales = np.zeros((0, 3), dtype=np.float32)
+        empty_proto_indices = np.zeros(0, dtype=np.int32)
+        empty_ids = np.zeros(0, dtype=np.int64)
+        empty_colors = np.zeros((0, 3), dtype=np.float32)
+        empty_color_indices = np.zeros(0, dtype=np.int32)
+
+        if hidden or starts is None or ends is None or colors is None or Gf is None:
+            return (
+                empty_positions,
+                empty_orientations,
+                empty_scales,
+                empty_proto_indices,
+                empty_ids,
+                empty_colors,
+                empty_color_indices,
+            )
+
+        starts_np = (
+            starts.numpy().astype(np.float32) if isinstance(starts, wp.array) else np.asarray(starts, dtype=np.float32)
+        )
+        ends_np = ends.numpy().astype(np.float32) if isinstance(ends, wp.array) else np.asarray(ends, dtype=np.float32)
+        num_lines = min(len(starts_np), len(ends_np))
+        if num_lines == 0:
+            return (
+                empty_positions,
+                empty_orientations,
+                empty_scales,
+                empty_proto_indices,
+                empty_ids,
+                empty_colors,
+                empty_color_indices,
+            )
+
+        colors_np = self._promote_colors_to_array(colors, num_lines)
+        colors_np = np.asarray(colors_np, dtype=np.float32)
+        if colors_np.ndim == 1:
+            if colors_np.shape[0] != 3:
+                raise ValueError("Line colors must be an RGB triplet or an array of RGB triplets.")
+            colors_np = np.tile(colors_np, (num_lines, 1))
+        elif colors_np.shape[0] == 1 and num_lines > 1:
+            colors_np = np.repeat(colors_np, num_lines, axis=0)
+        elif colors_np.shape[0] != num_lines:
+            raise ValueError("Number of line colors must match the number of lines.")
+
+        positions = np.zeros((num_lines, 3), dtype=np.float32)
+        orientations = np.zeros((num_lines, 4), dtype=np.float16)
+        orientations[:, 3] = np.float16(1.0)
+        scales = np.zeros((num_lines, 3), dtype=np.float32)
+
+        for i in range(num_lines):
+            pos0 = starts_np[i]
+            pos1 = ends_np[i]
+            delta = pos1 - pos0
+            if float(np.linalg.norm(delta)) <= 1.0e-8:
+                positions[i] = 0.5 * (pos0 + pos1)
+                continue
+
+            pos, rot, scale = _compute_segment_xform(
+                Gf.Vec3f(float(pos0[0]), float(pos0[1]), float(pos0[2])),
+                Gf.Vec3f(float(pos1[0]), float(pos1[1]), float(pos1[2])),
+            )
+            imag = rot.GetImaginary()
+            positions[i] = (float(pos[0]), float(pos[1]), float(pos[2]))
+            # quath memory layout is imaginary xyz first, then real w.
+            orientations[i] = (
+                np.float16(imag[0]),
+                np.float16(imag[1]),
+                np.float16(imag[2]),
+                np.float16(rot.GetReal()),
+            )
+            scales[i] = (float(scale[0]), float(scale[1]), float(scale[2]))
+
+        proto_indices = np.zeros(num_lines, dtype=np.int32)
+        ids = np.arange(num_lines, dtype=np.int64)
+        color_indices = np.arange(num_lines, dtype=np.int32)
+        return positions, orientations, scales, proto_indices, ids, colors_np, color_indices
 
     @override
     def is_key_down(self, key: str | int) -> bool:
@@ -895,6 +1067,7 @@ void main() {
             super().begin_frame(time)
             self._pending_xforms.clear()
             self._pending_mesh_points.clear()
+            self._pending_line_batches.clear()
             self._gizmo_log = {}
 
             if self._window and not self._headless:
@@ -921,6 +1094,7 @@ void main() {
             with wp.ScopedTimer("ViewerRTX::end_frame", active=PROFILE_ENABLED, use_nvtx=True):
                 self._update_ovrtx_camera()
                 self._update_ovrtx_transforms()
+                self._update_ovrtx_line_batches()
                 self._update_ovrtx_mesh_points()
                 self._render_and_display()
 
@@ -957,6 +1131,15 @@ void main() {
     def log_lines(self, name, starts, ends, colors, width: float = 0.01, hidden=False):
         if self._phase == self._PHASE_BUILD:
             super().log_lines(name, starts, ends, colors, width, hidden)
+            self._line_batch_paths[name] = self._get_path(name)
+            self._line_batch_proto_paths[name] = self._get_path(name) + "/capsule"
+            self._line_batch_widths[name] = float(width)
+            return
+
+        if name not in self._line_batch_paths:
+            self._rebuild_runtime_line_batch_layer(name, starts, ends, colors, float(width), bool(hidden))
+        elif name in self._line_batch_paths:
+            self._pending_line_batches[name] = (starts, ends, colors, float(width), bool(hidden))
 
     @override
     def log_points(self, name, points, radii, colors, hidden=False):
@@ -1016,6 +1199,21 @@ void main() {
                 mapping.unmap(stream=matrices.device.stream.cuda_stream)
 
     @staticmethod
+    def _make_laned_array_dltensor(values_np: np.ndarray, lanes: int):
+        """Create a 1D DLTensor with a fixed lane count per element."""
+        from ovrtx._src.dlpack import DLTensor
+
+        flat = np.ascontiguousarray(values_np).reshape(-1)
+        dl = DLTensor.from_dlpack(flat)
+        n = len(flat) // lanes
+        dl.dtype.lanes = lanes
+        dl.ndim = 1
+        shape_arr = (ctypes.c_int64 * 1)(n)
+        dl.shape = ctypes.cast(shape_arr, ctypes.POINTER(ctypes.c_int64))
+        dl._laned_shape = shape_arr  # prevent GC
+        return dl
+
+    @staticmethod
     def _make_point3f_dltensor(points_np):
         """Create a DLTensor with float3 (lanes=3) dtype from an (N,3) float32 array.
 
@@ -1023,17 +1221,7 @@ void main() {
         (float32 x 3 lanes). A plain DLTensor.from_dlpack on a (N,3) float32 array
         produces scalar float32 elements (4 bytes), causing an element-size mismatch.
         """
-        from ovrtx._src.dlpack import DLTensor
-
-        flat = np.ascontiguousarray(points_np, dtype=np.float32).reshape(-1)
-        dl = DLTensor.from_dlpack(flat)
-        n = len(flat) // 3
-        dl.dtype.lanes = 3
-        dl.ndim = 1
-        shape_arr = (ctypes.c_int64 * 1)(n)
-        dl.shape = ctypes.cast(shape_arr, ctypes.POINTER(ctypes.c_int64))
-        dl._point3f_shape = shape_arr  # prevent GC
-        return dl
+        return ViewerRTX._make_laned_array_dltensor(np.asarray(points_np, dtype=np.float32), lanes=3)
 
     def _update_ovrtx_mesh_points(self):
         if self._rtx is None or not self._pending_mesh_points:
@@ -1049,6 +1237,64 @@ void main() {
                     attribute_name="points",
                     tensors=[dl],
                 )
+
+    def _update_ovrtx_line_batches(self):
+        if self._rtx is None or not self._pending_line_batches:
+            return
+
+        with wp.ScopedTimer("ViewerRTX::update_line_batches", active=PROFILE_ENABLED, use_nvtx=True):
+            for name, (starts, ends, colors, width, hidden) in self._pending_line_batches.items():
+                prim_path = self._line_batch_paths.get(name)
+                proto_path = self._line_batch_proto_paths.get(name)
+                if prim_path is None or proto_path is None:
+                    continue
+
+                if self._line_batch_widths.get(name) != width:
+                    self._rtx.write_attribute(
+                        prim_paths=[proto_path],
+                        attribute_name="radius",
+                        tensor=np.asarray([width], dtype=np.float32),
+                    )
+                    self._line_batch_widths[name] = width
+
+                (
+                    positions,
+                    orientations,
+                    scales,
+                    proto_indices,
+                    ids,
+                    colors_np,
+                    color_indices,
+                ) = self._build_line_batch_arrays(starts, ends, colors, hidden)
+
+                is_visible = not hidden and len(positions) > 0
+                self._rtx.write_attribute(
+                    prim_paths=[prim_path],
+                    attribute_name="visibility",
+                    tensor=["inherited" if is_visible else "invisible"],
+                )
+                if not is_visible:
+                    continue
+
+                self._rtx.write_array_attribute(
+                    [prim_path], "positions", [self._make_laned_array_dltensor(positions.astype(np.float32), lanes=3)]
+                )
+                self._rtx.write_array_attribute(
+                    [prim_path],
+                    "orientations",
+                    [self._make_laned_array_dltensor(orientations.astype(np.float16), lanes=4)],
+                )
+                self._rtx.write_array_attribute(
+                    [prim_path], "scales", [self._make_laned_array_dltensor(scales.astype(np.float32), lanes=3)]
+                )
+                self._rtx.write_array_attribute([prim_path], "protoIndices", [proto_indices])
+                self._rtx.write_array_attribute([prim_path], "ids", [ids])
+                self._rtx.write_array_attribute(
+                    [prim_path],
+                    "primvars:displayColor",
+                    [self._make_laned_array_dltensor(colors_np.astype(np.float32), lanes=3)],
+                )
+                self._rtx.write_array_attribute([prim_path], "primvars:displayColor:indices", [color_indices])
 
     @staticmethod
     def _xform_to_mat44(pos, quat, scale):
@@ -1200,6 +1446,14 @@ void main() {
         self._ui_callbacks["free"] = []
         self.picking = None
         self.wind = None
+        if self._rtx is not None:
+            for handle in self._line_batch_handles.values():
+                self._rtx.remove_usd(handle)
+        self._line_batch_paths = {}
+        self._line_batch_proto_paths = {}
+        self._line_batch_widths = {}
+        self._line_batch_handles = {}
+        self._pending_line_batches = {}
         self._last_state = None
         self._last_control = None
         super().clear_model()
