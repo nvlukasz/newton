@@ -19,6 +19,7 @@ import ctypes
 import math
 import os
 from time import perf_counter
+from typing import Any
 
 import numpy as np
 import warp as wp
@@ -66,6 +67,9 @@ class ViewerRTX(ViewerUSD):
 
     _PHASE_BUILD = 0
     _PHASE_RENDER = 1
+    _PICKING_LINE_NAME = "picking_line"
+    _PICKING_LINE_RADIUS = 0.01
+    _PICKING_LINE_COLOR = (0.0, 1.0, 1.0)
 
     # Available lighting environment presets.
     ENVIRONMENTS = ("default", "studio", "none")
@@ -137,7 +141,7 @@ class ViewerRTX(ViewerUSD):
         self._mesh_prim_paths: dict[str, str] = {}
 
         # Per-frame pending data (cleared each begin_frame)
-        self._pending_xforms: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        self._pending_xforms: dict[str, tuple[Any, Any]] = {}
         self._pending_mesh_points: dict[str, np.ndarray] = {}
 
         # Last rendered frame pixels (set in _render_and_display for save_screenshot)
@@ -706,6 +710,97 @@ void main() {
         self.camera.yaw = yaw
         self._camera_dirty = True
 
+    def _ensure_picking_line_primitive(self):
+        if self._phase != self._PHASE_BUILD or self._PICKING_LINE_NAME in self._instance_prim_paths:
+            return
+
+        if Gf is None or UsdGeom is None:
+            return
+
+        path = self._get_path(self._PICKING_LINE_NAME)
+        self._ensure_scopes_for_path(self.stage, path)
+
+        xform = UsdGeom.Xform.Define(self.stage, path)
+        xform.ClearXformOpOrder()
+        xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.0))
+        xform.AddOrientOp().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+        xform.AddScaleOp().Set(Gf.Vec3d(0.0, 0.0, 0.0))
+
+        capsule = UsdGeom.Capsule.Define(self.stage, xform.GetPath().AppendChild("capsule"))
+        capsule.GetAxisAttr().Set(UsdGeom.Tokens.z)
+        capsule.GetRadiusAttr().Set(self._PICKING_LINE_RADIUS)
+        capsule.GetHeightAttr().Set(1.0)
+        capsule.GetDisplayColorAttr().Set([Gf.Vec3f(*self._PICKING_LINE_COLOR)])
+
+        # Use an emissive material so the picking line stays visibly cyan even under scene shadows.
+        from pxr import Sdf, UsdShade
+
+        mat_path = "/root/Materials/mat_picking_line"
+        self._ensure_scopes_for_path(self.stage, mat_path)
+        material = UsdShade.Material.Define(self.stage, mat_path)
+        surface = UsdShade.Shader.Define(self.stage, f"{mat_path}/PreviewSurface")
+        surface.CreateIdAttr("UsdPreviewSurface")
+        surface.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.0, 0.0, 0.0))
+        surface.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*self._PICKING_LINE_COLOR))
+        surface.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(1.0)
+        surface.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+        material.CreateSurfaceOutput().ConnectToSource(surface.ConnectableAPI(), "surface")
+        UsdShade.MaterialBindingAPI.Apply(capsule.GetPrim())
+        UsdShade.MaterialBindingAPI(capsule).Bind(material)
+
+        self._instance_prim_paths[self._PICKING_LINE_NAME] = [path]
+
+    @staticmethod
+    def _build_line_instance_buffers(
+        starts_np: np.ndarray, ends_np: np.ndarray, capacity: int
+    ) -> tuple[np.ndarray, np.ndarray]:
+        xforms_np = np.zeros((capacity, 7), dtype=np.float32)
+        xforms_np[:, 6] = 1.0
+        scales_np = np.zeros((capacity, 3), dtype=np.float32)
+
+        if capacity <= 0 or Gf is None:
+            return xforms_np, scales_np
+
+        count = min(capacity, len(starts_np), len(ends_np))
+        for i in range(count):
+            pos0 = np.asarray(starts_np[i], dtype=np.float32)
+            pos1 = np.asarray(ends_np[i], dtype=np.float32)
+            delta = pos1 - pos0
+            height = float(np.linalg.norm(delta))
+
+            xforms_np[i, :3] = 0.5 * (pos0 + pos1)
+            if height <= 1.0e-8:
+                continue
+
+            direction = delta / height
+            rot = Gf.Rotation()
+            rot.SetRotateInto(
+                Gf.Vec3d(0.0, 0.0, 1.0),
+                Gf.Vec3d(float(direction[0]), float(direction[1]), float(direction[2])),
+            )
+            quat = rot.GetQuat()
+            imag = quat.GetImaginary()
+            xforms_np[i, 3] = float(imag[0])
+            xforms_np[i, 4] = float(imag[1])
+            xforms_np[i, 5] = float(imag[2])
+            xforms_np[i, 6] = float(quat.GetReal())
+            scales_np[i] = (1.0, 1.0, height)
+
+        return xforms_np, scales_np
+
+    def _queue_picking_line_transform(self, starts_np: np.ndarray, ends_np: np.ndarray):
+        xforms_np, scales_np = self._build_line_instance_buffers(starts_np, ends_np, capacity=1)
+        self._pending_xforms[self._PICKING_LINE_NAME] = (
+            wp.array(xforms_np, dtype=wp.transform, device=self.device),
+            wp.array(scales_np, dtype=wp.vec3, device=self.device),
+        )
+
+    def _hide_picking_line(self):
+        self._queue_picking_line_transform(
+            np.zeros((1, 3), dtype=np.float32),
+            np.zeros((1, 3), dtype=np.float32),
+        )
+
     @override
     def is_key_down(self, key: str | int) -> bool:
         try:
@@ -753,6 +848,38 @@ void main() {
     def log_state(self, state):
         self._last_state = state
         super().log_state(state)
+        self._ensure_picking_line_primitive()
+        self._render_picking_line(state)
+
+    def _render_picking_line(self, state):
+        if not self.picking_enabled or self.picking is None or not self.picking.is_picking():
+            if self._phase == self._PHASE_RENDER:
+                self._hide_picking_line()
+            return
+
+        pick_body_idx = self.picking.pick_body.numpy()[0]
+        if pick_body_idx < 0:
+            if self._phase == self._PHASE_RENDER:
+                self._hide_picking_line()
+            return
+
+        pick_state = self.picking.pick_state.numpy()
+        pick_target = pick_state[0]["picking_target_world"]
+        picked_point = pick_state[0]["picked_point_world"]
+
+        body_world = self.model.body_world if self.model is not None else None
+        if self.world_offsets is not None and self.world_offsets.shape[0] > 0:
+            if body_world is not None:
+                body_world_idx = body_world.numpy()[pick_body_idx]
+                if body_world_idx >= 0 and body_world_idx < self.world_offsets.shape[0]:
+                    world_offset = self.world_offsets.numpy()[body_world_idx]
+                    pick_target = pick_target + world_offset
+                    picked_point = picked_point + world_offset
+
+        self._queue_picking_line_transform(
+            np.asarray([[picked_point[0], picked_point[1], picked_point[2]]], dtype=np.float32),
+            np.asarray([[pick_target[0], pick_target[1], pick_target[2]]], dtype=np.float32),
+        )
 
     @override
     def apply_forces(self, state):
