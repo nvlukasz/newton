@@ -1187,6 +1187,10 @@ void main() {
             with self._transform_binding.map(device=Device.CUDA) as mapping:
                 matrices = wp.from_dlpack(mapping.tensor, dtype=wp.mat44d)  # (N, 4, 4) float64
 
+            rtx_device = Device.CUDA if self.device.is_cuda else Device.CPU
+            with self._transform_binding.map(device=rtx_device) as mapping:
+                matrices = wp.from_dlpack(mapping.tensor, dtype=wp.mat44d)  # (N, 4, 4) float64
+
                 offset = 0
                 for name, paths in self._instance_prim_paths.items():
                     count = len(paths)
@@ -1196,7 +1200,8 @@ void main() {
                         wp.launch(write_transforms, dim=n, inputs=[xf, sc, offset, matrices], device=matrices.device)
                     offset += count
 
-                mapping.unmap(stream=matrices.device.stream.cuda_stream)
+                if matrices.device.is_cuda:
+                    mapping.unmap(stream=matrices.device.stream.cuda_stream)
 
     @staticmethod
     def _make_laned_array_dltensor(values_np: np.ndarray, lanes: int):
