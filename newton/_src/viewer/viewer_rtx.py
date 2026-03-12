@@ -18,6 +18,7 @@ from __future__ import annotations
 import ctypes
 import math
 import os
+import warnings
 from time import perf_counter
 from typing import Any
 
@@ -701,8 +702,15 @@ void main() {
 
                 wp.load_module(module=_raycast_module, device=model.device)
                 wp.load_module(module="newton._src.viewer.kernels", device=model.device)
-            except Exception:
-                pass
+            except Exception as exc:
+                warnings.warn(
+                    (
+                        "ViewerRTX: Failed to precompile Warp kernels for "
+                        f"device {model.device!r}: {exc}"
+                    ),
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
 
     @override
     def set_world_offsets(self, spacing):
