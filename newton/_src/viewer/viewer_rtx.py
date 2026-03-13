@@ -56,6 +56,44 @@ def write_transforms(
     m_out[offset + tid] = wp.transpose(wp.transform_compose(p64, q64, s64))
 
 
+@wp.kernel(enable_backward=False)
+def update_and_write_shape_transforms(
+    shape_xforms: wp.array(dtype=wp.transform),
+    shape_parents: wp.array(dtype=int),
+    body_q: wp.array(dtype=wp.transform),
+    shape_worlds: wp.array(dtype=int),
+    world_offsets: wp.array(dtype=wp.vec3),
+    scales: wp.array(dtype=wp.vec3),
+    mat44_offset: int,
+    m_out: wp.array(dtype=wp.mat44d),
+):
+    """Fused kernel: compute world transform from body state then write as mat44d.
+
+    Combines the work of ``update_shape_xforms`` and ``write_transforms`` into a
+    single pass, eliminating the intermediate ``world_xforms`` write and read.
+    """
+    tid = wp.tid()
+    xf = shape_xforms[tid]
+    parent = shape_parents[tid]
+    if parent >= 0:
+        world_xf = wp.transform_multiply(body_q[parent], xf)
+    else:
+        world_xf = xf
+    if world_offsets:
+        w = shape_worlds[tid]
+        if w >= 0 and w < world_offsets.shape[0]:
+            world_xf = wp.transform(world_xf.p + world_offsets[w], world_xf.q)
+    # promote to f64
+    p = world_xf.p
+    q = world_xf.q
+    sc = scales[tid]
+    p64 = wp.vec3d(wp.float64(p[0]), wp.float64(p[1]), wp.float64(p[2]))
+    q64 = wp.quatd(wp.float64(q[0]), wp.float64(q[1]), wp.float64(q[2]), wp.float64(q[3]))
+    s64 = wp.vec3d(wp.float64(sc[0]), wp.float64(sc[1]), wp.float64(sc[2]))
+    # NOTE: transpose needed
+    m_out[mat44_offset + tid] = wp.transpose(wp.transform_compose(p64, q64, s64))
+
+
 class ViewerRTX(ViewerUSD):
     """Real-time ray-traced viewer using NVIDIA OVRTX.
 
@@ -145,6 +183,16 @@ class ViewerRTX(ViewerUSD):
         self._instance_prim_paths: dict[str, list[str]] = {}
         self._all_instance_paths: list[str] = []
         self._transform_binding = None
+
+        # Flat concatenated shape arrays built once at the end of the build phase.
+        # Ordered to match the mat44d buffer layout so all shapes can be updated in
+        # a single kernel launch.  None until _build_flat_shape_arrays() runs.
+        self._flat_shape_xforms: wp.array | None = None
+        self._flat_shape_parents: wp.array | None = None
+        self._flat_shape_worlds: wp.array | None = None
+        self._flat_shape_scales: wp.array | None = None
+        self._flat_total_shapes: int = 0
+        self._flat_mat44_offset: int = 0  # offset of the flat section in the mat44d buffer
 
         # Mesh prim paths for deforming-mesh point updates
         self._mesh_prim_paths: dict[str, str] = {}
@@ -673,7 +721,52 @@ void main() {
         # main thread.
         self._init_window()
 
+        self._build_flat_shape_arrays()
+
         self._phase = self._PHASE_RENDER
+
+    def _build_flat_shape_arrays(self):
+        """Concatenate per-batch shape arrays into flat warp arrays matching the mat44d layout.
+
+        Called once at the end of the build phase.  The resulting arrays are static
+        (topology does not change per-frame) and allow all shape transforms to be
+        updated with a single ``update_and_write_shape_transforms`` kernel launch instead of
+        one launch per shape batch.
+        """
+        # _shape_instances is keyed by geometry hash (int), not by name; build a reverse map.
+        name_to_shapes = {s.name: s for s in self._shape_instances.values()}
+
+        chunks_xforms = []
+        chunks_parents = []
+        chunks_worlds = []
+        chunks_scales = []
+        flat_mat44_offset = 0
+        found_shape = False
+
+        for name, paths in self._instance_prim_paths.items():
+            count = len(paths)
+            shapes = name_to_shapes.get(name)
+            if shapes is not None:
+                found_shape = True
+                chunks_xforms.append(shapes.xforms.numpy())
+                chunks_parents.append(shapes.parents.numpy())
+                chunks_worlds.append(shapes.worlds.numpy())
+                chunks_scales.append(shapes.scales.numpy())
+            elif not found_shape:
+                # Non-shape entry (e.g. future pre-shape prim) before any shapes;
+                # keep track so the flat section starts at the right mat44d offset.
+                flat_mat44_offset += count
+
+        if not chunks_xforms:
+            return
+
+        dev = self.device
+        self._flat_shape_xforms = wp.array(np.concatenate(chunks_xforms, axis=0), dtype=wp.transform, device=dev)
+        self._flat_shape_parents = wp.array(np.concatenate(chunks_parents, axis=0), dtype=int, device=dev)
+        self._flat_shape_worlds = wp.array(np.concatenate(chunks_worlds, axis=0), dtype=int, device=dev)
+        self._flat_shape_scales = wp.array(np.concatenate(chunks_scales, axis=0), dtype=wp.vec3, device=dev)
+        self._flat_total_shapes = len(self._flat_shape_xforms)
+        self._flat_mat44_offset = flat_mat44_offset
 
     # ------------------------------------------------ ViewerUSD overrides
 
@@ -1107,7 +1200,22 @@ void main() {
     @override
     def log_state(self, state):
         self._last_state = state
-        super().log_state(state)
+        if self.model is None:
+            return
+
+        if self._phase == self._PHASE_BUILD:
+            # Build phase: delegate fully to base so USD prims are set up normally.
+            super().log_state(state)
+        else:
+            # Render phase: flat arrays (built at end of build phase) handle all shape
+            # transform updates in a single kernel launch — no per-batch work needed here.
+            for shapes in self._shape_instances.values():
+                shapes.colors_changed = False
+
+            self._log_gaussian_shapes(state)
+            self._log_non_shape_state(state)
+            self.model_changed = False
+
         self._ensure_picking_line_primitive()
         self._render_picking_line(state)
 
@@ -1294,26 +1402,52 @@ void main() {
             self._camera_dirty = False
 
     def _update_ovrtx_transforms(self):
-        if not self._transform_binding or not self._pending_xforms:
+        has_flat_shape_arrays = self._flat_total_shapes > 0
+        if not self._transform_binding or (not has_flat_shape_arrays and not self._pending_xforms):
             return
         with wp.ScopedTimer("ViewerRTX::update_transforms", active=PROFILE_ENABLED, use_nvtx=True):
             from ovrtx import Device
-
-            with self._transform_binding.map(device=Device.CUDA) as mapping:
-                matrices = wp.from_dlpack(mapping.tensor, dtype=wp.mat44d)  # (N, 4, 4) float64
 
             rtx_device = Device.CUDA if self.device.is_cuda else Device.CPU
             with self._transform_binding.map(device=rtx_device) as mapping:
                 matrices = wp.from_dlpack(mapping.tensor, dtype=wp.mat44d)  # (N, 4, 4) float64
 
-                offset = 0
-                for name, paths in self._instance_prim_paths.items():
-                    count = len(paths)
-                    if name in self._pending_xforms:
-                        xf, sc = self._pending_xforms[name]
-                        n = min(count, len(xf))
-                        wp.launch(write_transforms, dim=n, inputs=[xf, sc, offset, matrices], device=matrices.device)
-                    offset += count
+                body_q = self._last_state.body_q if self._last_state is not None else None
+                world_offsets = self.world_offsets
+
+                if has_flat_shape_arrays:
+                    # Single kernel launch for all shape batches.
+                    wp.launch(
+                        update_and_write_shape_transforms,
+                        dim=self._flat_total_shapes,
+                        inputs=[
+                            self._flat_shape_xforms,
+                            self._flat_shape_parents,
+                            body_q,
+                            self._flat_shape_worlds,
+                            world_offsets,
+                            self._flat_shape_scales,
+                            self._flat_mat44_offset,
+                            matrices,
+                        ],
+                        device=matrices.device,
+                    )
+
+                # Handle any remaining pre-computed transforms (e.g. picking line).
+                if self._pending_xforms:
+                    offset = 0
+                    for name, paths in self._instance_prim_paths.items():
+                        count = len(paths)
+                        if name in self._pending_xforms:
+                            xf, sc = self._pending_xforms[name]
+                            n = min(count, len(xf))
+                            wp.launch(
+                                write_transforms,
+                                dim=n,
+                                inputs=[xf, sc, offset, matrices],
+                                device=matrices.device,
+                            )
+                        offset += count
 
                 if matrices.device.is_cuda:
                     mapping.unmap(stream=matrices.device.stream.cuda_stream)
