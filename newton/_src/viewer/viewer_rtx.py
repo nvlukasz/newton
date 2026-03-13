@@ -1287,7 +1287,7 @@ void main() {
 
             self._rtx.write_attribute(
                 prim_paths=[self._camera_prim_path],
-                attribute_name="xformOp:transform",
+                attribute_name="omni:xform",
                 tensor=cam_mat.to_dltensor(),
                 semantic=Semantic.XFORM_MAT4x4,
             )
