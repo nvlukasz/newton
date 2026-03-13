@@ -114,6 +114,10 @@ class ViewerRTX(ViewerUSD):
         self._line_batch_proto_paths: dict[str, str] = {}
         self._line_batch_widths: dict[str, float] = {}
         self._line_batch_handles: dict[str, Any] = {}
+        self._pending_point_batches: dict[str, tuple[Any, Any, Any, bool]] = {}
+        self._point_batch_paths: dict[str, str] = {}
+        self._point_batch_colors: dict[str, np.ndarray] = {}
+        self._point_batch_synced_counts: dict[str, int] = {}
 
         super().__init__(
             output_path=self._tmp_usd_path,
@@ -764,6 +768,80 @@ void main() {
         if handle is not None:
             self._rtx.remove_usd(handle)
 
+    def _ensure_point_batch_primitive(self, name: str):
+        if Gf is None or UsdGeom is None:
+            return None
+
+        path = self._point_batch_paths.get(name, self._get_path(name))
+        instancer = UsdGeom.PointInstancer.Get(self.stage, path)
+        if not instancer:
+            from pxr import Sdf
+
+            self._ensure_scopes_for_path(self.stage, path)
+            instancer = UsdGeom.PointInstancer.Define(self.stage, path)
+            sphere = UsdGeom.Sphere.Define(self.stage, instancer.GetPath().AppendChild("sphere"))
+            sphere.GetRadiusAttr().Set(1.0)
+            instancer.GetPrototypesRel().SetTargets([sphere.GetPath()])
+            primvars = UsdGeom.PrimvarsAPI(instancer)
+            if not primvars.GetPrimvar("displayColor"):
+                primvars.CreatePrimvar("displayColor", Sdf.ValueTypeNames.Color3fArray, UsdGeom.Tokens.vertex, 1)
+
+        self._point_batch_paths[name] = path
+        return instancer
+
+    def _build_point_batch_arrays(
+        self, points, radii, colors
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
+        empty_positions = np.zeros((0, 3), dtype=np.float32)
+        empty_scales = np.zeros((0, 3), dtype=np.float32)
+        empty_proto_indices = np.zeros(0, dtype=np.int32)
+        empty_ids = np.zeros(0, dtype=np.int64)
+
+        if points is None:
+            return empty_positions, empty_scales, empty_proto_indices, empty_ids, None, None
+
+        points_np = points.numpy() if isinstance(points, wp.array) else points
+        positions = np.asarray(points_np, dtype=np.float32).reshape((-1, 3))
+        num_points = len(positions)
+        if num_points == 0:
+            return empty_positions, empty_scales, empty_proto_indices, empty_ids, None, None
+
+        if radii is None:
+            radii_np = np.full(num_points, 0.1, dtype=np.float32)
+        elif np.isscalar(radii):
+            radii_np = np.full(num_points, float(radii), dtype=np.float32)
+        else:
+            radii_np = np.asarray(radii.numpy() if isinstance(radii, wp.array) else radii, dtype=np.float32).reshape(-1)
+            if radii_np.shape[0] == 1 and num_points > 1:
+                radii_np = np.full(num_points, float(radii_np[0]), dtype=np.float32)
+            elif radii_np.shape[0] != num_points:
+                raise ValueError("Number of point radii must match the number of points.")
+
+        scales = np.repeat(radii_np[:, None], 3, axis=1)
+        proto_indices = np.zeros(num_points, dtype=np.int32)
+        ids = np.arange(num_points, dtype=np.int64)
+
+        colors_np = None
+        color_indices = None
+        if colors is not None:
+            color_values, _ = self._normalize_point_colors(colors, num_points)
+            colors_np = np.asarray(color_values, dtype=np.float32)
+            if colors_np.ndim == 1:
+                if colors_np.shape[0] != 3:
+                    raise ValueError("Point colors must be an RGB triplet or an array of RGB triplets.")
+                colors_np = colors_np.reshape(1, 3)
+            elif colors_np.ndim != 2 or colors_np.shape[1] != 3:
+                raise ValueError("Point colors must have shape (N, 3).")
+
+            if colors_np.shape[0] == 1:
+                color_indices = np.zeros(num_points, dtype=np.int32)
+            elif colors_np.shape[0] == num_points:
+                color_indices = np.arange(num_points, dtype=np.int32)
+            else:
+                raise ValueError("Number of point colors must match the number of points.")
+
+        return positions, scales, proto_indices, ids, colors_np, color_indices
+
     def _rebuild_runtime_line_batch_layer(self, name: str, starts, ends, colors, width: float, hidden: bool) -> bool:
         if self._rtx is None or Gf is None or UsdGeom is None:
             return False
@@ -1068,6 +1146,7 @@ void main() {
             self._pending_xforms.clear()
             self._pending_mesh_points.clear()
             self._pending_line_batches.clear()
+            self._pending_point_batches.clear()
             self._gizmo_log = {}
 
             if self._window and not self._headless:
@@ -1095,6 +1174,7 @@ void main() {
                 self._update_ovrtx_camera()
                 self._update_ovrtx_transforms()
                 self._update_ovrtx_line_batches()
+                self._update_ovrtx_point_batches()
                 self._update_ovrtx_mesh_points()
                 self._render_and_display()
 
@@ -1142,17 +1222,42 @@ void main() {
             self._pending_line_batches[name] = (starts, ends, colors, float(width), bool(hidden))
 
     @override
-    def log_points(self, name, points, radii, colors, hidden=False):
+    def log_points(self, name, points, radii=None, colors=None, hidden=False):
         if self._phase == self._PHASE_BUILD:
-            super().log_points(name, points, radii, colors, hidden)
-            self._mesh_prim_paths[name] = self._get_path(name)
-        elif name in self._mesh_prim_paths:
-            pts = (
-                points.numpy().astype(np.float32)
-                if isinstance(points, wp.array)
-                else np.asarray(points, dtype=np.float32)
+            if points is None:
+                return None
+
+            instancer = self._ensure_point_batch_primitive(name)
+            if instancer is None:
+                return None
+
+            positions, scales, proto_indices, ids, colors_np, color_indices = self._build_point_batch_arrays(
+                points, radii, colors
             )
-            self._pending_mesh_points[name] = pts
+
+            instancer.GetPositionsAttr().Set(positions, self._frame_index)
+            instancer.GetScalesAttr().Set(scales, self._frame_index)
+            instancer.GetProtoIndicesAttr().Set(proto_indices, self._frame_index)
+            instancer.CreateIdsAttr().Set(ids, self._frame_index)
+
+            if colors_np is not None and color_indices is not None:
+                from pxr import Vt
+
+                display_color = UsdGeom.PrimvarsAPI(instancer).GetPrimvar("displayColor")
+                display_color.Set(colors_np, self._frame_index)
+                display_color.SetIndices(Vt.IntArray(color_indices.tolist()), self._frame_index)
+                self._point_batch_colors[name] = np.array(colors_np, copy=True)
+
+            self._point_batch_synced_counts[name] = len(positions)
+            instancer.GetVisibilityAttr().Set(
+                "inherited" if not hidden and len(positions) > 0 else "invisible",
+                self._frame_index,
+            )
+            return instancer.GetPath()
+
+        if name in self._point_batch_paths:
+            self._pending_point_batches[name] = (points, radii, colors, bool(hidden))
+            return self._point_batch_paths[name]
 
     # --------------------------------------------------------- OVRTX updates
 
@@ -1187,6 +1292,10 @@ void main() {
             with self._transform_binding.map(device=Device.CUDA) as mapping:
                 matrices = wp.from_dlpack(mapping.tensor, dtype=wp.mat44d)  # (N, 4, 4) float64
 
+            rtx_device = Device.CUDA if self.device.is_cuda else Device.CPU
+            with self._transform_binding.map(device=rtx_device) as mapping:
+                matrices = wp.from_dlpack(mapping.tensor, dtype=wp.mat44d)  # (N, 4, 4) float64
+
                 offset = 0
                 for name, paths in self._instance_prim_paths.items():
                     count = len(paths)
@@ -1196,7 +1305,8 @@ void main() {
                         wp.launch(write_transforms, dim=n, inputs=[xf, sc, offset, matrices], device=matrices.device)
                     offset += count
 
-                mapping.unmap(stream=matrices.device.stream.cuda_stream)
+                if matrices.device.is_cuda:
+                    mapping.unmap(stream=matrices.device.stream.cuda_stream)
 
     @staticmethod
     def _make_laned_array_dltensor(values_np: np.ndarray, lanes: int):
@@ -1212,6 +1322,16 @@ void main() {
         dl.shape = ctypes.cast(shape_arr, ctypes.POINTER(ctypes.c_int64))
         dl._laned_shape = shape_arr  # prevent GC
         return dl
+
+    def _write_ovrtx_array_attribute(self, prim_path: str, attribute_name: str, values: Any):
+        if self._rtx is None:
+            return
+
+        if isinstance(values, wp.array):
+            # XXX For now OVRTX only supports array writes on CPU
+            values = values.numpy()
+
+        self._rtx.write_array_attribute([prim_path], attribute_name, [np.ascontiguousarray(values)])
 
     @staticmethod
     def _make_point3f_dltensor(points_np):
@@ -1295,6 +1415,54 @@ void main() {
                     [self._make_laned_array_dltensor(colors_np.astype(np.float32), lanes=3)],
                 )
                 self._rtx.write_array_attribute([prim_path], "primvars:displayColor:indices", [color_indices])
+
+    def _update_ovrtx_point_batches(self):
+        if self._rtx is None or not self._pending_point_batches:
+            return
+
+        with wp.ScopedTimer("ViewerRTX::update_point_batches", active=PROFILE_ENABLED, use_nvtx=True):
+            for name, (points, radii, colors, hidden) in self._pending_point_batches.items():
+                prim_path = self._point_batch_paths.get(name)
+                if prim_path is None:
+                    continue
+
+                if points is None:
+                    positions = np.zeros((0, 3), dtype=np.float32)
+                else:
+                    positions = np.asarray(
+                        points.numpy() if isinstance(points, wp.array) else points, dtype=np.float32
+                    ).reshape((-1, 3))
+                count = len(positions)
+                self._rtx.write_attribute(
+                    prim_paths=[prim_path],
+                    attribute_name="visibility",
+                    tensor=["inherited" if not hidden and count > 0 else "invisible"],
+                )
+
+                if hidden or count == 0:
+                    continue
+
+                if count == self._point_batch_synced_counts.get(name, count):
+                    self._write_ovrtx_array_attribute(prim_path, "positions", positions)
+                    self._point_batch_synced_counts[name] = count
+                    continue
+
+                point_colors = colors if colors is not None else self._point_batch_colors.get(name)
+                positions, scales, proto_indices, ids, colors_np, color_indices = self._build_point_batch_arrays(
+                    points, radii, point_colors
+                )
+
+                self._write_ovrtx_array_attribute(prim_path, "positions", positions)
+                self._write_ovrtx_array_attribute(prim_path, "scales", scales)
+                self._write_ovrtx_array_attribute(prim_path, "protoIndices", proto_indices)
+                self._write_ovrtx_array_attribute(prim_path, "ids", ids)
+
+                if colors_np is not None and color_indices is not None:
+                    self._write_ovrtx_array_attribute(prim_path, "primvars:displayColor", colors_np)
+                    self._write_ovrtx_array_attribute(prim_path, "primvars:displayColor:indices", color_indices)
+                    self._point_batch_colors[name] = np.array(colors_np, copy=True)
+
+                self._point_batch_synced_counts[name] = count
 
     @staticmethod
     def _xform_to_mat44(pos, quat, scale):
@@ -1454,6 +1622,10 @@ void main() {
         self._line_batch_widths = {}
         self._line_batch_handles = {}
         self._pending_line_batches = {}
+        self._pending_point_batches = {}
+        self._point_batch_paths = {}
+        self._point_batch_colors = {}
+        self._point_batch_synced_counts = {}
         self._last_state = None
         self._last_control = None
         super().clear_model()
