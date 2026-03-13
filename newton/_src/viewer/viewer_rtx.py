@@ -1474,39 +1474,6 @@ void main() {
 
                 self._point_batch_synced_counts[name] = count
 
-    @staticmethod
-    def _xform_to_mat44(pos, quat, scale):
-        """Convert (pos, quaternion_xyzw, scale) to 4x4 row-major matrix (float64).
-
-        Matches the USD GfMatrix4d / OVRTX fabric convention where the
-        translation lives in the last row and basis vectors in the first three.
-        """
-        x, y, z, w = float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3])
-        sx, sy, sz = float(scale[0]), float(scale[1]), float(scale[2])
-
-        xx, yy, zz = x * x, y * y, z * z
-        xy, xz, yz = x * y, x * z, y * z
-        wx, wy, wz = w * x, w * y, w * z
-
-        mat = np.empty((4, 4), dtype=np.float64)
-        mat[0, 0] = (1.0 - 2.0 * (yy + zz)) * sx
-        mat[0, 1] = (2.0 * (xy + wz)) * sx
-        mat[0, 2] = (2.0 * (xz - wy)) * sx
-        mat[0, 3] = 0.0
-        mat[1, 0] = (2.0 * (xy - wz)) * sy
-        mat[1, 1] = (1.0 - 2.0 * (xx + zz)) * sy
-        mat[1, 2] = (2.0 * (yz + wx)) * sy
-        mat[1, 3] = 0.0
-        mat[2, 0] = (2.0 * (xz + wy)) * sz
-        mat[2, 1] = (2.0 * (yz - wx)) * sz
-        mat[2, 2] = (1.0 - 2.0 * (xx + yy)) * sz
-        mat[2, 3] = 0.0
-        mat[3, 0] = float(pos[0])
-        mat[3, 1] = float(pos[1])
-        mat[3, 2] = float(pos[2])
-        mat[3, 3] = 1.0
-        return mat
-
     # ------------------------------------------------------- render + display
 
     def _update_fps(self):
