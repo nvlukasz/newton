@@ -155,8 +155,9 @@ class ViewerRTX(ViewerUSD):
 
         # Build-time line instancers plus runtime-authored capsule layers
 
-        # Last rendered frame pixels (set in _render_and_display for save_screenshot)
+        # Screenshot pixels are captured lazily to avoid a per-frame CPU copy.
         self._last_frame_pixels: np.ndarray | None = None
+        self._has_presented_frame = False
 
         # Camera (shared Camera class with ViewerGL)
         self.camera = Camera(width=self._width, height=self._height, up_axis=up_axis)
@@ -704,10 +705,7 @@ void main() {
                 wp.load_module(module="newton._src.viewer.kernels", device=model.device)
             except Exception as exc:
                 warnings.warn(
-                    (
-                        "ViewerRTX: Failed to precompile Warp kernels for "
-                        f"device {model.device!r}: {exc}"
-                    ),
+                    (f"ViewerRTX: Failed to precompile Warp kernels for device {model.device!r}: {exc}"),
                     RuntimeWarning,
                     stacklevel=2,
                 )
@@ -722,8 +720,10 @@ void main() {
     def set_camera(self, pos, pitch: float, yaw: float):
         from pyglet.math import Vec3 as PyVec3
 
-        if hasattr(pos, "__iter__"):
+        try:
             self.camera.pos = PyVec3(float(pos[0]), float(pos[1]), float(pos[2]))
+        except (TypeError, IndexError, KeyError):
+            pass
         self.camera.pitch = pitch
         self.camera.yaw = yaw
         self._camera_dirty = True
@@ -1285,7 +1285,7 @@ void main() {
 
             self._rtx.write_attribute(
                 prim_paths=[self._camera_prim_path],
-                attribute_name="omni:xform",
+                attribute_name="xformOp:transform",
                 tensor=cam_mat.to_dltensor(),
                 semantic=Semantic.XFORM_MAT4x4,
             )
@@ -1594,17 +1594,70 @@ void main() {
         with wp.ScopedTimer("ViewerRTX::swap_buffers", active=PROFILE_ENABLED, use_nvtx=True):
             self._window.flip()
 
+        self._has_presented_frame = True
+
+    def _read_window_texture_pixels(self) -> np.ndarray:
+        """Read back the last presented GL texture for screenshot capture."""
+        from pyglet import gl
+
+        if self._window is None or self._window.context is None:
+            raise RuntimeError("save_screenshot() requires an active presentation window")
+
+        pixels = np.empty((self._height, self._width, 4), dtype=np.uint8)
+        self._window.switch_to()
+        gl.glBindTexture(gl.GL_TEXTURE_2D, self._gl_texture)
+        gl.glGetTexImage(
+            gl.GL_TEXTURE_2D,
+            0,
+            gl.GL_RGBA,
+            gl.GL_UNSIGNED_BYTE,
+            pixels.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte)),
+        )
+        gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
+        self._last_frame_pixels = pixels
+        return pixels
+
+    def _capture_pending_render_pixels(self) -> np.ndarray:
+        """Wait for the current async render and copy its pixels for screenshot capture."""
+        if self._render_result is None:
+            raise RuntimeError("save_screenshot() requires at least one completed render frame")
+
+        from ovrtx import Device
+
+        products = self._render_result.wait()
+        self._render_result = None
+        if products is None:
+            raise RuntimeError("save_screenshot() requires at least one completed render frame")
+
+        for _pname, product in products.items():
+            for frame in product.frames:
+                if "LdrColor" in frame.render_vars:
+                    with frame.render_vars["LdrColor"].map(device=Device.CPU) as mapping:
+                        pixels = np.array(np.from_dlpack(mapping.tensor), copy=True)
+                    self._last_frame_pixels = pixels
+                    return pixels
+
+        raise RuntimeError("save_screenshot() could not find the LdrColor render output")
+
+    def _capture_screenshot_pixels(self) -> np.ndarray:
+        """Capture the most recent render output without adding per-frame overhead."""
+        if self._has_presented_frame and self._window is not None and self._window.context is not None:
+            return self._read_window_texture_pixels()
+        if self._render_result is not None:
+            return self._capture_pending_render_pixels()
+        if self._last_frame_pixels is not None:
+            return self._last_frame_pixels
+        raise RuntimeError("save_screenshot() requires at least one completed render frame")
+
     def save_screenshot(self, path: str) -> None:
         """Save the last rendered frame to a JPEG file.
 
-        Call this after at least one frame has been rendered (e.g. after the
-        simulation loop). Works in headless mode.
+        Call this after at least one completed frame has been rendered (e.g.
+        after the simulation loop). Works in headless mode.
         """
-        if self._last_frame_pixels is None:
-            return
         from PIL import Image
 
-        img = self._last_frame_pixels
+        img = self._capture_screenshot_pixels()
         if img.ndim == 3 and img.shape[2] == 4:
             img = img[:, :, :3]  # drop alpha for JPEG
         Image.fromarray(img).save(path, "JPEG", quality=92)
@@ -1634,6 +1687,8 @@ void main() {
         self._point_batch_paths = {}
         self._point_batch_colors = {}
         self._point_batch_synced_counts = {}
+        self._has_presented_frame = False
+        self._last_frame_pixels = None
         self._last_state = None
         self._last_control = None
         super().clear_model()
