@@ -145,13 +145,14 @@ def _make_heightfield_terrain_fn(
     return _add_terrain
 
 
-def _make_usd_terrain_fn(file_path: str, root_prim: str | None = None):
+def _make_usd_terrain_fn(file_path: str, root_prim: str | None = None, add_ground_plane: bool = False):
     """Return a callback that adds collision geometry from a USD file to a builder.
 
     Args:
         file_path: The path of the USD file.
         root_prim: The root USD prim path for the collision geometry. Shapes will be loaded
             recursively from this path. If None, load shapes from the entire file.
+        add_ground_plane: Add a ground plane collider for a flat walking area.
     """
 
     if root_prim is None:
@@ -164,6 +165,10 @@ def _make_usd_terrain_fn(file_path: str, root_prim: str | None = None):
         for idx in range(shape_start, builder.shape_count):
             flags = builder.shape_flags[idx]
             builder.shape_flags[idx] = flags & ~newton.ShapeFlags.VISIBLE
+
+        if add_ground_plane:
+            cfg = newton.ModelBuilder.ShapeConfig(is_visible=False)
+            builder.add_ground_plane(cfg=cfg)
 
     return _add_terrain
 
@@ -456,7 +461,7 @@ if __name__ == "__main__":
     if args.flat:
         terrain_fn = None
     elif args.usd_background:
-        terrain_fn = _make_usd_terrain_fn(args.usd_background, args.usd_background_root)
+        terrain_fn = _make_usd_terrain_fn(args.usd_background, args.usd_background_root, add_ground_plane=True)
         background_fn = _make_usd_background_fn(args.usd_background, args.usd_background_root)
 
     example = Example(
