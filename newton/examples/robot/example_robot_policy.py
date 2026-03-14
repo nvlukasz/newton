@@ -398,7 +398,7 @@ class Example:
             # shadow_builder.approximate_meshes("convex_hull")
 
             add_terrain(
-                builder,
+                shadow_builder,
                 file_path=background_usd_path,
                 root_prim=background_usd_root,
                 usd_collide=background_usd_collide,
