@@ -142,6 +142,10 @@ def add_terrain(builder,
                 flags = builder.shape_flags[idx]
                 builder.shape_flags[idx] = flags & ~newton.ShapeFlags.VISIBLE
 
+            # approximate the terrain mesh using convex decomposition
+            terrain_shapes = list(range(shape_start, builder.shape_count))
+            builder.approximate_meshes("vhacd", shape_indices=terrain_shapes)
+
         # add ground plane, but make it invisible
         if add_ground_plane:
             cfg = newton.ModelBuilder.ShapeConfig(is_visible=False)
@@ -522,6 +526,7 @@ class Example:
             solver="newton",
             nconmax=200,
             njmax=1000,
+            # ccd_iterations=50,
         )
 
         # Initialize state objects
