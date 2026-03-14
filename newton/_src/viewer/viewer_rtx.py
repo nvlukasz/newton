@@ -19,6 +19,7 @@ import ctypes
 import math
 import os
 import warnings
+from datetime import datetime
 from time import perf_counter
 from typing import Any
 
@@ -375,6 +376,12 @@ void main() {
             # elif symbol == pyglet.window.key.F:
             elif symbol == pyglet.window.key.Z:
                 self._frame_camera_on_model()
+            elif symbol == pyglet.window.key.C:
+                # save a timestamped screenshot
+                timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+                fname = f"screenshot-{timestamp}.jpg"
+                print(f"Saving {fname}")
+                self.save_screenshot(fname)
 
         @self._window.event
         def on_key_release(symbol, modifiers):
