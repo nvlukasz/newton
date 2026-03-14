@@ -670,7 +670,7 @@ void main() {
             UsdShade.MaterialBindingAPI.Apply(prim.GetPrim())
             UsdShade.MaterialBindingAPI(prim).Bind(material)
 
-    def add_background_usd(self, path: str):
+    def add_background_usd(self, file_path: str, prim_path: str | None = None):
         """Add a reference to a background USD (e.g. Gaussian splat scan).
 
         Must be called before the first frame (during the build phase).
@@ -678,11 +678,14 @@ void main() {
         Args:
             path: Absolute or relative path to a USD file.
         """
-        path = os.path.abspath(path)
-        if not os.path.isfile(path):
-            raise FileNotFoundError(f"Background USD not found: {path}")
+        file_path = os.path.abspath(file_path)
+        if not os.path.isfile(file_path):
+            raise FileNotFoundError(f"Background USD not found: {file_path}")
         bg_prim = self.stage.DefinePrim("/root/background")
-        bg_prim.GetReferences().AddReference(path)
+        if prim_path is not None:
+            bg_prim.GetReferences().AddReference(file_path, prim_path)
+        else:
+            bg_prim.GetReferences().AddReference(file_path)
 
     # ------------------------------------------------------------- OVRTX init
 
