@@ -173,7 +173,7 @@ def add_terrain(builder,
 
 
 def add_balls(builder, num_balls: int = 1):
-    """Return a callback that adds *num_balls* pushable spheres."""
+    """Add a bunch of balls to the builder."""
     positions = BALL_POSITIONS[:num_balls]
 
     ball_cfg = newton.ModelBuilder.ShapeConfig()
