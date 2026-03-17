@@ -1063,5 +1063,6 @@ class RigidBodySim:
         settings.solver.padmm.contact_warmstart_method = "geom_pair_net_force"
         settings.solver.collect_solver_info = False
         settings.solver.compute_solution_metrics = False
-        settings.solver.padmm.use_graph_conditionals = False
+        settings.solver.padmm.use_graph_conditionals = True
+        settings.solver.padmm.penalty_update_freq = 0
         return settings
