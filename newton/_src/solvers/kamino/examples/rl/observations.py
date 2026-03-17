@@ -674,6 +674,11 @@ class BipedalObservation(ObservationBuilder, torch.nn.Module):
         # Internal gait phase state
         self._phase = torch.zeros(self._num_worlds, device=self._device, dtype=torch.float)
         self._phase_rate = PhaseRate(phase_rate_policy_path, self.obs_idx.path_cmd)
+        _example_phase_input = torch.zeros(self._num_worlds, 3, device=self._device)
+        with torch.no_grad():
+            self._phase_rate._phase_rate = torch.jit.trace(
+                self._phase_rate._phase_rate, _example_phase_input
+            )
 
         # Cached intermediates (populated by compute, used by subclasses
         # for privileged observations)
@@ -732,6 +737,31 @@ class BipedalObservation(ObservationBuilder, torch.nn.Module):
         self._root_lin_vel_start = self.obs_idx.root_lin_vel_in_root.start
         self._root_ang_vel_start = self.obs_idx.root_ang_vel_in_root.start
 
+        # Static output buffer for phase rate network
+        self._phase_rate_out = torch.zeros(self._num_worlds, device=self._device)
+
+        # Static setpoints buffer — callers copy into this before graph replay
+        self._setpoints_buf = torch.zeros(self._num_worlds, num_joints, device=self._device)
+
+        # CUDA graph capturing the full compute body (phase rate + obs kernel + history)
+        self._compute_graph: torch.cuda.CUDAGraph | None = None
+        if "cuda" in str(self._device):
+            _s = torch.cuda.Stream()
+            _s.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(_s):
+                _wp_s = wp.stream_from_torch(_s)
+                for _ in range(3):
+                    self._capturable_body(_wp_s)
+            torch.cuda.current_stream().wait_stream(_s)
+            # Reset state dirtied by warmup
+            self._phase.zero_()
+            self._action_hist_0.zero_()
+            self._action_hist_1.zero_()
+            self._compute_graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(self._compute_graph):
+                _wp_cap = wp.stream_from_torch(torch.cuda.current_stream())
+                self._capturable_body(_wp_cap)
+
     def get_feature_module(self) -> BipedalObservation:
         return self
 
@@ -739,27 +769,26 @@ class BipedalObservation(ObservationBuilder, torch.nn.Module):
     def num_observations(self) -> int:
         return self.num_obs
 
-    def compute(self, setpoints: torch.Tensor | None = None) -> torch.Tensor:
-        """Build the observation tensor from current simulator state.
+    def _capturable_body(self, wp_stream) -> None:
+        """All GPU ops in compute(), suitable for CUDA graph capture.
 
         Args:
-            setpoints: Latest joint-position setpoints (raw, un-normalised),
-                shape ``(num_worlds, num_joints)``.  ``None`` on the very
-                first step before any action has been applied.
+            wp_stream: Warp stream to launch the obs kernel on (must match the
+                current Torch CUDA stream so all ops are serialised).
         """
-        nw = self._num_worlds
-
-        # -- Phase advance --
+        # Phase advance
         self._phase_rate_input[:, :2] = self._command[:, self.CMD_VEL]
         self._phase_rate_input[:, 2] = self._command[:, self.CMD_YAW_RATE]
-        with torch.inference_mode():
-            rate = self._phase_rate._phase_rate(self._phase_rate_input).squeeze(-1)
-        self._phase.add_(rate * self._dt).remainder_(1.0)
+        self._phase_rate_out.copy_(
+            self._phase_rate._phase_rate(self._phase_rate_input).squeeze(-1)
+        )
+        self._phase.add_(self._phase_rate_out * self._dt).remainder_(1.0)
 
-        # -- Warp kernel: obs[0:hist_start] --
+        # Warp obs kernel — on the same stream as torch (or device default if None)
+        _launch_kwargs = {"stream": wp_stream} if wp_stream is not None else {"device": self._wp_device}
         wp.launch(
             _compute_bipedal_obs_core,
-            dim=nw,
+            dim=self._num_worlds,
             inputs=[
                 self._wp_obs,
                 self._wp_q_i,
@@ -783,20 +812,36 @@ class BipedalObservation(ObservationBuilder, torch.nn.Module):
                 self._phase_enc_dim,
                 self._num_joints,
             ],
-            device=self._wp_device,
+            **_launch_kwargs,
         )
 
-        # -- Action history: pointer swap (no copy) then overwrite --
-        self._action_hist_0, self._action_hist_1 = self._action_hist_1, self._action_hist_0
-        if setpoints is not None:
-            torch.sub(setpoints, self._joint_position_default, out=self._action_hist_0)
-            self._action_hist_0.div_(self._joint_position_range)
+        # Action history: copy instead of pointer-swap so it's capturable
+        self._action_hist_1.copy_(self._action_hist_0)
+        torch.sub(self._setpoints_buf, self._joint_position_default, out=self._action_hist_0)
+        self._action_hist_0.div_(self._joint_position_range)
 
-        # -- Write action history into pre-allocated buffer --
+        # Write history into obs buffer
         self._obs_buffer[:, self._hist_start : self._hist_mid] = self._action_hist_0
         self._obs_buffer[:, self._hist_mid : self._hist_start + self.history_size] = self._action_hist_1
 
-        # -- Cache velocity views for subclasses --
+    def compute(self, setpoints: torch.Tensor | None = None) -> torch.Tensor:
+        """Build the observation tensor from current simulator state.
+
+        Args:
+            setpoints: Latest joint-position setpoints (raw, un-normalised),
+                shape ``(num_worlds, num_joints)``.  ``None`` on the very
+                first step before any action has been applied.
+        """
+        if setpoints is not None:
+            self._setpoints_buf.copy_(setpoints)
+
+        if self._compute_graph is not None:
+            self._compute_graph.replay()
+        else:
+            _wp_stream = wp.stream_from_torch(torch.cuda.current_stream()) if "cuda" in str(self._device) else None
+            self._capturable_body(_wp_stream)
+
+        # Python-level view creation — not CUDA ops, stays outside the graph
         s = self._root_lin_vel_start
         self._root_lin_vel_in_root = self._obs_buffer[:, s : s + 3]
         s = self._root_ang_vel_start
