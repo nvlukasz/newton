@@ -148,7 +148,12 @@ def _make_heightfield_terrain_fn(
     return _add_terrain
 
 
-def _make_usd_terrain_fn(file_path: str, root_prim: str | None = None, add_ground_plane: bool = False):
+def _make_usd_terrain_fn(
+        file_path: str,
+        root_prim: str | None = None,
+        add_ground_plane: bool = False,
+        show_physics: bool = False,
+):
     """Return a callback that adds collision geometry from a USD file to a builder.
 
     Args:
@@ -164,21 +169,23 @@ def _make_usd_terrain_fn(file_path: str, root_prim: str | None = None, add_groun
     def _add_terrain(builder):
         shape_start = builder.shape_count
         builder.add_usd(file_path, root_path=root_prim, hide_collision_shapes=True, load_visual_shapes=False)
-        # clear ShapeFlags.VISIBLE to hide the collision shape
-        for idx in range(shape_start, builder.shape_count):
-            flags = builder.shape_flags[idx]
-            builder.shape_flags[idx] = flags & ~newton.ShapeFlags.VISIBLE
+        if not show_physics:
+            # clear ShapeFlags.VISIBLE to hide the collision shape
+            for idx in range(shape_start, builder.shape_count):
+                flags = builder.shape_flags[idx]
+                builder.shape_flags[idx] = flags & ~newton.ShapeFlags.VISIBLE
 
         if add_ground_plane:
-            cfg = newton.ModelBuilder.ShapeConfig(is_visible=False)
+            cfg = newton.ModelBuilder.ShapeConfig(is_visible=show_physics)
             builder.add_ground_plane(cfg=cfg)
 
     return _add_terrain
 
 
-def _make_usd_background_fn(file_path: str, root_prim: str | None = None):
+def _make_usd_background_fn(file_path: str, root_prim: str | None = None, show_physics: bool = False):
     def _add_background(viewer):
-        viewer.add_background_usd(file_path, root_prim)
+        if not show_physics:
+            viewer.add_background_usd(file_path, root_prim)
 
     return _add_background
 
@@ -603,6 +610,11 @@ if __name__ == "__main__":
         default=1,
         help="Number of simulation steps per frame",
     )
+    parser.add_argument(
+        "--usd-show-physics",
+        action="store_true",
+        help="Show physics terrain geometry instead of visual",
+    )
     args = parser.parse_args()
 
     np.set_printoptions(linewidth=20000, precision=6, threshold=10000, suppress=True)
@@ -630,8 +642,8 @@ if __name__ == "__main__":
     if args.flat:
         terrain_fn = None
     elif args.usd_background:
-        terrain_fn = _make_usd_terrain_fn(args.usd_background, args.usd_background_root, add_ground_plane=True)
-        background_fn = _make_usd_background_fn(args.usd_background, args.usd_background_root)
+        terrain_fn = _make_usd_terrain_fn(args.usd_background, args.usd_background_root, add_ground_plane=True, show_physics=args.usd_show_physics)
+        background_fn = _make_usd_background_fn(args.usd_background, args.usd_background_root, args.usd_show_physics)
 
     example = Example(
         device=device,
