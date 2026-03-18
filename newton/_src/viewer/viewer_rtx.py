@@ -1817,6 +1817,11 @@ void main() {
 
     @override
     def close(self):
+        # wait for async rendering results before closing
+        if self._render_result is not None:
+            self._render_result.wait()
+            self._render_result = None
+
         if self._transform_binding is not None:
             self._transform_binding.unbind()
             self._transform_binding = None

@@ -384,7 +384,7 @@ class Example:
                     self.actions.add_(self.joint_pos_offset)
             torch.cuda.current_stream().wait_stream(_s)
             self._policy_cuda_graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(self._policy_cuda_graph):
+            with torch.cuda.graph(self._policy_cuda_graph, capture_error_mode="thread_local"):
                 _r = self.policy(self.obs._obs_buffer)
                 torch.mul(_r, self.joint_pos_scale, out=self.actions)
                 self.actions.add_(self.joint_pos_offset)
@@ -669,3 +669,5 @@ if __name__ == "__main__":
         pass
     finally:
         example.joystick.close()
+        if example.viewer is not None:
+            example.viewer.close()

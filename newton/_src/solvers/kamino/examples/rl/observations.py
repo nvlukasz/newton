@@ -758,7 +758,7 @@ class BipedalObservation(ObservationBuilder, torch.nn.Module):
             self._action_hist_0.zero_()
             self._action_hist_1.zero_()
             self._compute_graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(self._compute_graph):
+            with torch.cuda.graph(self._compute_graph, capture_error_mode="thread_local"):
                 _wp_cap = wp.stream_from_torch(torch.cuda.current_stream())
                 self._capturable_body(_wp_cap)
 
