@@ -12,6 +12,7 @@ import warp as wp
 import newton
 import newton.examples
 from newton._src.solvers.steel._testing import kernel_overrides
+from newton._src.solvers.steel.scene_units import SceneUnits
 from newton.solvers import SolverSteel
 from newton.tests.steel._fixtures import CONTACT_MAX, DT, _build_plane_model
 
@@ -476,3 +477,102 @@ change to one of these texts is a change the scene mode has to follow. A change 
 purpose: re-record it (``python -m newton.tests.steel.test_scene_tripwire --record``) with the reason in the same
 commit.
 """
+
+
+# scene_units: the scene's units built on a solver without the scene mode, and the heap they are tested on
+
+
+def _family_bearing(solver) -> np.ndarray:
+    """The row families each articulation of ``solver`` can bear: bit ``1 << family``, ``int32``, one per articulation.
+
+    The scene mode's per-articulation flags (``_scene_family_bearing``) for the families a solver without it has,
+    each tested over the articulation's response DOFs as the scene mode tests it: drives with ``drive_mode="rows"`` on
+    a PRISMATIC, REVOLUTE or D6 DOF, joint limits with ``enable_joint_limits`` on such a DOF with a finite bound, joint
+    friction with ``enable_joint_friction`` on a DOF whose joint supports friction. Mimic rows, loop closures and
+    velocity limits are the scene solve's rows, so no articulation bears them here.
+    """
+    from newton._src.solvers.steel.scene_rows import (  # noqa: PLC0415
+        FAMILY_DRIVE,
+        FAMILY_JOINT_FRICTION,
+        FAMILY_LIMIT,
+    )
+
+    model = solver.model
+    bearing = np.zeros(model.articulation_count, dtype=np.int32)
+    if not model.articulation_count or not model.joint_dof_count:
+        return bearing
+    plan = solver._model_plan
+    start = np.asarray(plan.articulation_dof_start, dtype=np.int64)
+    end = start + np.asarray(plan.response_dof_count, dtype=np.int64)
+    q_index = np.asarray(solver._joint_limit_q_index_host)
+    per_family = {}
+    if solver._has_drive_rows:
+        per_family[FAMILY_DRIVE] = q_index >= 0
+    if solver._enable_joint_limits:
+        finite = np.isfinite(model.joint_limit_lower.numpy()) | np.isfinite(model.joint_limit_upper.numpy())
+        per_family[FAMILY_LIMIT] = (q_index >= 0) & finite
+    if solver._enable_joint_friction:
+        per_family[FAMILY_JOINT_FRICTION] = np.asarray(solver._friction_dof_supported_host, dtype=bool)
+    for family, dofs in per_family.items():
+        counts = np.concatenate(([0], np.cumsum(dofs, dtype=np.int64)))
+        bearing |= (counts[end] > counts[start]).astype(np.int32) << family
+    return bearing
+
+
+class _UnitsView:
+    """A solver without the scene mode as :class:`SceneUnits` reads it: its attributes and the scene mode's two flags.
+
+    ``_scene_family_bearing`` is :func:`_family_bearing` and ``_scene_late_rows_enabled`` is ``False``: late rows are
+    the scene solve's, so units built without it have no late unit.
+    """
+
+    def __init__(self, solver):
+        self._solver = solver
+        self._scene_family_bearing = _family_bearing(solver)
+        self._scene_late_rows_enabled = False
+
+    def __getattr__(self, name):
+        return getattr(self._solver, name)
+
+
+def _units_view(solver) -> _UnitsView:
+    """``solver``, a solver without the scene mode, as :class:`SceneUnits` reads it at construction."""
+    return _UnitsView(solver)
+
+
+def _units_for(solver, contacts, unit_max: int | None = None) -> SceneUnits:
+    """The scene units of ``solver``'s last step: built from its contact routing on ``contacts``, then colored.
+
+    ``solver`` is a solver without the scene mode that has taken one step on ``contacts``, so its contacts are routed
+    (``_contact_path``, ``_contact_art_a/b``, ``_contact_slots_needed``). The units take their color cap and pair rule
+    from the solver's kernel overrides (``scene_color_cap``, ``scene_pair_rule``) and their capacity from
+    ``unit_max``, else from the build. Without row counts, an articulation's internal unit exists when it bears joint
+    limits and holds no rows.
+    """
+    units = SceneUnits(_units_view(solver), unit_max)
+    units.build(solver, contacts)
+    units.color()
+    return units
+
+
+def _heap_worlds(device, worlds=2, nx=6, ny=6, nz=3, pitch=0.042, half=0.02) -> newton.Model:
+    """The box heap of :func:`~newton.tests.steel._fixtures._heap`, with its ground, in ``worlds`` worlds."""
+    heap = newton.ModelBuilder(up_axis=newton.Axis.Z)
+    heap.rigid_gap = 0.002
+    heap.add_ground_plane()
+    for ix in range(nx):
+        for iy in range(ny):
+            for iz in range(nz):
+                body = heap.add_body(
+                    xform=wp.transform(
+                        wp.vec3((ix - nx / 2) * pitch, (iy - ny / 2) * pitch, 0.021 + iz * (2 * half + 0.001)),
+                        wp.quat_identity(),
+                    )
+                )
+                heap.add_shape_box(body, hx=half, hy=half, hz=half)
+    builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
+    builder.replicate(heap, copy_count=worlds)
+    model = builder.finalize(device=device)
+    # Sizes the solver's contact scratch, so it is set before the solver is built.
+    model.rigid_contact_max = CONTACT_MAX
+    return model
