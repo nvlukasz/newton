@@ -323,7 +323,6 @@ ROW_ARGS = [
 """The last arguments of every default sweep kernel: the rows, the relaxation, delta and the impulses."""
 
 
-@needs_read_back
 def test_restitution_rebound_tracks_steel(test, device):
     """Rebound a falling sphere as Steel's matrix-free solve does, through the impact and the flight after it.
 
@@ -395,7 +394,6 @@ def _normal_rows(test, solver, count):
     return family, rhs, rebound, target
 
 
-@needs_read_back
 def test_restitution_rows_fire_where_steel_fires(test, device):
     """Give the scene's contacts the rebound targets Steel's matrix-free rows get, on the same contacts.
 
@@ -576,7 +574,6 @@ def test_one_row_contacts_track_steel(test, device):
     test.assertEqual(solver._scene_units.unit_max, stats["row_max"] + solver._scene_units.limit_unit_count)
 
 
-@needs_read_back
 def test_friction_position_iterations_track_steel(test, device):
     """Solve friction in the last position iterations only, as Steel's ``contact_friction_position_iterations``.
 
@@ -593,7 +590,6 @@ def test_friction_position_iterations_track_steel(test, device):
     test.assertEqual(scene.solver._scene.friction_start, FRICTION_ITERATIONS - FRICTION_POSITION_ITERATIONS)
 
 
-@needs_read_back
 def test_friction_position_iterations_gate_the_scene_sweep(test, device):
     """Gate the tangent pairs on the sweep: from the first sweep as without the gate, never with ``0``.
 
@@ -664,7 +660,7 @@ def _assert_phases_match_serial_oracle(test, model, options, *, witness=None, wh
         for _ in range(TRACK_STEPS):
             oracle.step()
             history.append(state(oracle))
-            two_sided = max(two_sided, oracle.solver.scene_statistics()["two_sided_units"])
+            two_sided = max(two_sided, oracle.solver._scene_units.statistics()["two_sided"])
             seen = seen or witness(oracle.solver)
         test.assertGreater(two_sided, 0, order)
         test.assertTrue(seen, f"{order}: {what}")
@@ -678,7 +674,6 @@ def _assert_phases_match_serial_oracle(test, model, options, *, witness=None, wh
                         test.assertTrue(np.array_equal(a, b), msg=f"{field} at step {step}")
 
 
-@needs_read_back
 def test_friction_position_iterations_match_the_serial_oracle(test, device):
     """Gate friction in the phased sweep exactly as one thread walking the rows does, in every phase order.
 
@@ -693,7 +688,6 @@ def test_friction_position_iterations_match_the_serial_oracle(test, device):
     _assert_phases_match_serial_oracle(test, model, options)
 
 
-@needs_read_back
 def test_regularization_matches_the_serial_oracle(test, device):
     """Weigh the penetrating contacts in the phased sweep exactly as one thread walking the rows does.
 
@@ -1133,7 +1127,6 @@ def test_one_row_contacts_use_the_slots_response(test, device):
     np.testing.assert_array_equal(solver._sparse_row_dof.numpy()[0, rows:], int(SENTINEL))
 
 
-@needs_read_back
 def test_specialized_response_rejects_one_row_contacts(test, device):
     """Refuse the specialised response kernel, which writes three rows per contact, with one-row contacts.
 
@@ -1152,7 +1145,6 @@ def test_specialized_response_rejects_one_row_contacts(test, device):
         _Run(model, HUMANOID_ROWS, {"scene_response_kernel": "specialized"}, friction_anchor_beta=None)
 
 
-@needs_read_back
 def test_regularization_tracks_steel(test, device):
     """Regularize the penetrating contacts as Steel's matrix-free solve does, ``contact_regularization=0.5``.
 
@@ -1234,7 +1226,6 @@ def _limit_weights(solver):
     return np.concatenate(weights)
 
 
-@needs_read_back
 def test_row_weights_match_steel_bitwise(test, device):
     """Weigh each contact's row as Steel's dense and free-body rows do, bit for bit.
 
@@ -1317,7 +1308,6 @@ def _sliding_sphere(device):
     return builder.finalize(device=device)
 
 
-@needs_read_back
 def test_friction_start_holds_the_stationary_exit(test, device):
     """Keep sweeping past a stationary sweep until friction starts, as Steel's exit waits for it.
 

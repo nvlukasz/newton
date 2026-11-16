@@ -406,7 +406,6 @@ def _compliant_rows(solver) -> np.ndarray:
     return np.flatnonzero(solver._scene.row_gamma.numpy()[0, :rows] > 0.0)
 
 
-@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_compliance_matches_reference_law(test, device):
     """Assemble and solve one compliant contact as the reference law does, closed and open.
 
@@ -538,7 +537,6 @@ def test_compliance_replays_under_capture(test, device):
     test.assertEqual(captured.solver.compliance_contact_count, eager.solver.compliance_contact_count)
 
 
-@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_compliant_friction_matches_steel_bitwise(test, device):
     """Weigh each compliant contact's friction rows' coefficient by its friction scale, as Steel's arrays.
 
@@ -640,7 +638,6 @@ def test_compliance_counts_match_steel(test, device):
                 test.assertEqual(raised["scene"], raised["serial"])
 
 
-@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_scene_step_checks_keep_steel_messages(test, device):
     """Raise ``start_step``'s step checks in scene mode with Steel's messages, before any work is launched.
 
@@ -687,7 +684,6 @@ def test_scene_step_checks_keep_steel_messages(test, device):
             assert_same_message(contacts_with(short=name), DT)
 
 
-@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_compliance_matches_the_serial_oracle(test, device):
     """Solve compliant rows in the phased sweep exactly as one thread walking the rows does, in every phase order.
 
@@ -719,16 +715,10 @@ class TestSteelSceneCompliance(unittest.TestCase):
 for _fn in (test_scene_compliance_law_is_steels, test_scene_compliance_latches_step_errors):
     add_function_test(TestSteelSceneCompliance, _fn.__name__, _fn, devices=get_test_devices())
 
-add_function_test(
-    TestSteelSceneCompliance,
-    test_compliance_matches_reference_law.__name__,
-    test_compliance_matches_reference_law,
-    devices=get_test_devices(),
-)
-
-# CUDA only, each for the reason beside it: Steel's own compliance tests run on CUDA; the CPU scene steps the
-# compliant scene against CUDA's in test_scene_cpu.
+# CUDA only, each for the reason beside it: Steel refuses contact compliance on the CPU, and so does the scene there,
+# whose construction runs Steel's checks first.
 for _fn in (
+    test_compliance_matches_reference_law,  # Steel's compliance
     test_compliance_tracks_steel,  # Steel's compliance
     test_compliance_replays_under_capture,  # graph capture
     test_compliant_friction_matches_steel_bitwise,  # Steel's compliance

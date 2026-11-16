@@ -25,7 +25,6 @@ from newton.tests.steel._scene_fixtures import SCENE, _global_box_model, _humano
 from newton.tests.steel.test_scene_tripwire import _native_snippet
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
-needs_scene_step = unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 
 SCENE_ROW_MAX = 3 * CONTACT_MAX
@@ -197,7 +196,6 @@ def _assert_rows_match_steel(test, model, state, *, gap, min_contacts):
     return limit_rows, with_rows.size
 
 
-@needs_scene_step
 def test_rows_match_steel_rows_bitwise(test, device):
     """Build the same rows as Steel's deterministic per-world build, bit for bit, on one lying humanoid."""
     model = _humanoids(device)
@@ -215,7 +213,6 @@ def test_rows_match_steel_rows_bitwise(test, device):
         test.assertEqual(limit_rows, HUMANOID_LIMIT_ROWS)
 
 
-@needs_scene_step
 def test_row_order_is_side_major_then_colors(test, device):
     """Lay the rows out as all one-sided units side-major in sorted order, then the two-sided units by color."""
     for name in ("heap", "humanoids"):
@@ -231,7 +228,6 @@ def test_row_order_is_side_major_then_colors(test, device):
             test.assertGreater(two_sided, 0)
 
 
-@needs_scene_step
 def test_free_free_rows_have_prefix_12(test, device):
     """Give rows between two free boxes two physical 6-entry blocks, rows against the ground one, and use no MF rows."""
     solver, _state, _contacts = _rows(_heap(device))
@@ -249,7 +245,6 @@ def test_free_free_rows_have_prefix_12(test, device):
     test.assertFalse(np.any(solver._mf_constraint_count.numpy()))
 
 
-@needs_scene_step
 def test_rows_overflow_in_scan_order(test, device):
     """Drop the units past the row capacity in row order, route their contacts nowhere and latch the overflow."""
     # Units for every contact, so the row capacity, not the unit capacity, drops them. The heap is one
@@ -303,7 +298,6 @@ def test_rows_overflow_in_scan_order(test, device):
     test.assertGreater(int(contacts.rigid_contact_count.numpy()[0]), 0)
 
 
-@needs_scene_step
 def test_unit_overflow_latches_every_world(test, device):
     """Latch every status entry when units pass the unit capacity; contacts without a unit get no rows."""
     model = _build_contact_scene(device, worlds=2)
@@ -324,7 +318,6 @@ def test_unit_overflow_latches_every_world(test, device):
     test.assertTrue(np.all(contact_slot[with_unit] >= 0))
 
 
-@needs_scene_step
 def test_global_body_couples_model_worlds(test, device):
     """Solve a global body against the bodies of every model world in the one solve world; Steel drops and flags them."""
     model = _global_box_model(device)
@@ -350,7 +343,6 @@ def test_global_body_couples_model_worlds(test, device):
     np.testing.assert_array_equal(steel.constraint_overflow.numpy(), [False, True, True])
 
 
-@needs_scene_step
 @needs_read_back
 def test_limits_unit_rows_follow_the_count_pass(test, device):
     """Give the limits unit the rows of the limits COUNT pass, ahead of its articulation's contacts."""
@@ -371,7 +363,6 @@ def test_limits_unit_rows_follow_the_count_pass(test, device):
     test.assertEqual(solver.color_statistics()["limit_units"], 0)
 
 
-@needs_scene_step
 def test_scene_row_build_replays_under_capture(test, device):
     """Rebuild the scene rows from a captured graph: fixed shapes, no host readback, the eager result."""
     for name in ("heap", "humanoids"):
@@ -413,7 +404,6 @@ def test_scene_row_build_replays_under_capture(test, device):
                 np.testing.assert_array_equal(replay[key], value, err_msg=key)
 
 
-@needs_scene_step
 @needs_read_back
 def test_scene_statistics_reads_back(test, device):
     """Read the scene's rows and units back to the host as plain ints, after a step and only in scene mode."""

@@ -487,7 +487,6 @@ def test_color_statistics_reads_back(test, device):
                 test.assertGreaterEqual(stats["tail"], stats["tail_fallback"])
 
 
-@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 @unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 def test_time_scene_units_keeps_the_step(test, device):
     """Time build and color on the last step's contacts, from graphs or eagerly, leaving the step's units as they were."""

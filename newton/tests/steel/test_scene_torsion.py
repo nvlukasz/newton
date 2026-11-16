@@ -28,7 +28,6 @@ from newton.tests.steel._scene_fixtures import _rms, _Run
 from newton.tests.steel.test_scene_torsion_groups import PAD_WORLDS, _stacked_pads
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices
 
-_needs_scene_step = unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 _needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 
 
@@ -241,7 +240,6 @@ def _pad_on_body(device, *, kinematic=False):
     return model, state
 
 
-@_needs_scene_step
 def test_torsion_tracks_steel(test, device):
     """Step ``test_torsion``'s spinning pads with torsion as Steel does: one step and thirty.
 
@@ -282,7 +280,7 @@ def _pair_response(solver, row) -> dict:
     return {int(index): float(free[k] if k < prefix else factor[k]) for k, index in enumerate(dof) if index >= 0}
 
 
-@_needs_scene_step
+@_needs_read_back
 def test_torsion_rescales_member_tangents(test, device):
     """Bound the members' sliding and the spin by the group's budget, rescaling tangent pairs that pass it.
 
@@ -351,7 +349,6 @@ def test_torsion_rescales_member_tangents(test, device):
     np.testing.assert_allclose(change, expected_change, rtol=1.0e-4, atol=1.0e-6 * np.max(np.abs(expected_change)))
 
 
-@_needs_scene_step
 def test_torsion_late_rows_match_oracle(test, device):
     """Sweep the spin rows in phase C exactly as one thread walking every sweep does, in every phase order.
 
@@ -377,7 +374,7 @@ class _StackRun(_Run):
         super().__init__(model, STACK_ROWS, overrides, **options)
 
 
-@_needs_scene_step
+@_needs_read_back
 def test_spin_rows_match_steel_rows(test, device):
     """Write each group's spin row as Steel's ``_apply_rows`` and ``_jacobians`` do, on the stacked pads' worlds.
 
@@ -557,7 +554,7 @@ def _spin_impulse(solver) -> float:
     return float(solver._impulses.numpy()[0, row])
 
 
-@_needs_scene_step
+@_needs_read_back
 def test_one_sided_and_free_body_spin_rows_track_steel(test, device):
     """Stop a spin by a one-sided spin row and by a spin row with a free side as Steel does: one step and thirty.
 
@@ -604,7 +601,7 @@ def test_one_sided_and_free_body_spin_rows_track_steel(test, device):
             test.assertFalse(np.any(scene.solver.constraint_overflow.numpy()))
 
 
-@_needs_scene_step
+@_needs_read_back
 def test_prescribed_side_sets_the_spin_target(test, device):
     """Give a spin row the target of a prescribed side, as Steel's ``_apply_rows`` does.
 
@@ -635,7 +632,7 @@ def test_prescribed_side_sets_the_spin_target(test, device):
         test.assertEqual(a, b, key)
 
 
-@_needs_scene_step
+@_needs_read_back
 def test_retired_spin_row_refunds_under_velocity_iterations(test, device):
     """Retire a spin row whose members part after the position solve, and refund its spin in the velocity pass.
 
@@ -663,7 +660,6 @@ def test_retired_spin_row_refunds_under_velocity_iterations(test, device):
         test.assertEqual(impulses[name, 2], 0.0, name)
 
 
-@_needs_scene_step
 def test_spin_rows_come_and_go_under_capture(test, device):
     """Replay one captured step while spin rows appear and disappear, as eager steps do.
 
@@ -729,7 +725,6 @@ class _Stepper:
             wp.copy(getattr(self.state_0, name), getattr(self.state_1, name))
 
 
-@_needs_scene_step
 @_needs_read_back
 def test_torsion_errors_are_latched(test, device):
     """Refuse torsion where Steel refuses it, latching the cause instead of raising, and drop rows past capacity.
@@ -815,7 +810,6 @@ def test_torsion_errors_are_latched(test, device):
                     run.solver.check_constraint_capacity()
 
 
-@_needs_scene_step
 @_needs_read_back
 def test_spin_rows_count_in_the_row_watermarks(test, device):
     """Count each spin row in its model world's row marks, as Steel counts its torsion rows with its dense rows.

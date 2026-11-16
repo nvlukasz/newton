@@ -83,6 +83,14 @@ class _SleepState:
         status_world = articulation_world.astype(np.int32, copy=True)
         status_world[status_world < 0] = model.world_count
         self.status_world = wp.array(status_world, dtype=int, device=device)
+        # Contacts join islands within a solve world (_join_contacts): Steel's, the model world with world 0 for a
+        # global articulation, which solver._art_to_world holds. The scene folds every articulation into one solve
+        # world (its _art_to_world is all 0), so its islands join within Steel's solve worlds, held here.
+        self.join_world = (
+            wp.array(np.maximum(articulation_world, 0).astype(np.int32), dtype=int, device=device)
+            if solver._scene_mode
+            else None
+        )
         joint_art = model.joint_articulation.numpy()
         q_start, qd_start = model.joint_q_start.numpy(), model.joint_qd_start.numpy()
         coord_art = np.full(model.joint_coord_count, -1, dtype=np.int32)
@@ -271,7 +279,7 @@ class _SleepState:
                     model.shape_body,
                     self.body_nodes,
                     model.body_flags,
-                    self.solver._art_to_world,
+                    self.solver._art_to_world if self.join_world is None else self.join_world,
                     self.parent,
                     self.incomplete,
                 ],

@@ -56,7 +56,6 @@ from newton.tests.steel.test_scene_features import (
 from newton.tests.steel.test_scene_internal_unit import HUMANOID_HINGES, _hinge_dofs, _Stepper
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
-needs_scene_step = unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 
 VELOCITY_LIMIT = 2.0
@@ -178,7 +177,6 @@ def _velocity_limit_applied(solver) -> bool:
     return bool(np.any(solver._impulses.numpy()[0, : rows.size][rows] != 0.0))
 
 
-@needs_scene_step
 def test_joint_velocity_limits_track_steel(test, device):
     """Hold two standing humanoids' spun hinges at 2 rad/s with velocity-limit rows, as Steel's dense solve does.
 
@@ -250,7 +248,6 @@ def test_joint_velocity_limits_track_steel(test, device):
             )
 
 
-@needs_scene_step
 def test_velocity_limit_rows_match_steel_rows(test, device):
     """Build Steel's velocity-limit rows, in Steel's order, with Steel's targets bit for bit and its watermarks.
 
@@ -335,7 +332,6 @@ def test_velocity_limit_rows_match_steel_rows(test, device):
             )
 
 
-@needs_scene_step
 def test_late_rows_follow_the_coupled_pass(test, device):
     """Sweep the late rows in phase C exactly as one thread walking the rows does, in every phase order.
 
@@ -400,7 +396,6 @@ def test_late_rows_follow_the_coupled_pass(test, device):
         )
 
 
-@needs_scene_step
 @needs_read_back
 def test_late_rows_overflow_in_row_order(test, device):
     """Drop whole late units past the row capacity in row order; no sweep reads a dropped late row.
@@ -460,7 +455,6 @@ def test_late_rows_overflow_in_row_order(test, device):
             test.assertTrue(np.all(np.isfinite(solver._impulses.numpy()[0, :kept])))
 
 
-@needs_scene_step
 def test_driven_dof_marker_matches_the_drive_rows(test, device):
     """Mark exactly the DOFs the drive family builds a row for, and give the other limited DOFs velocity-limit rows.
 
@@ -520,7 +514,6 @@ def test_driven_dof_marker_matches_the_drive_rows(test, device):
             np.testing.assert_array_equal(vl_targets, np.repeat(-limits[np.searchsorted(hinges, limited)], 2))
 
 
-@needs_scene_step
 def test_velocity_limits_with_wide_masks_are_bitwise_one_word(test, device):
     """Build velocity-limit and fused drive rows and step bit for bit with two-word support masks.
 
@@ -584,7 +577,6 @@ def _anchored_boxes(device) -> newton.Model:
     return model
 
 
-@needs_scene_step
 @needs_read_back
 def test_free_body_velocity_limits_track_steel(test, device):
     """Hold thrown boxes at 0.5 m/s and 2 rad/s with their velocity-limit rows, as Steel's free-body solve does.
@@ -641,7 +633,6 @@ def test_free_body_velocity_limits_track_steel(test, device):
     )
 
 
-@needs_scene_step
 @needs_read_back
 def test_free_body_late_units_overflow_in_row_order(test, device):
     """Drop whole free-body late units past the row capacity in row order; no sweep reads a dropped late row.
@@ -691,7 +682,6 @@ def test_free_body_late_units_overflow_in_row_order(test, device):
     test.assertTrue(np.all(np.isfinite(solver._impulses.numpy()[0, :kept])))
 
 
-@needs_scene_step
 def test_free_body_velocity_limit_rows_match_steel_rows(test, device):
     """Build Steel's free-body velocity-limit rows on rotated anchors under the activation gate, Jacobians bit for bit.
 
@@ -773,7 +763,6 @@ def test_free_body_velocity_limit_rows_match_steel_rows(test, device):
     )
 
 
-@needs_scene_step
 @needs_read_back
 def test_late_rows_change_under_capture(test, device):
     """Replay one captured step exactly as eager steps while late units come and go under the activation gate.

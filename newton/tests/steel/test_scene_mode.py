@@ -36,7 +36,6 @@ from newton.tests.steel._scene_fixtures import (
 )
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
-needs_scene_step = unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 
 STEEL = {**SCENE, "solve_mode": "serial"}
@@ -461,7 +460,6 @@ def test_scene_mode_lets_steel_reject_first(test, device):
             test.assertTrue(solver._scene.features.patches)
 
 
-@needs_scene_step
 @needs_read_back
 def test_scene_mode_steps_without_iterations(test, device):
     """With ``iterations=0`` build the rows and sweep none, eagerly and in a captured graph, as Steel does."""
@@ -511,7 +509,6 @@ def test_scene_mode_steps_without_iterations(test, device):
     test.assertEqual(captured.scene_statistics(), stats)
 
 
-@needs_scene_step
 def test_scene_mode_reads_notified_restitution(test, device):
     """Rebound as Steel does once a ``SHAPE_PROPERTIES`` notify brings restitution to a model built without it.
 
@@ -808,7 +805,6 @@ def test_scene_mode_constructs_models_without_responding_bodies(test, device):
                 test.assertEqual(str(raised.exception), str(steel.exception))
 
 
-@needs_scene_step
 @needs_read_back
 def test_scene_mode_steps_models_without_responding_bodies(test, device):
     """Step a model without a responding articulation or free body, as Steel does.

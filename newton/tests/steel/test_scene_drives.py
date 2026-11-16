@@ -58,7 +58,6 @@ from newton.tests.steel.test_scene_internal_unit import (
 )
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
-needs_scene_step = unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 
 DRIVE_KE = 20.0
@@ -142,7 +141,6 @@ def _steel_drive_rows(solver, array) -> np.ndarray:
     )
 
 
-@needs_scene_step
 def test_drive_rows_track_steel(test, device):
     """Drive the hinges of two standing humanoids to 0.2 rad with drive rows, as Steel's matrix-free solve does.
 
@@ -191,7 +189,6 @@ def test_drive_rows_track_steel(test, device):
     )
 
 
-@needs_scene_step
 def test_drive_descriptors_track_steel(test, device):
     """Give each drive row Steel's parameters bit for bit and Steel's force-drive descriptors to its rounding.
 
@@ -256,7 +253,7 @@ def test_drive_descriptors_track_steel(test, device):
     driven = (ke > 0.0) | (kd > 0.0)
     test.assertEqual(int(np.count_nonzero(drive)), 2 * (HUMANOID_HINGES - 1))
 
-    def scene_rows(array):
+    def drive_values(array):
         return array.numpy()[0, :rows][drive]
 
     q = model.joint_q.numpy()[_hinge_coordinates(model, hinges)]
@@ -273,7 +270,7 @@ def test_drive_descriptors_track_steel(test, device):
     }
     for name, expected in exact.items():
         with test.subTest(array=name):
-            values = scene_rows(getattr(scene, name))
+            values = drive_values(getattr(scene, name))
             steel_values = _steel_drive_rows(steel, getattr(steel, name))
             test.assertTrue(np.array_equal(values, steel_values), f"{values} != {steel_values}")
             test.assertTrue(np.array_equal(values, expected[driven]), f"{values} != {expected[driven]}")
@@ -285,13 +282,13 @@ def test_drive_descriptors_track_steel(test, device):
     }
     for name, rtol in tolerances.items():
         with test.subTest(array=name):
-            values = scene_rows(getattr(scene, name))
+            values = drive_values(getattr(scene, name))
             test.assertTrue(np.all(np.isfinite(values)))
             np.testing.assert_allclose(values, _steel_drive_rows(steel, getattr(steel, name)), rtol=rtol)
     descriptors = scene._scene.drive_descriptors
     test.assertEqual([array.shape for array in descriptors], [(1, scene._scene.row_max)] * 4)
     test.assertIs(descriptors[0], scene._drive_target_vel_bias)
-    test.assertTrue(np.any(scene_rows(scene._drive_target_vel_bias) != 0.0))
+    test.assertTrue(np.any(drive_values(scene._drive_target_vel_bias) != 0.0))
     # Steel's own descriptor kernel on the scene's rows reproduces the scene's descriptors bit for bit.
     steel_descriptors = [wp.full((1, scene._scene.row_max), -1.0, dtype=wp.float32, device=device) for _ in range(4)]
     wp.launch(
@@ -327,7 +324,6 @@ def test_drive_descriptors_track_steel(test, device):
 
 
 @needs_read_back
-@needs_scene_step
 def test_drive_rows_change_under_capture(test, device):
     """Replay one captured step exactly as eager steps while drive rows appear and disappear and targets move.
 
@@ -388,7 +384,6 @@ def test_drive_rows_change_under_capture(test, device):
     test.assertFalse(np.any(eager.solver.constraint_overflow.numpy()))
 
 
-@needs_scene_step
 def test_drive_rows_match_the_serial_oracle(test, device):
     """Update the drive rows in the phased sweep exactly as one thread walking the rows does.
 
@@ -432,7 +427,6 @@ def test_drive_rows_match_the_serial_oracle(test, device):
             )
 
 
-@needs_scene_step
 def test_drive_rows_with_wide_masks_are_bitwise_one_word(test, device):
     """Build drive rows and step bit for bit with support masks widened to two words (``scene_mask_words=2``).
 
@@ -456,7 +450,6 @@ def test_drive_rows_with_wide_masks_are_bitwise_one_word(test, device):
             test.assertTrue(np.array_equal(a, b), f"{name} differs after step {step + 1}")
 
 
-@needs_scene_step
 def test_drive_rows_build_beside_velocity_limits(test, device):
     """Build joint velocity limits beside drive rows, fused or not, and store the velocity drive mode as Steel does.
 

@@ -25,8 +25,10 @@ from ...sim.articulation import eval_fk, eval_jacobian, eval_mass_matrix
 from ..coupled.interface import CouplingInterface
 from ..solver import SolverBase
 from . import contact_compliance as _contact_compliance
+from . import scene_compliance as _scene_compliance
 from ._testing import current_kernel_overrides
 from .contact_torsion import (
+    _validate_torsion_mode,
     configure_contact_torsion,
     prepare_torsion_rows,
     prepare_torsion_velocity_pass,
@@ -211,6 +213,7 @@ from .scene_rows import WARP_SHARED_BYTES_PER_THREAD
 from .scene_solve import (
     SCENE_FREE_SUPPORT,
     SceneSolve,
+    build_scene_rows,
     factor_body_masks,
     factor_bytes_per_warp,
     plan_scene_groups,
@@ -3621,8 +3624,15 @@ class SolverSteel(SolverBase, CouplingInterface):
         return supported[joint_dof_joint], world[joint_dof_joint]
 
     def _clear_warmstart_history(self, world_mask: wp.array[wp.bool] | None) -> None:
-        """Discard the carried contact impulses of the selected worlds (all worlds for ``None``)."""
+        """Discard the carried contact impulses of the selected worlds (all worlds for ``None``).
+
+        The scene's rows are one solve world: it discards the carry contact by contact, by each contact's model world,
+        and its rows only when every world is selected (``SceneSolve.clear_warmstart``).
+        """
         if not self._contact_warmstart or self._world_count == 0:
+            return
+        if self._scene_mode:
+            self._scene.clear_warmstart(self, world_mask)
             return
         families = [(self._ws_prev_impulses, self._ws_prev_row_type, self._ws_prev_row_parent)]
         if self._has_free_rigid_bodies:
@@ -3739,6 +3749,9 @@ class SolverSteel(SolverBase, CouplingInterface):
         if self._device_torsion is not None:
             # The torsion status is solver-wide; a cause that persists latches again on the next step.
             self._device_torsion.clear_status()
+        if self._scene is not None:
+            # So is the scene's latched torsion status.
+            self._scene.clear_torsion()
         world_mask = self._normalize_reset_world_mask(world_mask)
         if self._sleeping is not None:
             if world_mask is None:
@@ -7397,8 +7410,15 @@ class SolverSteel(SolverBase, CouplingInterface):
             ``state_out``.
         """
         if self._contact_compliance:
-            # Reject unsupported state before any stage can launch work.
-            _contact_compliance.validate_step(self)
+            if getattr(self, "_scene_mode", False):
+                # The scene builds its rows without Steel's stage-4 compliance checks: the host-side ones (Steel's
+                # start_step, which reads no device memory, so the step stays capturable) run here, before any stage
+                # can launch work; the step's data is checked on the device as its rows are prepared. (getattr: Steel's
+                # guard test steps a stand-in without the mode's attributes.)
+                _scene_compliance.start_scene_step(self, contacts, dt)
+            else:
+                # Reject unsupported state before any stage can launch work.
+                _contact_compliance.validate_step(self)
             # The compliant contact law is validated on unreduced contacts only.
             self._require_unreduced_contacts(
                 contacts, supports_body_pair_reduced_contacts=False, configuration="contact_compliance=True"
@@ -7461,7 +7481,11 @@ class SolverSteel(SolverBase, CouplingInterface):
         self._coupling_patch_history_restore_pending = False
         self._coupling_patch_history_snapshot_pending = False
         if self._contact_torsion_enabled:
-            validate_torsion_step(self)
+            if self._scene_mode:
+                # The scene prepares its spin rows on the device, so its step may be captured: Steel's mode rules alone.
+                _validate_torsion_mode(self)
+            else:
+                validate_torsion_step(self)
             if self._device_torsion is not None:
                 # Captured steps defer errors to the device; eager steps raise during preparation.
                 self._device_torsion.deferred_errors = wp.get_stream(self.model.device).is_capturing
@@ -7536,7 +7560,12 @@ class SolverSteel(SolverBase, CouplingInterface):
         if self._double_buffered:
             self._select_double_buffer()
         state_aug = self._prepare_augmented_state(state_in)
-        self._begin_dense_rows()
+        if not self._scene_mode:
+            self._begin_dense_rows()
+        elif self._velocity_limits_fused:
+            # Where Steel reserves its drive rows: the pre-solve velocity scaling and the velocity-limit rows skip
+            # the driven DOFs through drive_slot, which the scene marks instead (its rows are placed later, by scans).
+            self._scene.mark_driven_dofs(self)
 
         # Stage 1: forward kinematics, inverse dynamics with implicit drives, and CRBA.
         self._profile_stage("fk_id_crba")
@@ -7570,7 +7599,7 @@ class SolverSteel(SolverBase, CouplingInterface):
         # Stage 2: factor the augmented mass matrix of every articulation group.
         self._profile_stage("factor")
         for size in self._for_sizes():
-            if size in (self._sparse_mass_matrix_size, self._sparse_diagonal_response_size):
+            if size in self._scene_factor_only_sizes or size == self._sparse_diagonal_response_size:
                 continue
             # Fused groups were assembled and factored in stage 1.
             if self._crba_cholesky_kernels_by_size[size] or self._crba_cholesky_warp_kernels_by_size[size]:
@@ -7597,7 +7626,10 @@ class SolverSteel(SolverBase, CouplingInterface):
         self._profile_stage("unconstrained_velocity")
         state_aug._joint_qdd.zero_()
         for size in self._for_sizes():
-            if size == self._sparse_mass_matrix_size:
+            if size in self._scene_factor_only_sizes:
+                if self._scene is not None:
+                    # The scene's factor groups solve after the loop.
+                    continue
                 wp.launch(
                     solve_sparse_mass_matrix,
                     dim=self._n_arts_by_size[size] * 32,
@@ -7640,6 +7672,8 @@ class SolverSteel(SolverBase, CouplingInterface):
                 self._stage3_trisolve_tiled(size, state_aug)
             else:
                 self._stage3_trisolve_loop(size, state_aug)
+        if self._scene is not None:
+            self._scene.solve_mass(self, state_aug._joint_tau, state_aug._joint_qdd)
         self._stage3_compute_v_hat(state_in, state_aug, dt, stage3_qd)
         if self._joint_friction_load_active:
             self._stage3_joint_friction_load(state_in, state_aug)
@@ -7647,7 +7681,8 @@ class SolverSteel(SolverBase, CouplingInterface):
         # Stage 4: constraint rows, responses Y = H^-1 J^T, diagonals and right-hand sides.
         self._profile_stage("rows")
         self._stage4_build_rows(state_in, state_aug, control, contacts, dt)
-        if self._contact_torsion_enabled:
+        if self._contact_torsion_enabled and not self._scene_mode:
+            # The scene's spin rows are written with its rows (SceneSolve.prepare_torsion).
             prepare_torsion_rows(self, state_in, state_aug, contacts)
         has_contacts = contacts is not None and contacts.rigid_contact_max > 0
         self._profile_stage("solve")
@@ -7659,25 +7694,31 @@ class SolverSteel(SolverBase, CouplingInterface):
             # Positions follow the position solve; the velocity-only iterations then refine
             # the velocity without the position bias.
             wp.copy(self._v_out_snap, self._v_out)
-            self._compute_velocity_pass_rhs(dt)
-            self._pack_mf_meta(self._mf_rhs_unbiased)
-            freeze_drive_rows = self._velocity_drive_mode == "freeze"
-            if self._propagation_active:
-                self._compute_propagation_velocity_pass_rhs(dt)
-                self._launch_propagation_solve(
-                    self._rhs_unbiased,
-                    self._propagation_rhs_unbiased,
-                    self._velocity_iterations,
-                    regularize=False,
-                    freeze_drive_rows=freeze_drive_rows,
-                )
+            if self._scene_mode:
+                # The scene's velocity pass: its rows' right-hand side from the position solve's delta, then the
+                # same sweep continued from the position solve's delta and impulses, decoding v_out again.
+                self._scene.prepare_velocity_rows(self, dt)
+                self._scene.solve(self, rhs=self._rhs_unbiased, reset=False)
             else:
-                self._launch_pgs_solve(
-                    self._rhs_unbiased,
-                    self._velocity_iterations,
-                    regularize=False,
-                    freeze_drive_rows=freeze_drive_rows,
-                )
+                self._compute_velocity_pass_rhs(dt)
+                self._pack_mf_meta(self._mf_rhs_unbiased)
+                freeze_drive_rows = self._velocity_drive_mode == "freeze"
+                if self._propagation_active:
+                    self._compute_propagation_velocity_pass_rhs(dt)
+                    self._launch_propagation_solve(
+                        self._rhs_unbiased,
+                        self._propagation_rhs_unbiased,
+                        self._velocity_iterations,
+                        regularize=False,
+                        freeze_drive_rows=freeze_drive_rows,
+                    )
+                else:
+                    self._launch_pgs_solve(
+                        self._rhs_unbiased,
+                        self._velocity_iterations,
+                        regularize=False,
+                        freeze_drive_rows=freeze_drive_rows,
+                    )
             wp.copy(self._qd_work, self._v_out_snap)
             self._integrate(state_in, state_aug, state_out, dt, self._qd_work)
             wp.launch(
@@ -7882,6 +7923,10 @@ class SolverSteel(SolverBase, CouplingInterface):
 
     def _accumulate_row_watermarks(self, contacts: Contacts | None) -> None:
         """Fold this step's row counts into the high-water marks."""
+        if self._scene is not None:
+            # The scene's one solve world holds every model world's rows: it counts them per model world.
+            self._scene.accumulate_row_watermarks(self, contacts)
+            return
         families = [
             (self._constraint_count, self._slot_counter, self._row_dropped_dense, self._articulation_constraint_max),
             (self._mf_constraint_count, self._mf_slot_counter, self._row_dropped_mf, self._free_body_constraint_max),
@@ -8231,7 +8276,8 @@ class SolverSteel(SolverBase, CouplingInterface):
                 self._ws_prev_row_parent,
             )
         ]
-        if self._has_free_rigid_bodies:
+        # The scene routes no contact to the free-body rows: their carry would stay unread.
+        if self._has_free_rigid_bodies and not self._scene_mode:
             families.append(
                 (
                     self._mf_impulses,
@@ -8303,8 +8349,61 @@ class SolverSteel(SolverBase, CouplingInterface):
             self._ws_contact_streams[contacts] = stream
         return stream
 
+    def _seed_contact_impulses(self, state_in: State, contacts: Contacts | None, dt: float) -> None:
+        """Seed the contact impulses from the previous step, once the step's impulses are cleared.
+
+        The dense rows' (route 0) identity gather (:meth:`_gather_warmstart`), then the carried patch anchors' tangent
+        impulses on every row family :meth:`_patch_row_arrays` yields. Nothing without the warm start or contacts.
+        """
+        model = self.model
+        has_contacts = contacts is not None and contacts.rigid_contact_max > 0
+        if self._contact_warmstart and has_contacts:
+            self._gather_warmstart(contacts, route=0, dt=dt)
+        if (
+            self._friction_anchors_enabled
+            and has_contacts
+            and self._contact_warmstart
+            and self._contact_warmstart_decay > 0.0
+        ):
+            # Carried anchors replace the identity-matched tangent impulses of their rows.
+            for route, parents, mu, impulses in self._patch_row_arrays():
+                wp.launch(
+                    seed_patch_impulses,
+                    dim=contacts.rigid_contact_max,
+                    inputs=[
+                        contacts.rigid_contact_count,
+                        self._friction_patches.current,
+                        self._friction_patches.previous,
+                        state_in.body_q,
+                        self._contact_world,
+                        self._contact_slot,
+                        self._contact_path,
+                        self._contact_slots_needed,
+                        route,
+                        parents,
+                        mu,
+                        impulses,
+                        self._contact_warmstart_decay,
+                        dt,
+                        self._ws_history_dt,
+                    ],
+                    device=model.device,
+                )
+
     def _solve_matrix_free(self, state_in: State, state_aug: State, contacts: Contacts | None, dt: float) -> None:
         """Build the matrix-free responses and right-hand sides and run the fused solve into ``v_out``."""
+        if self._scene_mode:
+            # The scene's rows are finished in stage 4, rebound targets included; SceneSolve sweeps them and decodes
+            # v_out.
+            if self._contact_warmstart:
+                # Steel's warm-started prepare_world_impulses clears the whole capacity, where the scene's row
+                # preparation clears the kept rows: no stale impulse past them reaches the snapshot. Then Steel's
+                # gather and patch seed on the scene's one row family, whose seeds the solve applies side by side.
+                self._impulses.zero_()
+                self._seed_contact_impulses(state_in, contacts, dt)
+            # Without the warm start nothing seeds.
+            self._scene.solve(self, seed=self._contact_warmstart)
+            return
         model = self.model
         if self._paired_response_primary_size is not None:
             # One kernel writes both components' world rows and the diagonal.
@@ -8396,39 +8495,7 @@ class SolverSteel(SolverBase, CouplingInterface):
             outputs=[self._impulses],
             device=model.device,
         )
-        has_contacts = contacts is not None and contacts.rigid_contact_max > 0
-        if self._contact_warmstart and has_contacts:
-            self._gather_warmstart(contacts, route=0, dt=dt)
-        if (
-            self._friction_anchors_enabled
-            and has_contacts
-            and self._contact_warmstart
-            and self._contact_warmstart_decay > 0.0
-        ):
-            # Carried anchors replace the identity-matched tangent impulses of their rows.
-            for route, parents, mu, impulses in self._patch_row_arrays():
-                wp.launch(
-                    seed_patch_impulses,
-                    dim=contacts.rigid_contact_max,
-                    inputs=[
-                        contacts.rigid_contact_count,
-                        self._friction_patches.current,
-                        self._friction_patches.previous,
-                        state_in.body_q,
-                        self._contact_world,
-                        self._contact_slot,
-                        self._contact_path,
-                        self._contact_slots_needed,
-                        route,
-                        parents,
-                        mu,
-                        impulses,
-                        self._contact_warmstart_decay,
-                        dt,
-                        self._ws_history_dt,
-                    ],
-                    device=model.device,
-                )
+        self._seed_contact_impulses(state_in, contacts, dt)
         if (
             self._sparse_mass_matrix_size is None
             and not self._sparse_diagonal_contact_solve
@@ -9200,8 +9267,10 @@ class SolverSteel(SolverBase, CouplingInterface):
             )
         for size in self._size_groups:
             n_arts = self._n_arts_by_size[size]
-            if size == self._sparse_mass_matrix_size:
-                self._stage1_sparse_factor(state_aug, size)
+            if size in self._scene_factor_only_sizes:
+                if self._scene is None:
+                    self._stage1_sparse_factor(state_aug, size)
+                # Otherwise the scene's factor groups factor after the loop.
                 continue
             if size == self._sparse_diagonal_response_size:
                 self._stage1_compact_diagonal_inverse_mass(state_aug, size)
@@ -9248,6 +9317,8 @@ class SolverSteel(SolverBase, CouplingInterface):
                 outputs=[self._H_by_size[size]],
                 device=model.device,
             )
+        if self._scene is not None:
+            self._scene.factor(self, state_aug)
         self._mass_update_requested.zero_()
         self._force_mass_update = False
 
@@ -9728,16 +9799,29 @@ class SolverSteel(SolverBase, CouplingInterface):
             )
 
     def _patch_row_arrays(self):
-        """Yield ``(route, row_parent, row_mu, impulses)`` of each row family that can hold contact rows."""
+        """Yield ``(route, row_parent, row_mu, impulses)`` of each row family that can hold contact rows.
+
+        The scene routes every contact to its rows on route 0 (``_contact_path``), so it yields route 0 alone.
+        """
         yield 0, self._row_parent, self._row_mu, self._impulses
+        if self._scene_mode:
+            return
         if self._has_free_rigid_bodies:
             yield 1, self._mf_row_parent, self._mf_row_mu, self._mf_impulses
         if self._propagation_active:
             yield 2, self._propagation_row_parent, self._propagation_row_mu, self._propagation_impulses
 
     def _gather_warmstart(self, contacts: Contacts, route: int, dt: float) -> None:
-        """Seed one row family's contact impulses (route 0 dense, 1 free-body, 2 propagation) from the previous step."""
+        """Seed one row family's contact impulses (route 0 dense, 1 free-body, 2 propagation) from the previous step.
+
+        The scene gathers every contact on route 0, and clamps carried tangents there with ``SceneSolve.gather_mu``
+        when it keeps one (friction patches with free bodies): Steel gathers its free-body rows in stage 4, before
+        ``link_patch_rows`` divides the anchors' coefficients, and its dense rows here, after it, so a free-body
+        anchor's carried tangent is clamped with the undivided coefficient and a dense one's with the divided;
+        ``gather_mu`` holds each contact's.
+        """
         if route == 0:
+            scene_mu = self._scene.gather_mu if self._scene is not None else None
             arrays = (
                 self._ws_prev_dense_slot,
                 self._ws_prev_impulses,
@@ -9746,7 +9830,7 @@ class SolverSteel(SolverBase, CouplingInterface):
                 self._constraint_count,
                 self._row_type,
                 self._row_parent,
-                self._row_mu,
+                self._row_mu if scene_mu is None else scene_mu,
                 self._articulation_constraint_max,
                 self._impulses,
             )
@@ -10028,6 +10112,9 @@ class SolverSteel(SolverBase, CouplingInterface):
     ):
         """Allocate and fill the drive, bilateral, joint-limit, velocity-limit, contact and friction rows.
 
+        Under ``solve_mode="scene"`` the scene builds its rows instead
+        (:func:`~newton._src.solvers.steel.scene_solve.build_scene_rows`).
+
         Dense rows (rows touching an articulated body) are laid out per world as
         ``[joint drives][mimic][connect][joint limits][joint friction][joint velocity limits][contacts
         and friction]``, where drive rows exist only with ``drive_mode="rows"`` and were
@@ -10035,6 +10122,9 @@ class SolverSteel(SolverBase, CouplingInterface):
         friction][free-body velocity limits]``. Rows past a capacity are dropped, counted and
         latched into :attr:`constraint_overflow`.
         """
+        if self._scene_mode:
+            build_scene_rows(self, state_in, state_aug, contacts, dt, control=control)
+            return
         if self._contact_compliance:
             _contact_compliance.start_step(self, contacts, dt)
             _contact_compliance.begin_rows(self)

@@ -36,7 +36,6 @@ from newton.tests.steel._fixtures import (
 from newton.tests.steel._scene_fixtures import SCENE, _humanoids, _rms
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
-needs_scene_step = unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 
 HUMANOID_ROWS = {"articulation_constraint_max": 1024}
@@ -187,7 +186,6 @@ def test_aliases_read_back_as_requested(test, device):
             test.assertFalse(hasattr(alias, attribute), attribute)
 
 
-@needs_scene_step
 @needs_read_back
 def test_phased_alias_runs_ab_order(test, device):
     """Step ``row_schedule="phased"`` as the scene in the phase order ``"AB"``, bit for bit, reading back ``"phased"``.
@@ -227,7 +225,6 @@ def test_phased_alias_runs_ab_order(test, device):
                 test.assertFalse(np.array_equal(ba_q, ab_q))
 
 
-@needs_scene_step
 def test_contact_then_internal_alias_runs(test, device):
     """Step ``row_schedule="contact_then_internal"`` in the scene's own order, tracking Steel's schedule.
 
@@ -257,7 +254,6 @@ def test_contact_then_internal_alias_runs(test, device):
             test.assertLess(_rms(alias_q, steel_q), TRACK_RMS)
 
 
-@needs_scene_step
 @needs_read_back
 def test_propagation_alias_is_bitwise_immediate_scene(test, device):
     """Step the propagation response as the scene's immediate response, bit for bit, reading back as requested.
@@ -375,7 +371,6 @@ def _assert_tracks_steel(test, label, scene, steel, reference="Steel's"):
         test.assertLess(error, atol, f"{label}: joint_q off {reference} by {error:.3e} after step {step}")
 
 
-@needs_scene_step
 def test_connect_rows_track_steel(test, device):
     """Track Steel's loop closures with the scene's connect rows, at 32 iterations.
 
@@ -410,7 +405,6 @@ def test_connect_rows_track_steel(test, device):
             )
 
 
-@needs_scene_step
 def test_mimic_rows_track_steel(test, device):
     """Track Steel's mimic row with the scene's, at 32 iterations.
 
@@ -449,7 +443,6 @@ class _CapturedStepper:
             wp.copy(getattr(self.state_0, name), getattr(self.state_1, name))
 
 
-@needs_scene_step
 def test_connect_release_under_capture(test, device):
     """Drop the four-bar's connect rows and bring them back between replays of one captured step.
 
@@ -492,7 +485,6 @@ def test_connect_release_under_capture(test, device):
     test.assertLess(gaps[59], 0.5 * gaps[39])
 
 
-@needs_scene_step
 def test_preelimination_alias_converges(test, device):
     """Run ``enable_bilateral_preelimination=True`` as the scene's plain rows, reading back as requested.
 
