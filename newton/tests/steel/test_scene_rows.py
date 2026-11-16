@@ -11,11 +11,13 @@ import numpy as np
 import warp as wp
 
 import newton
-from newton._src.solvers.steel import scene_rows, sparse_contact
+from newton._src.solvers.steel import scene_rows, scene_solve, sparse_contact
 from newton._src.solvers.steel.kernels import (
     PGS_CONSTRAINT_TYPE_CONTACT,
     PGS_CONSTRAINT_TYPE_FRICTION,
     PGS_CONSTRAINT_TYPE_JOINT_LIMIT,
+    allocate_world_contact_slots,
+    prepare_world_contact_rows,
 )
 from newton._src.solvers.steel.solver_steel import _SOLVE_MODES
 from newton.solvers import SolverSteel
@@ -378,7 +380,6 @@ def test_scene_row_build_replays_under_capture(test, device):
             model = _heap(device) if name == "heap" else _humanoids(device, per_world=4, spacing=0.4)
             solver, state, contacts = _rows(model)
             scene = solver._scene
-            from newton._src.solvers.steel import scene_solve  # noqa: PLC0415
 
             def snapshot(solver=solver, scene=scene):
                 rows = int(solver._constraint_count.numpy()[0])
@@ -448,6 +449,16 @@ def test_scene_statistics_reads_back(test, device):
     test.assertEqual(json.loads(json.dumps(stats)), stats)
 
 
+class _StandIn:
+    """A stand-in for a solver, a state or contacts: every attribute and item is another stand-in."""
+
+    def __getattr__(self, name):
+        return _StandIn()
+
+    def __getitem__(self, key):
+        return _StandIn()
+
+
 class TestSteelSceneRows(unittest.TestCase):
     def test_row_templates_expand_to_steel_text(self):
         """Expand the scene's two row templates at one mask word to Steel's own native text, character for character.
@@ -481,6 +492,35 @@ class TestSteelSceneRows(unittest.TestCase):
             scene_rows.get_scene_connect_rows_kernel(27, max_closure_rows=4)
         kernel = scene_rows.get_scene_connect_rows_kernel(27, 2, max_closure_rows=3)
         self.assertEqual(kernel.key, "populate_scene_connect_rows_27_8_4_w2")
+
+    def test_contact_builders_launch_by_name(self):
+        """Give Steel's contact row builders every argument by its name, and refuse a missing or unknown one.
+
+        The scene's row build launches ``allocate_world_contact_slots`` and ``prepare_world_contact_rows`` by name
+        (``scene_solve._launch_by_name``), so a parameter upstream adds, renames or removes fails at the launch, named,
+        instead of shifting the arguments after it. The argument dicts the row build passes, read on stand-ins (no
+        solver), hold exactly each kernel's parameters; a dict without one of them, or with one more, raises
+        ``TypeError`` naming it, before anything launches.
+        """
+        stand_in = _StandIn()
+        geometry = scene_solve._contact_geometry(stand_in, 1)
+        cases = {
+            allocate_world_contact_slots: scene_solve._contact_slot_arguments(
+                stand_in, stand_in, geometry, stand_in, stand_in
+            ),
+            prepare_world_contact_rows: scene_solve._contact_row_arguments(
+                stand_in, stand_in, stand_in, stand_in, geometry
+            ),
+        }
+        for kernel, arguments in cases.items():
+            with self.subTest(kernel=kernel.key):
+                self.assertEqual(sorted(arguments), sorted(arg.label for arg in kernel.adj.args))
+                dropped = next(iter(arguments))
+                missing = {name: value for name, value in arguments.items() if name != dropped}
+                with self.assertRaisesRegex(TypeError, rf"missing arguments \['{dropped}'\]"):
+                    scene_solve._launch_by_name(kernel, 1, missing, None)
+                with self.assertRaisesRegex(TypeError, r"unknown arguments \['not_an_argument'\]"):
+                    scene_solve._launch_by_name(kernel, 1, {**arguments, "not_an_argument": 0}, None)
 
 
 # The rows build on every device; a Steel reference is Steel's split solve on the CPU (_steel_on).

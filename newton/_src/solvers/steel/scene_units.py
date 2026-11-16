@@ -25,6 +25,7 @@ import numpy as np
 import warp as wp
 
 from .friction_patches import WARP_DETERMINISM_OFF
+from .scene_rows import FAMILY_CONNECT, FAMILY_LIMIT, FAMILY_MIMIC, FAMILY_VELOCITY_LIMIT
 
 wp.set_module_options({"enable_backward": False, **WARP_DETERMINISM_OFF})
 
@@ -1061,8 +1062,6 @@ class SceneUnits:
         bearing = solver._scene_family_bearing
         bilateral = False
         if bearing is not None:
-            from .scene_rows import FAMILY_CONNECT, FAMILY_MIMIC  # noqa: PLC0415
-
             # The mimic and connect families' bits (the scene solve's alone).
             bilateral = bool(np.any(bearing & ((1 << FAMILY_MIMIC) | (1 << FAMILY_CONNECT))))
         if (solver._enable_joint_friction or solver._has_drive_rows or bilateral) and self.side_count:
@@ -1147,8 +1146,6 @@ class SceneUnits:
         at construction: this is the joint-limit bit of the solver's per-articulation flags,
         ``_scene_family_bearing`` (:func:`~newton._src.solvers.steel.scene_solve.scene_internal_bearing`).
         """
-        from .scene_rows import FAMILY_LIMIT  # noqa: PLC0415
-
         return ((solver._scene_family_bearing >> FAMILY_LIMIT) & 1).astype(np.int32)
 
     @staticmethod
@@ -1167,8 +1164,6 @@ class SceneUnits:
         at every step; under the scene mode every articulation that owns a mimic row or a loop closure,
         whatever its enabled flags. Free rigid bodies (a FREE joint) get none but a loop closure's.
         """
-        from .scene_rows import FAMILY_VELOCITY_LIMIT  # noqa: PLC0415
-
         # The internal unit's families are those before the velocity limits, whose rows are late rows (Steel's slot
         # order).
         return ((solver._scene_family_bearing & ((1 << FAMILY_VELOCITY_LIMIT) - 1)) != 0).astype(np.int32)
@@ -1185,8 +1180,6 @@ class SceneUnits:
         rigid-body velocity limits registered a free rigid body whose linear or angular limit is finite and
         positive, Steel's per-axis test of its free-body velocity-limit rows.
         """
-        from .scene_rows import FAMILY_VELOCITY_LIMIT  # noqa: PLC0415
-
         return ((solver._scene_family_bearing >> FAMILY_VELOCITY_LIMIT) & 1).astype(np.int32)
 
     def _allocate(self, unit_max: int) -> None:

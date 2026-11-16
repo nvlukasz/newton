@@ -33,11 +33,13 @@ from newton._src.solvers.steel.kernels import (
     PGS_CONSTRAINT_TYPE_FRICTION,
     PGS_CONSTRAINT_TYPE_JOINT_LIMIT,
 )
+from newton._src.solvers.steel.scene_pgs import RANGE_TWO_SIDED
 from newton._src.solvers.steel.solver_steel import _SOLVE_MODES
 from newton.solvers import SolverSteel
 from newton.tests.steel._compliance_reference import solve_reference
 from newton.tests.steel._fixtures import DT, _build_contact_scene, _set_box_velocities, run_fixture
 from newton.tests.steel._scene_fixtures import _humanoids, _Run
+from newton.tests.steel.test_scene_features import TRACK_ROWS, _assert_phases_match_serial_oracle, _track_steel
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
 MATERIAL_ARRAYS = ("rigid_contact_stiffness", "rigid_contact_damping", "rigid_contact_friction")
@@ -484,8 +486,6 @@ def test_compliance_tracks_steel(test, device):
     coordinates after 30 steps within 1e-3 RMS, with compliant rows in every step. Each kept contact has a normal row
     of its own (the scene's placement gives each contact rows of its own; Steel's duplicate check would latch).
     """
-    from newton.tests.steel.test_scene_features import _track_steel  # noqa: PLC0415
-
     model = _build_contact_scene(device)
 
     def compliant(solver):
@@ -513,8 +513,6 @@ def test_compliance_replays_under_capture(test, device):
     ``joint_qd`` equal to the eager steps' at every step, and the compliant contacts and their friction rows'
     coefficients equal the eager step's.
     """
-    from newton.tests.steel.test_scene_features import TRACK_ROWS  # noqa: PLC0415
-
     model = _build_contact_scene(device)
     eager = _CompliantStepper(model, TRACK_ROWS, {})
     captured = _CompliantStepper(model, TRACK_ROWS, {})
@@ -549,8 +547,6 @@ def test_compliant_friction_matches_steel_bitwise(test, device):
     compliant contact's two friction rows hold Steel's coefficient bit for bit, from Steel's dense rows for the
     articulated box's contacts and from its free-body rows for the free boxes'.
     """
-    from newton.tests.steel.test_scene_features import TRACK_ROWS  # noqa: PLC0415
-
     model = _build_contact_scene(device)
     for scale in (0.25, 0.0):
         with test.subTest(friction_scale=scale):
@@ -701,9 +697,6 @@ def test_compliance_matches_the_serial_oracle(test, device):
     (the default color loop, and the while loop, whose tail one thread walks) match the serial oracle
     (``scene_sweep="serial"``) bit for bit over 30 steps in each phase order.
     """
-    from newton._src.solvers.steel.scene_solve import RANGE_TWO_SIDED  # noqa: PLC0415
-    from newton.tests.steel.test_scene_features import _assert_phases_match_serial_oracle  # noqa: PLC0415
-
     model = _humanoids(device, per_world=4, spacing=0.4)
 
     def two_sided_compliant(solver):

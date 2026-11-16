@@ -12,6 +12,8 @@ import warp as wp
 import newton
 import newton.examples
 from newton._src.solvers.steel._testing import kernel_overrides
+from newton._src.solvers.steel.scene_rows import FAMILY_VELOCITY_LIMIT
+from newton._src.solvers.steel.scene_solve import scene_internal_bearing
 from newton._src.solvers.steel.scene_units import SceneUnits
 from newton.solvers import SolverSteel
 from newton.tests.steel._fixtures import CONTACT_MAX, DT, _build_plane_model
@@ -368,14 +370,16 @@ REBOUND_APEX_ATOL = 1.0e-6
 """Absolute floor [m/s] of the rebound tests' velocity comparison, applied at every step.
 
 :func:`assert_rebound_tracks_steel` adds it to the relative tolerance at each step, which matters
-where the velocity crosses zero (an apex) and the relative tolerance vanishes. The articulated sphere's
-second rebound target holds ``J v_hat`` summed in another order than Steel's dense row dot: the rebound
-differs from Steel's by 2 ulp (6e-8 m/s, measured), an offset its flight carries through the apex,
-where Steel's velocity is 7e-8 m/s. Without velocity iterations the free sphere steps as Steel's bit
-for bit (measured; ``test_scene_mode``'s rebound test gives it no floor). With them
-(``test_velocity_iterations_rebound_tracks_steel``) the free sphere takes this floor too: its velocity
-pass sums the row's ``J v`` from the incident velocity and ``delta``, where Steel's free-body rows dot
-their Jacobian with the velocity, 1 ulp apart (6e-8 m/s at an apex where Steel's velocity is 4e-8 m/s).
+where the velocity crosses zero (an apex) and the relative tolerance vanishes. A rebound target is Steel's
+bit for bit, ``-target - rebound`` with the rebound velocity ``-e * u_start`` of the same step-start closing
+speed (``kernels.contact_rebound_velocity``, which the scene's and Steel's row builders share); what the
+floor covers is the response the target is solved through. The articulated sphere's rows take their
+response from the sparse factor, Steel's from its dense rows, and the impulse that meets the target moves
+the sphere by a velocity rounded apart (the retired incident-speed law measured 2 ulp, 6e-8 m/s, at an apex
+where Steel's velocity is 7e-8 m/s; to be re-measured once the scene mode steps). With velocity iterations
+(``test_velocity_iterations_rebound_tracks_steel``) the free sphere takes this floor too: its velocity pass
+sums the row's ``J v`` from the incident velocity and ``delta``, where Steel's free-body rows dot their
+Jacobian with the velocity, 1 ulp apart (6e-8 m/s at an apex where Steel's velocity is 4e-8 m/s).
 """
 
 
@@ -486,44 +490,32 @@ commit.
 """
 
 
-# scene_units: the scene's units built on a solver without the scene mode, and the heap they are tested on
+# scene_units: the scene's units built on a solver without the scene mode
+
+
+class _WithoutSceneMode:
+    """``solver`` as the scene's planning functions read a solver without the scene mode (``_scene_mode`` false)."""
+
+    _scene_mode = False
+
+    def __init__(self, solver):
+        self._solver = solver
+
+    def __getattr__(self, name):
+        return getattr(self._solver, name)
 
 
 def _family_bearing(solver) -> np.ndarray:
     """The row families each articulation of ``solver`` can bear: bit ``1 << family``, ``int32``, one per articulation.
 
-    The scene mode's per-articulation flags (``_scene_family_bearing``) for the families a solver without it has,
-    each tested over the articulation's response DOFs as the scene mode tests it: drives with ``drive_mode="rows"`` on
-    a PRISMATIC, REVOLUTE or D6 DOF, joint limits with ``enable_joint_limits`` on such a DOF with a finite bound, joint
-    friction with ``enable_joint_friction`` on a DOF whose joint supports friction. Mimic rows, loop closures and
-    velocity limits are the scene solve's rows, so no articulation bears them here.
+    The scene mode's per-articulation flags (``_scene_family_bearing``, :func:`scene_internal_bearing`) read on a
+    solver without it: drives with ``drive_mode="rows"`` on a PRISMATIC, REVOLUTE or D6 DOF, joint limits with
+    ``enable_joint_limits`` on such a DOF with a finite bound, joint friction with ``enable_joint_friction`` on a DOF
+    whose joint supports friction. Mimic rows, loop closures and velocity limits are the scene solve's rows, so no
+    articulation bears them here: the velocity-limit bit is cleared.
     """
-    from newton._src.solvers.steel.scene_rows import (  # noqa: PLC0415
-        FAMILY_DRIVE,
-        FAMILY_JOINT_FRICTION,
-        FAMILY_LIMIT,
-    )
-
-    model = solver.model
-    bearing = np.zeros(model.articulation_count, dtype=np.int32)
-    if not model.articulation_count or not model.joint_dof_count:
-        return bearing
-    plan = solver._model_plan
-    start = np.asarray(plan.articulation_dof_start, dtype=np.int64)
-    end = start + np.asarray(plan.response_dof_count, dtype=np.int64)
-    q_index = np.asarray(solver._joint_limit_q_index_host)
-    per_family = {}
-    if solver._has_drive_rows:
-        per_family[FAMILY_DRIVE] = q_index >= 0
-    if solver._enable_joint_limits:
-        finite = np.isfinite(model.joint_limit_lower.numpy()) | np.isfinite(model.joint_limit_upper.numpy())
-        per_family[FAMILY_LIMIT] = (q_index >= 0) & finite
-    if solver._enable_joint_friction:
-        per_family[FAMILY_JOINT_FRICTION] = np.asarray(solver._friction_dof_supported_host, dtype=bool)
-    for family, dofs in per_family.items():
-        counts = np.concatenate(([0], np.cumsum(dofs, dtype=np.int64)))
-        bearing |= (counts[end] > counts[start]).astype(np.int32) << family
-    return bearing
+    bearing = scene_internal_bearing(_WithoutSceneMode(solver), solver.model)
+    return bearing & ((1 << FAMILY_VELOCITY_LIMIT) - 1)
 
 
 class _UnitsView:
@@ -561,28 +553,6 @@ def _units_for(solver, contacts, unit_max: int | None = None) -> SceneUnits:
     units.color()
     return units
 
-
-def _heap_worlds(device, worlds=2, nx=6, ny=6, nz=3, pitch=0.042, half=0.02) -> newton.Model:
-    """The box heap of :func:`~newton.tests.steel._fixtures._heap`, with its ground, in ``worlds`` worlds."""
-    heap = newton.ModelBuilder(up_axis=newton.Axis.Z)
-    heap.rigid_gap = 0.002
-    heap.add_ground_plane()
-    for ix in range(nx):
-        for iy in range(ny):
-            for iz in range(nz):
-                body = heap.add_body(
-                    xform=wp.transform(
-                        wp.vec3((ix - nx / 2) * pitch, (iy - ny / 2) * pitch, 0.021 + iz * (2 * half + 0.001)),
-                        wp.quat_identity(),
-                    )
-                )
-                heap.add_shape_box(body, hx=half, hy=half, hz=half)
-    builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
-    builder.replicate(heap, copy_count=worlds)
-    model = builder.finalize(device=device)
-    # Sizes the solver's contact scratch, so it is set before the solver is built.
-    model.rigid_contact_max = CONTACT_MAX
-    return model
 
 # scene_rows: the internal-unit family hashes
 
@@ -634,13 +604,28 @@ change to every family's text. A change to a family's builder must change its ta
 STEEL_TEXT_SHA256["factor_kernel"] = "6378a91d66938b3fb79213e8ac5f1b09fbbef2aa9dfb502863b2e2e41e8f93c7"
 
 
-# scene_warmstart: the heap of test_scene_state
+# scene_warmstart and scene_solve: the heap of the scene tests
 
 
-def _scene_heap(device, nx=6, ny=6, nz=3, pitch=0.042, half=0.02, *, register_attributes=False, spare=False):
-    """``_fixtures._heap`` (a dense heap of touching boxes on the ground), with Steel's custom attributes registered
-    before any body is added (``register_attributes``, :meth:`~newton.solvers.SolverSteel.register_custom_attributes`)
-    and, with ``spare``, one more box, the last body, resting on the ground 0.5 m beside the heap, clear of it."""
+def _scene_heap(
+    device,
+    nx=6,
+    ny=6,
+    nz=3,
+    pitch=0.042,
+    half=0.02,
+    *,
+    worlds=1,
+    register_attributes=False,
+    spare=False,
+) -> newton.Model:
+    """``_fixtures._heap`` (a dense heap of touching boxes on the ground) for the scene tests, in ``worlds`` worlds.
+
+    With ``register_attributes`` the builder registers Steel's custom attributes
+    (:meth:`~newton.solvers.SolverSteel.register_custom_attributes`) before any body is added. With ``spare`` one more
+    box, the last body, rests on the ground 0.5 m beside the heap, clear of it. With ``worlds > 1`` the heap with its
+    ground is replicated into that many worlds.
+    """
     builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
     if register_attributes:
         SolverSteel.register_custom_attributes(builder)
@@ -659,6 +644,10 @@ def _scene_heap(device, nx=6, ny=6, nz=3, pitch=0.042, half=0.02, *, register_at
     if spare:
         body = builder.add_body(xform=wp.transform(wp.vec3(0.5, 0.0, half + 0.001), wp.quat_identity()))
         builder.add_shape_box(body, hx=half, hy=half, hz=half)
+    if worlds > 1:
+        heap = builder
+        builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
+        builder.replicate(heap, copy_count=worlds)
     model = builder.finalize(device=device)
     # Sizes the solver's contact scratch, so it is set before the solver is built.
     model.rigid_contact_max = CONTACT_MAX

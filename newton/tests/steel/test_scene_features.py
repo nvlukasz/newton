@@ -11,10 +11,12 @@ fire) bit for bit, while every term holding ``J v`` agrees within a tolerance.
 The features are build constants of the scene's kernels (``SceneFeatures``, fixed at construction):
 every feature off compiles the sources the scene tripwire pins, character for character.
 
-Restitution: an impacting contact's rebound target ``rhs = -target + e * (J v_hat - target)``,
-written by ``prepare_scene_rows`` from the incident velocity ``J v_hat`` the response kernel
-stores (``_sparse_row_incident``), where Steel dots its dense or free-body Jacobians with
-``v_hat``.
+Restitution: an impacting contact's rebound target ``rhs = -target - rebound``, Steel's law: the rebound velocity
+``-e * u_start`` comes from the contact's step-start closing speed (``kernels.contact_rebound_velocity``, written by
+``prepare_world_contact_rows`` into ``_row_rebound_velocity``, the same function Steel's dense and free-body row
+builders call), and ``prepare_scene_rows`` decides whether it fires (``kernels.contact_restitution_fires``) from the
+incident velocity ``J v_hat`` the response kernel stores (``_sparse_row_incident``), where Steel dots its dense or
+free-body Jacobians with ``v_hat``.
 
 One-row contacts: a contact beyond ``contact_friction_gap_max`` gets its normal row only (Steel's
 gap gates, ``contact_slots_needed``), its unit holds that one row, and the response kernel writes it
@@ -94,7 +96,10 @@ needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), 
 """The mark of the tests that step the scene mode: they run once the solver has the scene mode and its read-back."""
 
 RESTITUTION_RHS_ATOL = 1.0e-6
-"""Absolute tolerance of a contact row's ``rhs``, which holds ``J v_hat`` when its rebound fires."""
+"""Absolute tolerance of a contact row's ``rhs`` against Steel's free-body row that does not fire: its Baumgarte or
+speculative bias ``phi / dt``, which Steel's ``compute_mf_effective_mass_and_rhs`` divides and the scene, as Steel's
+dense ``compute_world_contact_bias``, multiplies by ``1 / dt``, 1 ulp apart. A row whose rebound fires is Steel's bit
+for bit (``-target - rebound`` from the same rebound velocity), as is a dense row that does not."""
 
 TRACK_ROWS = 64
 """``articulation_constraint_max`` of the contact scene's runs: a world's base and arm need about 21 rows."""
@@ -356,7 +361,7 @@ def _set_drop_velocities(model, state, speed=1.0):
 
 
 def _normal_rows(test, solver, count):
-    """Each contact's normal row: its family (0 dense or scene, 1 Steel's free-body rows), ``rhs``, coefficient and
+    """Each contact's normal row: its family (0 dense or scene, 1 Steel's free-body rows), ``rhs``, rebound velocity and
     target.
 
     Contacts without rows get family ``-1``. Steel keeps free-body targets only for prescribed motion
@@ -372,22 +377,22 @@ def _normal_rows(test, solver, count):
         0: (
             solver._row_type.numpy(),
             solver._rhs.numpy(),
-            solver._row_restitution.numpy(),
+            solver._row_rebound_velocity.numpy(),
             solver._target_velocity.numpy(),
         ),
-        1: (solver._mf_row_type.numpy(), solver._mf_rhs.numpy(), solver._mf_row_restitution.numpy(), mf_target),
+        1: (solver._mf_row_type.numpy(), solver._mf_rhs.numpy(), solver._mf_row_rebound_velocity.numpy(), mf_target),
     }
     family = np.where(slot >= 0, path, -1)
     rhs = np.zeros(count, dtype=np.float32)
-    restitution = np.zeros(count, dtype=np.float32)
+    rebound = np.zeros(count, dtype=np.float32)
     target = np.zeros(count, dtype=np.float32)
     for c in np.flatnonzero(family >= 0):
-        row_type, family_rhs, family_restitution, family_target = families[int(family[c])]
+        row_type, family_rhs, family_rebound, family_target = families[int(family[c])]
         test.assertEqual(row_type[world[c], slot[c]], PGS_CONSTRAINT_TYPE_CONTACT)
         rhs[c] = family_rhs[world[c], slot[c]]
-        restitution[c] = family_restitution[world[c], slot[c]]
+        rebound[c] = family_rebound[world[c], slot[c]]
         target[c] = family_target[world[c], slot[c]]
-    return family, rhs, restitution, target
+    return family, rhs, rebound, target
 
 
 @needs_read_back
@@ -399,13 +404,14 @@ def test_restitution_rows_fire_where_steel_fires(test, device):
     ``enable_restitution=False`` from the same state and contacts: the contacts whose normal row's
     ``rhs`` differs between the two carry a rebound target. That set is Steel's, on its dense rows and
     on its free-body rows alike, and contains contacts of both, while the resting contacts are in
-    neither. The coefficients and the targets match Steel's bit for bit (the targets are zero: the
-    ground is static and nothing is prescribed), and ``rhs`` agrees within 1e-6, as a firing row's
-    holds ``J v_hat``, a sum in another order than Steel's. On the dense rows that do not fire it is
-    the bias alone, Steel's bit for bit. On Steel's free-body rows that do not fire it is the bias
-    alone too, but not bitwise: Steel's ``compute_mf_effective_mass_and_rhs`` divides
-    ``beta * phi`` by ``dt`` where the scene, as Steel's dense ``compute_world_contact_bias``,
-    multiplies it by ``1 / dt``, which may round 1 ulp apart.
+    neither. The rebound velocities (``-e * u_start`` from the step-start closing speed, positive on the
+    firing contacts) and the targets match Steel's bit for bit (the targets are zero: the ground is
+    static and nothing is prescribed), and so does the ``rhs`` of every firing row, Steel's
+    ``-target - rebound``. On the dense rows that do not fire it is the bias alone, Steel's bit for bit.
+    On Steel's free-body rows that do not fire it is the bias alone too, but not bitwise: Steel's
+    ``compute_mf_effective_mass_and_rhs`` divides ``beta * phi`` by ``dt`` where the scene, as Steel's
+    dense ``compute_world_contact_bias``, multiplies it by ``1 / dt``, which may round 1 ulp apart
+    (``RESTITUTION_RHS_ATOL``).
     """
     model = _build_contact_scene(device, restitution=0.4)
 
@@ -429,15 +435,14 @@ def test_restitution_rows_fire_where_steel_fires(test, device):
             test.assertFalse(np.any(solver.constraint_overflow.numpy()), f"{name} overflowed")
             rows[name, enabled] = _normal_rows(test, solver, count)
 
-    scene_family, scene_rhs, scene_restitution, scene_target = rows["scene", True]
-    steel_family, steel_rhs, steel_restitution, steel_target = rows["steel", True]
+    scene_family, scene_rhs, scene_rebound, scene_target = rows["scene", True]
+    steel_family, steel_rhs, steel_rebound, steel_target = rows["steel", True]
     with_rows = steel_family >= 0
     np.testing.assert_array_equal(scene_family >= 0, with_rows)
     np.testing.assert_array_equal(scene_family[with_rows], 0)
     # Steel routes the free boxes' contacts to its free-body rows and the base's to its dense rows.
     test.assertEqual(set(steel_family[with_rows].tolist()), {0, 1})
-    np.testing.assert_array_equal(scene_restitution[with_rows], steel_restitution[with_rows])
-    np.testing.assert_array_equal(steel_restitution[with_rows], np.float32(0.4))
+    np.testing.assert_array_equal(scene_rebound[with_rows], steel_rebound[with_rows])
     np.testing.assert_array_equal(scene_target[with_rows], steel_target[with_rows])
     np.testing.assert_array_equal(steel_target[with_rows], np.float32(0.0))
 
@@ -448,6 +453,12 @@ def test_restitution_rows_fire_where_steel_fires(test, device):
         test.assertTrue(np.any(fires["steel"] & in_family), f"no contact fires on Steel's family {family}")
         test.assertTrue(np.any(~fires["steel"] & in_family), f"every contact fires on Steel's family {family}")
     np.testing.assert_allclose(scene_rhs[with_rows], steel_rhs[with_rows], rtol=0.0, atol=RESTITUTION_RHS_ATOL)
+    # The firing rows take Steel's rebound target from the same rebound velocity: bit for bit, on both families.
+    test.assertTrue(np.all(steel_rebound[fires["steel"]] > 0.0))
+    np.testing.assert_array_equal(scene_rhs[fires["steel"]], steel_rhs[fires["steel"]])
+    np.testing.assert_array_equal(
+        steel_rhs[fires["steel"]], -steel_target[fires["steel"]] - steel_rebound[fires["steel"]]
+    )
     # The dense rows that do not fire keep the bias alone, from phi: Steel's bit for bit.
     resting = with_rows & ~fires["steel"] & (steel_family == 0)
     np.testing.assert_array_equal(scene_rhs[resting], steel_rhs[resting])

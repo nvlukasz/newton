@@ -28,6 +28,7 @@ from functools import cache
 
 import warp as wp
 
+from ...geometry.utils import _scan_scratch_size, scan_with_total
 from ...sim import Contacts
 from . import contact_torsion_device
 from .contact_torsion import _NORMAL_COSINE, _SUPPORTED_TYPES, _TORSION_SPIN_RETIRED, _TOUCH_TOLERANCE
@@ -507,6 +508,13 @@ def _scene_torsion_emit(
         member = work.next_member[member]
 
 
+@wp.kernel(enable_backward=False)
+def _add_counts(counts: wp.array[int], prefix_sums: wp.array[int]):
+    """Turn an exclusive scan into the inclusive one: add each entry's own count (grid: entries)."""
+    i = wp.tid()
+    prefix_sums[i] = prefix_sums[i] + counts[i]
+
+
 @dataclass(eq=False)
 class SceneTorsionGroups:
     """The contact torsion groups of a folded scene (:func:`group_scene_torsion`), ``int32`` arrays unless noted.
@@ -537,11 +545,26 @@ class SceneTorsionGroups:
     elsewhere."""
     _work: _SceneTorsionWork = field(repr=False)
     _no_owner: wp.array = field(repr=False)
+    _scan_length: wp.array = field(repr=False)
+    """``[1]``: the capacity, the entries every scan of the grouping covers."""
+    _scan_total: wp.array = field(repr=False)
+    _scan_scratch: wp.array = field(repr=False)
+    """``int64``: the scratch of the grouping's scans (``scan_with_total``), which they share one at a time."""
 
     @property
     def capacity(self) -> int:
         """The contacts the arrays hold."""
         return self.members.shape[0]
+
+    def _inclusive_scan(self, counts: wp.array, prefix_sums: wp.array) -> None:
+        """Write the inclusive scan of ``counts`` (``[capacity]``) into ``prefix_sums``: one launch of the exclusive
+        :func:`~newton._src.geometry.utils.scan_with_total` on the preallocated scratch, then one adding each count.
+
+        No allocation, so the grouping can be captured; the scans run one at a time and leave the scratch zeroed. Exact
+        on integers, so it equals ``wp.utils.array_scan(counts, prefix_sums, inclusive=True)``.
+        """
+        scan_with_total(counts, prefix_sums, self._scan_length, self._scan_total, self._scan_scratch)
+        wp.launch(_add_counts, dim=counts.shape[0], inputs=[counts], outputs=[prefix_sums], device=counts.device)
 
     @classmethod
     def allocate(cls, capacity: int, device=None) -> "SceneTorsionGroups":
@@ -564,6 +587,9 @@ class SceneTorsionGroups:
             radius=wp.zeros(capacity, dtype=float, device=device),
             _work=work,
             _no_owner=wp.full(1, -1, dtype=int, device=device),
+            _scan_length=wp.full(1, capacity, dtype=int, device=device),
+            _scan_total=wp.zeros(1, dtype=int, device=device),
+            _scan_scratch=wp.zeros(_scan_scratch_size(capacity, device), dtype=wp.int64, device=device),
         )
 
 
@@ -794,8 +820,8 @@ def group_scene_torsion(
         outputs=[out.lead, out.coefficient, out.radius],
         device=device,
     )
-    wp.utils.array_scan(work.size, work.member_end, inclusive=True)
-    wp.utils.array_scan(work.row, work.rank_end, inclusive=True)
+    out._inclusive_scan(work.size, work.member_end)
+    out._inclusive_scan(work.row, work.rank_end)
     wp.launch(
         _scene_torsion_emit,
         dim=capacity + 1,
@@ -1118,11 +1144,11 @@ def get_scene_torsion_rows_kernel(dof_max: int, mask_words: int = 1, *, lanes: i
 
     One lane group per kept spin row (sorted position ``k``, row ``base + k``), striding over them. Lane 0 writes the
     row's metadata as ``_apply_rows`` does: type ``TORSION``, ``row_parent`` the lead's normal row, ``row_mu`` the
-    group's coefficient, ``phi`` and restitution 0, the target ``-sign * dot(n, omega)`` of each prescribed side's body
-    (``body_a`` sign +1, ``body_b`` sign -1, Steel's ``_host_dot3``), its radius (``torsion_radius``), its members'
-    range (``torsion_member_range``) and its lead's shapes (``torsion_shape_pair``). The group's lead is its first
-    touching member (``SceneTorsionGroups.lead``), whose normal ``n`` (B to A) gives the row ``J = (0, n)``: the contact
-    response's projection (:func:`~newton._src.solvers.steel.scene_rows.scene_contact_response_snippet`, the
+    group's coefficient, ``phi`` and the rebound velocity 0, the target ``-sign * dot(n, omega)`` of each prescribed
+    side's body (``body_a`` sign +1, ``body_b`` sign -1, Steel's ``_host_dot3``), its radius (``torsion_radius``), its
+    members' range (``torsion_member_range``) and its lead's shapes (``torsion_shape_pair``). The group's lead is its
+    first touching member (``SceneTorsionGroups.lead``), whose normal ``n`` (B to A) gives the row ``J = (0, n)``: the
+    contact response's projection (:func:`~newton._src.solvers.steel.scene_rows.scene_contact_response_snippet`, the
     group-table kernel's arithmetic) of a zero linear direction and the angular part ``n`` on side A and ``-n`` on side
     B, so a row of ``J (H^-1 J^T)`` in the factor's coordinates of each articulated side and the six physical entries of
     a free one, with its incident velocity ``J v_hat`` and diagonal ``J H^-1 J^T``. Steel's ``_jacobians`` sums
@@ -1214,7 +1240,7 @@ def get_scene_torsion_rows_kernel(dof_max: int, mask_words: int = 1, *, lanes: i
         row_mu: wp.array2d[float],
         phi: wp.array2d[float],
         target_velocity: wp.array2d[float],
-        row_restitution: wp.array2d[float],
+        row_rebound_velocity: wp.array2d[float],
         torsion_radius: wp.array2d[float],
         torsion_member_range: wp.array2d[int],
         torsion_shape_pair: wp.array2d[int],
@@ -1248,7 +1274,7 @@ def get_scene_torsion_rows_kernel(dof_max: int, mask_words: int = 1, *, lanes: i
                 row_parent[0, row] = contact_slot[c]
                 row_mu[0, row] = coefficient[rep]
                 phi[0, row] = 0.0
-                row_restitution[0, row] = 0.0
+                row_rebound_velocity[0, row] = 0.0
                 torsion_radius[0, row] = radius[rep]
                 torsion_member_range[row, 0] = member_start[g]
                 torsion_member_range[row, 1] = member_start[g + 1]

@@ -55,6 +55,18 @@ from newton.solvers import SolverSteel
 from newton.tests.steel._fixtures import CONTACT_MAX, DT, _build_contact_scene, _heap, _set_box_velocities
 from newton.tests.steel._scene_fixtures import _global_box_model, _humanoids, _rms, _Run, _scene_heap
 from newton.tests.steel.test_capacity import _box_on_ground
+from newton.tests.steel.test_scene_drives import DRIVE_TRACK_RTOL
+from newton.tests.steel.test_scene_features import (
+    CROWD_ROWS,
+    TRACK_ATOL,
+    TRACK_RMS,
+    TRACK_ROWS,
+    TRACK_RTOL,
+    TRACK_STEPS,
+    _assert_phases_match_serial_oracle,
+)
+from newton.tests.steel.test_scene_velocity_iterations import VELOCITY_ITERATIONS, _FixedRun
+from newton.tests.steel.test_scene_velocity_limits import _free_body_dofs, _throw_free_bodies
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
 # The tolerances, scenes and runs shared with the other scene test modules (test_scene_features, test_scene_drives,
@@ -130,7 +142,6 @@ class _WarmRun(_Matching, _Run):
 
 def _warm_fixed_run(model, rows, overrides, **options):
     """A ``_FixedRun`` with the warm start (:class:`_Matching`): one captured step replays every later step."""
-    from newton.tests.steel.test_scene_velocity_iterations import _FixedRun  # noqa: PLC0415
 
     class _WarmFixedRun(_Matching, _FixedRun):
         pass
@@ -450,7 +461,6 @@ def _track_patches(test, model, *, init, rtol, atol):
     hardware or another compiler. The fixtures here stay far from such ties (30 of 30 steps equal);
     should one flip, the fallback is to compare the patch state after the first step alone, not a scene fault.
     """
-    from newton.tests.steel.test_scene_features import TRACK_ROWS, TRACK_STEPS  # noqa: PLC0415
     from newton.tests.steel.test_scene_friction_modes import MODE_TRACK_Q_RMS  # noqa: PLC0415
 
     scene = _Run(model, TRACK_ROWS, {}, **PATCHES)
@@ -499,8 +509,6 @@ def test_patch_friction_tracks_steel(test, device):
     (``test_scene_drives.DRIVE_TRACK_RTOL`` and 1e-6: 2.4e-5 relative needed), and the joint coordinates after thirty
     steps within ``test_scene_friction_modes.MODE_TRACK_Q_RMS`` (1.1e-6 and 3.9e-7 measured).
     """
-    from newton.tests.steel.test_scene_drives import DRIVE_TRACK_RTOL  # noqa: PLC0415
-    from newton.tests.steel.test_scene_features import TRACK_ATOL, TRACK_RTOL  # noqa: PLC0415
     from newton.tests.steel.test_scene_friction_modes import (  # noqa: PLC0415
         FREE_MODE_ATOL,
         LAYER_PITCH,
@@ -536,8 +544,6 @@ def test_patch_radius_uses_divided_row_mu(test, device):
     radius, ``row_mu`` times the sum of its region's normal impulses (the ring of normal-row parents), and some
     anchor's passes ``row_mu`` times its own normal impulse alone: the radius is the region's.
     """
-    from newton.tests.steel.test_scene_features import TRACK_ROWS  # noqa: PLC0415
-
     boxes = {
         "free box": (lambda: _box_on_ground(device), 1),
         "articulated box": (lambda: _build_contact_scene(device, worlds=1), 0),
@@ -599,8 +605,6 @@ def test_patch_rows_follow_the_anchors(test, device):
     contact, and the scene's rows are their sum; the contacts reach the generic response kernel's one-row variant
     (``one_row_contacts``) without a ``contact_friction_gap_max``, and the units are sized for one row each.
     """
-    from newton.tests.steel.test_scene_features import CROWD_ROWS  # noqa: PLC0415
-
     model = _heap(device, nx=3, ny=2, nz=2)
     scene = _Run(model, CROWD_ROWS, {}, **PATCHES)
     steel = _Run(model, CROWD_ROWS, {}, solve_mode="serial", **PATCHES)
@@ -636,7 +640,6 @@ def test_patch_anchors_take_precedence_over_shared_anchors(test, device):
     the normal rows are the point-friction ones bit for bit (the anchors move the tangent rows alone). Under point
     friction the friction flag moves the tangent rows to the witness midpoint.
     """
-    from newton.tests.steel.test_scene_features import TRACK_ROWS  # noqa: PLC0415
     from newton.tests.steel.test_scene_friction_modes import LAYER_PITCH  # noqa: PLC0415
 
     model = _heap(device, nx=3, ny=3, nz=1, pitch=LAYER_PITCH)
@@ -705,9 +708,6 @@ def test_patches_match_the_serial_oracle(test, device):
     bit for bit over 30 steps in each phase order, with a region of two-sided rows whose ring holds two normal rows or
     more.
     """
-    from newton.tests.steel.test_scene_features import _assert_phases_match_serial_oracle  # noqa: PLC0415
-    from newton.tests.steel.test_scene_velocity_limits import _throw_free_bodies  # noqa: PLC0415
-
     heap = _scene_heap(device, nx=3, ny=2, nz=2, register_attributes=True)
     _throw_free_bodies(heap, heap)
     crowds = {"heap": heap, "humanoids": _humanoids(device, per_world=4, spacing=0.4, props=True)}
@@ -728,9 +728,6 @@ def test_patches_replay_under_capture(test, device):
     weights, points and displacements, the regions' rings and the carried history) equal the eager steps' bit for bit,
     and the anchors and the number of regions change between replays.
     """
-    from newton.tests.steel.test_scene_features import CROWD_ROWS  # noqa: PLC0415
-    from newton.tests.steel.test_scene_velocity_iterations import _FixedRun  # noqa: PLC0415
-
     model = _humanoids(device, per_world=4, spacing=0.4, props=True)
     eager, captured = runs = [_FixedRun(model, CROWD_ROWS, {}, **PATCHES) for _ in range(2)]
     for run in runs:
@@ -786,8 +783,6 @@ def test_seed_sides_matches_host_reference(test, device):
     scenes, seeded two-sided rows in the heap. A cold step on a new contact buffer (contacts with no relation to the
     solved ones) seeds nothing: every impulse and every ``delta`` entry stays zero.
     """
-    from newton.tests.steel.test_scene_features import CROWD_ROWS  # noqa: PLC0415
-
     scenes = {
         "humanoids": lambda: _humanoids(device, per_world=4, spacing=0.4),
         "heap": lambda: _heap(device, nx=3, ny=2, nz=2),
@@ -845,8 +840,6 @@ def test_sweep_and_seed_share_the_response_rule(test, device):
     coordinates, joint limit rows, two-sided articulated units) and the heap of free boxes (two-sided free units, free
     prefix 12), warm-started.
     """
-    from newton.tests.steel.test_scene_features import CROWD_ROWS  # noqa: PLC0415
-
     scenes = {
         "humanoids": lambda: _humanoids(device, per_world=4, spacing=0.4),
         "heap": lambda: _heap(device, nx=3, ny=2, nz=2),
@@ -1044,8 +1037,6 @@ def _compare_seeds(test, model, scene, steel, step, diverged, totals, *, patches
     diagonals picked apart by states one rounding apart, joins ``diverged`` and is no longer compared:
     its impulses then follow other anchors; ``gather_mu`` is checked (:func:`_check_gather_mu`).
     """
-    from newton.tests.steel.test_scene_drives import DRIVE_TRACK_RTOL  # noqa: PLC0415
-
     count = int(scene.contacts.rigid_contact_count.numpy()[0])
     test.assertEqual(count, int(steel.contacts.rigid_contact_count.numpy()[0]), f"step {step}")
     ours, theirs = _contact_seeds(scene.solver, count), _contact_seeds(steel.solver, count)
@@ -1100,17 +1091,7 @@ def test_warmstart_tracks_steel(test, device):
     rows' on some free-body anchor (:func:`_check_gather_mu`), and the coordinates after thirty steps agree within
     ``test_scene_features.TRACK_RMS`` (1.0e-5 measured, past ``MODE_TRACK_Q_RMS``, the other cases' bound).
     """
-    from newton.tests.steel.test_scene_drives import DRIVE_TRACK_RTOL  # noqa: PLC0415
-    from newton.tests.steel.test_scene_features import (  # noqa: PLC0415
-        TRACK_ATOL,
-        TRACK_RMS,
-        TRACK_ROWS,
-        TRACK_RTOL,
-        TRACK_STEPS,
-    )
     from newton.tests.steel.test_scene_friction_modes import FREE_MODE_ATOL, MODE_TRACK_Q_RMS  # noqa: PLC0415
-    from newton.tests.steel.test_scene_velocity_iterations import VELOCITY_ITERATIONS  # noqa: PLC0415
-    from newton.tests.steel.test_scene_velocity_limits import _free_body_dofs  # noqa: PLC0415
 
     cases = {
         "point friction": {},
@@ -1176,8 +1157,6 @@ def test_warmstart_matches_the_serial_oracle(test, device):
     steps in each phase order, so each step also seeds both from the same impulses. Some step seeds a two-sided unit's
     row (from the sixth step on, when the resting contacts stay matched).
     """
-    from newton.tests.steel.test_scene_features import _assert_phases_match_serial_oracle  # noqa: PLC0415
-
     model = _heap(device, nx=3, ny=2, nz=2)
     _assert_phases_match_serial_oracle(
         test, model, {}, witness=_two_sided_seeded, what="no two-sided row was seeded", runner=_SeedRun
@@ -1199,8 +1178,6 @@ def test_warmstart_replays_under_capture(test, device):
     straight into the solved buffer then the step carries the impulses (some seed); a pass into the other buffer before
     it starts the step cold (no seed), the generations of the device history deciding.
     """
-    from newton.tests.steel.test_scene_features import CROWD_ROWS, TRACK_ROWS  # noqa: PLC0415
-
     model = _humanoids(device, per_world=4, spacing=0.4, props=True)
     eager, captured = runs = [_warm_fixed_run(model, CROWD_ROWS, {}) for _ in range(2)]
     _record_scene_seeds(eager.solver)
@@ -1268,9 +1245,6 @@ def test_warmstart_carries_into_the_velocity_pass(test, device):
     is their application (:func:`_seed_reference`) bit for bit: nothing resets them between the passes. The velocity
     pass then moves the impulses on from there.
     """
-    from newton.tests.steel.test_scene_features import CROWD_ROWS  # noqa: PLC0415
-    from newton.tests.steel.test_scene_velocity_iterations import VELOCITY_ITERATIONS  # noqa: PLC0415
-
     model = _humanoids(device, per_world=4, spacing=0.5)
     run = _WarmRun(model, CROWD_ROWS, {}, velocity_iterations=VELOCITY_ITERATIONS)
     for _ in range(SETTLE_STEPS):
@@ -1307,8 +1281,6 @@ def test_warmstart_rejections_and_cold_start(test, device):
       kept rows only.
     - Contacts without matching raise Steel's ``ValueError`` at the step, under the scene too.
     """
-    from newton.tests.steel.test_scene_features import CROWD_ROWS  # noqa: PLC0415
-
     model = _humanoids(device, per_world=4, spacing=0.4, props=True)
     warm = _WarmRun(model, CROWD_ROWS, {})
     cold = _WarmRun(model, CROWD_ROWS, {}, contact_warmstart=False)
@@ -1373,10 +1345,7 @@ def test_warmstart_resets_by_world_mask(test, device):
     ``test_scene_drives.DRIVE_TRACK_RTOL`` and ``TRACK_ATOL`` on the articulations). The reset is captured with a live
     mask and replayed with world 0 then world 2 selected.
     """
-    from newton.tests.steel.test_scene_drives import DRIVE_TRACK_RTOL  # noqa: PLC0415
-    from newton.tests.steel.test_scene_features import TRACK_ATOL, TRACK_ROWS, TRACK_RTOL  # noqa: PLC0415
     from newton.tests.steel.test_scene_friction_modes import FREE_MODE_ATOL  # noqa: PLC0415
-    from newton.tests.steel.test_scene_velocity_limits import _free_body_dofs  # noqa: PLC0415
 
     model = _build_contact_scene(device, worlds=3)
     runs = {"scene": _WarmRun(model, TRACK_ROWS, {}), "steel": _WarmRun(model, TRACK_ROWS, {}, solve_mode="serial")}
@@ -1488,9 +1457,6 @@ ANT_JOINT_FRICTION = 0.05
 def _sleep_run(model, *, scene=True, fixed=False, rows=None, **options):
     """A run with :data:`SLEEP`: the scene's (``scene``) or Steel's, stepping its states (``fixed``: one pair of
     buffers, so that one captured step replays every later step)."""
-    from newton.tests.steel.test_scene_features import TRACK_ROWS  # noqa: PLC0415
-    from newton.tests.steel.test_scene_velocity_iterations import _FixedRun  # noqa: PLC0415
-
     run = _FixedRun if fixed else _Run
     rows = TRACK_ROWS if rows is None else rows
     return run(model, rows, {}, **SLEEP, solve_mode="scene" if scene else "serial", **options)

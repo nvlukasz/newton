@@ -20,8 +20,10 @@ import warp as wp
 import newton
 from newton._src.solvers.steel import contact_torsion, scene_torsion_device
 from newton._src.solvers.steel.kernels import PGS_CONSTRAINT_TYPE_TORSION
+from newton._src.solvers.steel.scene_pgs import RANGE_LATE
 from newton._src.solvers.steel.solver_steel import _SOLVE_MODES
 from newton.solvers import SolverSteel
+from newton.tests.steel import test_scene_features
 from newton.tests.steel._fixtures import DT, set_torsion_radius
 from newton.tests.steel._scene_fixtures import _rms, _Run
 from newton.tests.steel.test_scene_torsion_groups import PAD_WORLDS, _stacked_pads
@@ -29,13 +31,6 @@ from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices
 
 _needs_scene_mode = unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
 _needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
-
-
-def _scene_features():
-    """``test_scene_features``' step counts and serial-oracle check, imported where a test runs."""
-    from newton.tests.steel import test_scene_features  # noqa: PLC0415
-
-    return test_scene_features
 
 
 PAD_HALF = (0.02, 0.015, 0.025)
@@ -256,7 +251,7 @@ def test_torsion_tracks_steel(test, device):
     agree with Steel's within the factor's rounding (:data:`TRACK_QD_RTOL`), and the joint coordinates after
     ``TRACK_STEPS`` steps within :data:`TRACK_Q_RMS` RMS; Steel's and the scene's spin rows stop the spin.
     """
-    track_steps = _scene_features().TRACK_STEPS
+    track_steps = test_scene_features.TRACK_STEPS
     model, state = _pad_model(device)
     scene = _PadRun(model, state, solve_mode="scene")
     steel = _PadRun(model, state, solve_mode="serial")
@@ -301,8 +296,6 @@ def test_torsion_rescales_member_tangents(test, device):
     to ``mu * sum lambda_n``, applies the pairs' and the spin row's impulse changes through their rows' responses, and
     clamps the spin impulse to its bound, now about zero.
     """
-    from newton._src.solvers.steel.scene_pgs import RANGE_LATE  # noqa: PLC0415
-
     model, state = _pad_model(device, spin=100.0, sliding=10.0)
     run = _PadRun(model, state, solve_mode="scene")
     run.step()
@@ -373,7 +366,7 @@ def test_torsion_late_rows_match_oracle(test, device):
     def both(solver):
         return _two_sided_spin_rows(solver) > 0 and _one_sided_spin_rows(solver) > 0
 
-    _scene_features()._assert_phases_match_serial_oracle(
+    test_scene_features._assert_phases_match_serial_oracle(
         test, model, {}, witness=both, what="no one-sided and two-sided spin rows", runner=_StackRun
     )
 
@@ -448,7 +441,7 @@ def test_spin_rows_match_steel_rows(test, device):
     arrays = {
         name: {
             key: getattr(solver, f"_{key}").numpy()
-            for key in ("row_type", "row_parent", "row_mu", "phi", "target_velocity", "row_restitution", "diag")
+            for key in ("row_type", "row_parent", "row_mu", "phi", "target_velocity", "row_rebound_velocity", "diag")
         }
         for name, solver in solvers.items()
     }
@@ -460,7 +453,7 @@ def test_spin_rows_match_steel_rows(test, device):
         scene_group = groups["scene"][members]
         world, steel_row, scene_row = steel_group["world"], steel_group["row"], scene_group["row"]
         values = {"scene": (0, scene_row), "steel": (world, steel_row)}
-        for key in ("row_type", "row_mu", "phi", "target_velocity", "row_restitution"):
+        for key in ("row_type", "row_mu", "phi", "target_velocity", "row_rebound_velocity"):
             test.assertEqual(arrays["scene"][key][values["scene"]], arrays["steel"][key][values["steel"]], key)
         test.assertEqual(arrays["scene"]["row_type"][0, scene_row], PGS_CONSTRAINT_TYPE_TORSION)
         test.assertEqual(radius["scene"][0, scene_row], radius["steel"][world, steel_row])
@@ -578,7 +571,7 @@ def test_one_sided_and_free_body_spin_rows_track_steel(test, device):
     :data:`TRACK_QD_RTOL`, the spin has slowed, the joint velocities agree within :data:`TRACK_QD_RTOL`, and the joint
     coordinates after ``TRACK_STEPS`` steps within :data:`TRACK_Q_RMS` RMS.
     """
-    track_steps = _scene_features().TRACK_STEPS
+    track_steps = test_scene_features.TRACK_STEPS
     for name, (model, state), spin_dof in (
         ("ground", _box_on_ground(device), 5),
         ("free body", _pad_on_body(device), 5),
@@ -836,7 +829,7 @@ def test_spin_rows_count_in_the_row_watermarks(test, device):
     row is requested and not kept (Steel raises there): the requested mark is the rows with it, the kept mark one
     less, an excess of one row in one overflowing world-step and no dropped contact row.
     """
-    watermark_steps = _scene_features().WATERMARK_STEPS
+    watermark_steps = test_scene_features.WATERMARK_STEPS
     model = _stacked_boxes(device)
     scene = _StackRun(model, STACK_ROWS, {}, row_watermark=True)
     steel = _StackRun(model, STACK_ROWS, {}, solve_mode="serial", row_watermark=True)

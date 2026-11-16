@@ -31,7 +31,7 @@ import numpy as np
 import warp as wp
 
 import newton
-from newton._src.solvers.steel import scene_rows, sparse_contact
+from newton._src.solvers.steel import scene_rows, scene_solve, sparse_contact
 from newton._src.solvers.steel.kernels import PGS_CONSTRAINT_TYPE_JOINT_FRICTION
 from newton._src.solvers.steel.solver_steel import _SOLVE_MODES
 from newton.solvers import SolverSteel
@@ -46,6 +46,14 @@ from newton.tests.steel._scene_fixtures import (
     VELOCITY_LIMIT_ROWS_SNIPPET_SHA256,
     _humanoids,
     _Run,
+)
+from newton.tests.steel.test_scene_features import (
+    CROWD_ROWS,
+    HUMANOID_ROWS,
+    TRACK_STEPS,
+    _assert_phases_match_serial_oracle,
+    _track_steel,
+    _within_track_tolerance,
 )
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
@@ -116,13 +124,6 @@ def test_joint_friction_tracks_steel(test, device):
     without joint friction falls outside that tolerance of Steel's frictional solve, so the test sees the
     friction rows.
     """
-    from newton.tests.steel.test_scene_features import (  # noqa: PLC0415
-        HUMANOID_ROWS,
-        TRACK_STEPS,
-        _track_steel,
-        _within_track_tolerance,
-    )
-
     model = _humanoids(device, worlds=2)
     _set_friction(model, _hinge_dofs(model), FRICTION)
     scene, steel = _track_steel(test, model, init=_at_rest, rows=HUMANOID_ROWS, enable_joint_friction=True)
@@ -163,8 +164,6 @@ def test_joint_friction_bounds_match_steel_bitwise(test, device):
     rows holds the bound too, as Steel's. The joint-friction rows count in Steel's articulation family per
     model world: the row high-water marks equal Steel's. The internal unit's rows are its families' sum.
     """
-    from newton.tests.steel.test_scene_features import HUMANOID_ROWS  # noqa: PLC0415
-
     model = _humanoids(device, worlds=2)
     hinges = _hinge_dofs(model)
     values = (0.25 + 0.01 * np.arange(hinges.size)).astype(np.float32)
@@ -223,8 +222,6 @@ class _Stepper:
     """A scene solver stepping fixed state buffers, so that one captured step replays every later step."""
 
     def __init__(self, model, **options):
-        from newton.tests.steel.test_scene_features import HUMANOID_ROWS  # noqa: PLC0415
-
         self.solver = SolverSteel(model, articulation_constraint_max=HUMANOID_ROWS, **{**SCENE, **options})
         self.pipeline = newton.CollisionPipeline(model, deterministic=True)
         self.contacts = self.pipeline.contacts()
@@ -304,8 +301,6 @@ def test_joint_friction_matches_the_serial_oracle(test, device):
     friction position iterations, ``contact_regularization=0.5`` and joint friction), whose featured
     arguments all carry data.
     """
-    from newton.tests.steel.test_scene_features import CROWD_ROWS, _assert_phases_match_serial_oracle  # noqa: PLC0415
-
     model = _humanoids(device, per_world=4, spacing=0.4)
     _set_friction(model, _hinge_dofs(model), FRICTION)
 
@@ -345,8 +340,6 @@ def test_internal_units_count_toward_the_unit_capacity(test, device):
     families and their late rows read. A unit build takes the internal rows under either name, not both, and late
     rows only when an articulation can bear them.
     """
-    from newton.tests.steel.test_scene_features import HUMANOID_ROWS  # noqa: PLC0415
-
     model = _humanoids(device, worlds=2)
     rows = 2 * HUMANOID_ROWS
     drive, limit, friction = scene_rows.FAMILY_DRIVE, scene_rows.FAMILY_LIMIT, scene_rows.FAMILY_JOINT_FRICTION
@@ -535,6 +528,7 @@ class TestSteelSceneInternalUnit(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "drive family's build"):
             scene_rows.get_sparse_joint_dof_rows_kernel(scene_rows.FAMILY_LIMIT, fused=True)
+        self.assertEqual(scene_solve.SCENE_ROW_FAMILIES, tuple(range(scene_rows.FAMILY_COUNT)))
         self.assertIs(
             scene_rows.get_sparse_joint_dof_rows_kernel(scene_rows.FAMILY_MIMIC, 2),
             scene_rows.get_sparse_mimic_rows_kernel(2),

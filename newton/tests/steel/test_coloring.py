@@ -14,7 +14,7 @@ from newton._src.solvers.steel.scene_units import COLOR_ROUND_MAX, SCAN_TILE, Sc
 from newton._src.solvers.steel.solver_steel import _SOLVE_MODES
 from newton.solvers import SolverSteel
 from newton.tests.steel._fixtures import CONTACT_MAX
-from newton.tests.steel._scene_fixtures import _heap_worlds, _units_for, _units_view
+from newton.tests.steel._scene_fixtures import _scene_heap, _units_for, _units_view
 from newton.tests.steel.test_scene_units import (
     _collide,
     _initial_state,
@@ -329,7 +329,7 @@ def test_tail_when_cap_exceeded(test, device):
 
 def test_colors_across_worlds(test, device):
     """Color the units of a heap replicated into two worlds as one scene-wide list."""
-    model = _heap_worlds(device, worlds=2)
+    model = _scene_heap(device, worlds=2)
     test.assertEqual(model.world_count, 2)
     solver = _solver(model)
     units = _units_for(solver, _step(model, solver))
