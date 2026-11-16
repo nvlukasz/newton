@@ -629,3 +629,34 @@ change to every family's text. A change to a family's builder must change its ta
 
 # sparse_mass_matrix: the sparse mass-factor kernel at one nv_humanoid.xml humanoid's factor plan
 STEEL_TEXT_SHA256["factor_kernel"] = "6378a91d66938b3fb79213e8ac5f1b09fbbef2aa9dfb502863b2e2e41e8f93c7"
+
+
+# scene_warmstart: the heap of test_scene_state
+
+
+def _scene_heap(device, nx=6, ny=6, nz=3, pitch=0.042, half=0.02, *, register_attributes=False, spare=False):
+    """``_fixtures._heap`` (a dense heap of touching boxes on the ground), with Steel's custom attributes registered
+    before any body is added (``register_attributes``, :meth:`~newton.solvers.SolverSteel.register_custom_attributes`)
+    and, with ``spare``, one more box, the last body, resting on the ground 0.5 m beside the heap, clear of it."""
+    builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
+    if register_attributes:
+        SolverSteel.register_custom_attributes(builder)
+    builder.rigid_gap = 0.002
+    builder.add_ground_plane()
+    for ix in range(nx):
+        for iy in range(ny):
+            for iz in range(nz):
+                body = builder.add_body(
+                    xform=wp.transform(
+                        wp.vec3((ix - nx / 2) * pitch, (iy - ny / 2) * pitch, 0.021 + iz * (2 * half + 0.001)),
+                        wp.quat_identity(),
+                    )
+                )
+                builder.add_shape_box(body, hx=half, hy=half, hz=half)
+    if spare:
+        body = builder.add_body(xform=wp.transform(wp.vec3(0.5, 0.0, half + 0.001), wp.quat_identity()))
+        builder.add_shape_box(body, hx=half, hy=half, hz=half)
+    model = builder.finalize(device=device)
+    # Sizes the solver's contact scratch, so it is set before the solver is built.
+    model.rigid_contact_max = CONTACT_MAX
+    return model
