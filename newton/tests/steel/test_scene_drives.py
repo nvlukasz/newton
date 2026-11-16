@@ -37,7 +37,6 @@ from newton._src.solvers.steel.kernels import (
     PGS_CONSTRAINT_TYPE_JOINT_TARGET,
     compute_physx_pgs_drive_desc,
 )
-from newton._src.solvers.steel.solver_steel import _SOLVE_MODES
 from newton.solvers import SolverSteel
 from newton.tests.steel._fixtures import DT
 from newton.tests.steel._scene_fixtures import SCENE, _humanoids, _Run
@@ -59,7 +58,7 @@ from newton.tests.steel.test_scene_internal_unit import (
 )
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
-needs_scene_mode = unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+needs_scene_step = unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 
 DRIVE_KE = 20.0
@@ -143,7 +142,7 @@ def _steel_drive_rows(solver, array) -> np.ndarray:
     )
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_drive_rows_track_steel(test, device):
     """Drive the hinges of two standing humanoids to 0.2 rad with drive rows, as Steel's matrix-free solve does.
 
@@ -192,7 +191,7 @@ def test_drive_rows_track_steel(test, device):
     )
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_drive_descriptors_track_steel(test, device):
     """Give each drive row Steel's parameters bit for bit and Steel's force-drive descriptors to its rounding.
 
@@ -328,7 +327,7 @@ def test_drive_descriptors_track_steel(test, device):
 
 
 @needs_read_back
-@needs_scene_mode
+@needs_scene_step
 def test_drive_rows_change_under_capture(test, device):
     """Replay one captured step exactly as eager steps while drive rows appear and disappear and targets move.
 
@@ -389,7 +388,7 @@ def test_drive_rows_change_under_capture(test, device):
     test.assertFalse(np.any(eager.solver.constraint_overflow.numpy()))
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_drive_rows_match_the_serial_oracle(test, device):
     """Update the drive rows in the phased sweep exactly as one thread walking the rows does.
 
@@ -433,7 +432,7 @@ def test_drive_rows_match_the_serial_oracle(test, device):
             )
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_drive_rows_with_wide_masks_are_bitwise_one_word(test, device):
     """Build drive rows and step bit for bit with support masks widened to two words (``scene_mask_words=2``).
 
@@ -457,7 +456,7 @@ def test_drive_rows_with_wide_masks_are_bitwise_one_word(test, device):
             test.assertTrue(np.array_equal(a, b), f"{name} differs after step {step + 1}")
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_drive_rows_build_beside_velocity_limits(test, device):
     """Build joint velocity limits beside drive rows, fused or not, and store the velocity drive mode as Steel does.
 

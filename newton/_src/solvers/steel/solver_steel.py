@@ -206,6 +206,23 @@ from .kernels import (
     update_qdd_from_velocity,
     zero_unattached_parent_wrenches,
 )
+from .scene_pgs import SCENE_PHASE_ORDERS
+from .scene_rows import WARP_SHARED_BYTES_PER_THREAD
+from .scene_solve import (
+    SCENE_FREE_SUPPORT,
+    SceneSolve,
+    factor_body_masks,
+    factor_bytes_per_warp,
+    plan_scene_groups,
+    scene_factor_warps,
+    scene_row_capacity,
+    scene_support,
+    scene_topology_keys,
+    setup_scene_free_only,
+    setup_scene_plan,
+    static_shared_limit,
+)
+from .scene_units import SceneUnits
 from .sleeping import _publish_body_awake, _SleepState
 from .sparse_contact import (
     _get_sparse_contact_response_kernel,
@@ -268,7 +285,7 @@ _LOCAL_RESIDUAL_MF_MAX_ROWS = 12
 _MAX_CONTACT_REGULARIZATION = 1.0e6
 # One-warp worlds packed per block of the propagation row sweep, which uses no shared memory.
 _PROPAGATION_WORLDS_PER_BLOCK = 2
-_SOLVE_MODES = ("serial", "colored")
+_SOLVE_MODES = ("serial", "colored", "scene")
 _ARTICULATED_CONTACT_RESPONSES = ("immediate", "propagation")
 # solve_mode spellings from the 1.8 prereleases, accepted with a deprecation warning until their removal.
 _DEPRECATED_SOLVE_MODE_SPELLINGS = {
@@ -328,7 +345,16 @@ def _normalize_solve_mode(solve_mode, articulated_contact_response) -> tuple[str
     if message is not None:
         warnings.warn(f"SolverSteel: {message}.", NewtonDeprecationWarning, stacklevel=3)
         solve_mode = "serial"
-    if articulated_contact_response == "propagation_colored":
+    if articulated_contact_response == "propagation_colored" and solve_mode == "scene":
+        # The scene mode solves every propagation spelling with the immediate response; it keeps the requested mode.
+        warnings.warn(
+            "SolverSteel: articulated_contact_response='propagation_colored' is deprecated; with solve_mode='scene' "
+            "use articulated_contact_response='propagation'.",
+            NewtonDeprecationWarning,
+            stacklevel=3,
+        )
+        articulated_contact_response = "propagation"
+    elif articulated_contact_response == "propagation_colored":
         warnings.warn(
             "SolverSteel: articulated_contact_response='propagation_colored' is deprecated; use "
             "solve_mode='colored' with articulated_contact_response='propagation'.",
@@ -342,7 +368,7 @@ def _normalize_solve_mode(solve_mode, articulated_contact_response) -> tuple[str
 def _validate_solve_mode(solve_mode, articulated_contact_response) -> None:
     """Raise :class:`ValueError` unless the solve mode and contact response form a supported pair."""
     if solve_mode not in _SOLVE_MODES:
-        raise ValueError(f"solve_mode must be 'serial' or 'colored', got {solve_mode!r}")
+        raise ValueError(f"solve_mode must be 'serial', 'colored' or 'scene', got {solve_mode!r}")
     if articulated_contact_response not in _ARTICULATED_CONTACT_RESPONSES:
         raise ValueError(
             f"articulated_contact_response must be 'immediate' or 'propagation', got {articulated_contact_response!r}"
@@ -756,10 +782,12 @@ class _SteelModelPlan:
     world_count: int
 
     @classmethod
-    def build(cls, model: Model, kinematic_dof_mask: np.ndarray) -> "_SteelModelPlan":
+    def build(cls, model: Model, kinematic_dof_mask: np.ndarray, *, fold_worlds: bool = False) -> "_SteelModelPlan":
         """Build the immutable response layout from physical model topology.
 
-        Global articulations (world ``-1``) are solved in world 0. An articulation's tree
+        Global articulations (world ``-1``) are solved in world 0. With ``fold_worlds`` (the scene
+        mode) every articulation is solved in world 0 and the plan has one solve world; the model's
+        worlds stay on the model. An articulation's tree
         is the contiguous prefix of its joint range owned through
         :attr:`~newton.Model.joint_articulation`. A joint without an owner whose child body
         belongs to an articulation is a loop-closing joint of that articulation: it stays
@@ -778,6 +806,8 @@ class _SteelModelPlan:
             model_articulation_world = model.articulation_world.numpy().astype(np.int32, copy=True)
             articulation_world = model_articulation_world.copy()
             articulation_world[articulation_world < 0] = 0
+            if fold_worlds:
+                articulation_world[:] = 0
 
         articulation_joint_end = np.zeros(articulation_count, dtype=np.int32)
         loop_joint_articulation = np.full(model.joint_count, -1, dtype=np.int32)
@@ -853,7 +883,7 @@ class _SteelModelPlan:
         free_articulations = np.nonzero(is_free_rigid != 0)[0]
         free_bodies = np.asarray(free_rigid_body_indices, dtype=np.int32)
         response_free_rigid_body_indices = free_bodies[prescribed[free_articulations] == 0]
-        world_count = max(int(model.world_count), 1)
+        world_count = 1 if fold_worlds else max(int(model.world_count), 1)
 
         arrays = (
             articulation_dof_count,
@@ -1375,6 +1405,12 @@ class SolverSteel(SolverBase, CouplingInterface):
     - ``"colored"``: the contact rows of each world are colored so that no two rows of a
       color share a responding body, and each color is solved in parallel. It requires
       ``articulated_contact_response="propagation"``.
+    - ``"scene"``: every model world is folded into one solve world, whose rows are one scene-wide list in
+      the sparse factor coordinates of each articulation's joint topology. The rows form units (an
+      articulation's own rows, a contact); the units that join two articulations are colored so that units
+      sharing an articulation differ, and each iteration sweeps every articulation's own rows and the joining
+      units color by color (see ``scene_phase_order``). The row budgets stay per world: the scene sums them
+      into its row capacity and keeps or drops each unit whole.
 
     ``articulated_contact_response`` selects how contacts of articulated bodies are
     solved. The default ``"immediate"`` response uses the generalized rows above.
@@ -1653,7 +1689,20 @@ class SolverSteel(SolverBase, CouplingInterface):
     enable_joint_velocity_limits = _ConstructionOption()
     velocity_limit_activation_fraction = _ConstructionOption()
     enable_joint_friction = _ConstructionOption()
-    articulation_constraint_max = _ConstructionOption()
+
+    @property
+    def articulation_constraint_max(self) -> int:
+        """The ``articulation_constraint_max`` constructor option, rows per world. Set at construction.
+
+        Construct a new solver to change it. ``solve_mode="scene"`` sums it over the model's worlds into the
+        scene's row capacity; this attribute still reads the requested per-world value.
+        """
+        return self._requested_dense_max_constraints
+
+    @articulation_constraint_max.setter
+    def articulation_constraint_max(self, value) -> None:
+        raise AttributeError("articulation_constraint_max is set at construction; construct a new solver to change it")
+
     free_body_constraint_max = _ConstructionOption()
     propagation_constraint_max = _ConstructionOption()
     warn_constraint_overflow = _StepOption(lambda name, value: bool(value))
@@ -1697,6 +1746,20 @@ class SolverSteel(SolverBase, CouplingInterface):
     propagation_color_order = _ConstructionOption()
     deterministic = _ConstructionOption()
     nesterov_momentum = _ConstructionOption()
+    scene_unit_max = _ConstructionOption()
+
+    @property
+    def scene_phase_order(self) -> str:
+        """The ``scene_phase_order`` constructor option, as requested. Set at construction.
+
+        Construct a new solver to change it. Under ``row_schedule="phased"`` the scene runs the order ``"AB"``
+        whatever this option says, and the option still reads back the requested order.
+        """
+        return self._requested_scene_phase_order
+
+    @scene_phase_order.setter
+    def scene_phase_order(self, value) -> None:
+        raise AttributeError("scene_phase_order is set at construction; construct a new solver to change it")
 
     @classmethod
     def register_custom_attributes(cls, builder: ModelBuilder) -> None:
@@ -1744,6 +1807,11 @@ class SolverSteel(SolverBase, CouplingInterface):
 
         The solver reads them from the model at every step, for example
         ``model.steel.rigid_body_angular_damping``. Models built without these attributes use the defaults.
+        Under ``solve_mode="scene"`` the scene's rows are planned once, at construction: which free bodies bear
+        velocity-limit rows (a finite positive maximum linear or angular velocity) and whether any free body has a
+        finite positive maximum depenetration velocity are read then, and the values themselves at every step. A
+        free body's limit or cap that becomes finite and positive after construction takes effect in a solver
+        built after it, where the other modes apply it at the next step.
 
         Args:
             builder: Model builder to register the attributes with.
@@ -1840,7 +1908,7 @@ class SolverSteel(SolverBase, CouplingInterface):
         self,
         model: Model,
         *,
-        solve_mode: Literal["serial", "colored"] = "serial",
+        solve_mode: Literal["serial", "colored", "scene"] = "serial",
         iterations: int = 12,
         baumgarte: float = 0.2,
         cfm: float = 1.0e-6,
@@ -1895,6 +1963,8 @@ class SolverSteel(SolverBase, CouplingInterface):
         propagation_color_order: Literal["contact", "longest_first"] = "contact",
         deterministic: wp.DeterministicMode | None = None,
         nesterov_momentum: bool = False,
+        scene_phase_order: Literal["BA", "AB", "ABA"] = "BA",
+        scene_unit_max: int | None = None,
     ):
         """Create a Steel solver for a finalized model.
 
@@ -1916,6 +1986,23 @@ class SolverSteel(SolverBase, CouplingInterface):
                 other response raises :class:`ValueError`. On CPU both modes run world-serial
                 portable kernels (``"colored"`` sweeps in serial order), and the CUDA-only features
                 listed in the class description raise :class:`NotImplementedError`.
+
+                ``"scene"`` solves the whole model as one solve world (see the class description): every
+                articulated joint topology is factored sparsely in its own factor group, without the
+                per-world shared-memory gate of the sparse factors, and the model's worlds still label
+                :attr:`constraint_overflow` and :meth:`reset`. The constructor's checks of the options and the
+                model, up to those of the sleeping state, run first, so a combination they reject raises their
+                error under this mode too (the sleeping state's own checks, ``enable_sleeping``, run after the
+                mode's); the mode then raises :class:`ValueError` for what it does not implement yet:
+                ``nesterov_momentum``, ``reuse_kinematics``, coupling, meshes with surface velocity and
+                loop-closing REVOLUTE and FIXED joints. With ``articulated_contact_response="propagation"`` it
+                solves with the immediate response, which its factor coordinates give exactly, and builds none
+                of the propagation response's rows, tree factors or caches; the response reads back as
+                requested and the ``propagation_*`` options are accepted and change nothing. The row schedules
+                read back as requested and run the scene's own sweep (``"phased"`` in the phase order
+                ``"AB"``), and ``enable_bilateral_preelimination`` reads back as requested while the scene
+                sweeps the plain mimic and connect rows. The diagonal mass, sparse-diagonal, local and paired
+                solves of the other modes are not selected.
 
                 .. deprecated:: 1.8
                     ``"matrix_free"`` maps to ``"serial"``, and ``"split"``, whose dense Delassus
@@ -2004,7 +2091,10 @@ class SolverSteel(SolverBase, CouplingInterface):
             articulation_constraint_max: Capacity of rows involving articulated bodies (mimic and
                 connect rows, contacts, enabled joint limits, joint velocity limits, joint friction
                 and, with ``drive_mode="rows"``, joint drives) per world. Rows beyond it are
-                dropped and reported, see :attr:`constraint_overflow`.
+                dropped and reported, see :attr:`constraint_overflow`. ``solve_mode="scene"`` sums it,
+                plus ``free_body_constraint_max`` when the model has free bodies, over the model's worlds
+                (global entities add no world) into the scene's row capacity, and keeps or drops each unit
+                whole: an articulation's internal unit loses all of its rows past the capacity.
             free_body_constraint_max: Capacity of free-body rows per world: free-body contact rows
                 and free-body velocity-limit rows. Under the ``"propagation"`` response free-body
                 contacts use the propagation rows, so
@@ -2435,6 +2525,24 @@ class SolverSteel(SolverBase, CouplingInterface):
                 ``articulated_contact_response="immediate"`` and ``row_schedule="interleaved"``; other
                 combinations raise :class:`ValueError`. CUDA only: on CPU it raises
                 :class:`NotImplementedError`. Construction-only.
+            scene_phase_order: The order of the two phases of each iteration of ``solve_mode="scene"``
+                on the articulations that share a unit with another one (the coupled sides): ``"A"`` is one
+                sweep of their one-sided rows (drives, joint limits and friction, ground, static and
+                self-contacts), ``"B"`` one sweep of the units joining two articulations, color by color.
+                ``"BA"`` (default) runs B then A, ``"AB"`` A then B, and ``"ABA"`` A, B and A again. The
+                articulations without such a unit run all their iterations first in every order. ``"BA"``
+                ends each iteration with a body's ground contacts and limits corrected after the pushes it
+                received, which keeps bodies that lean on each other from creeping.
+                ``row_schedule="phased"`` runs ``"AB"`` whatever this option says, and the option still
+                reads back as requested. Another value raises :class:`ValueError` under the mode; the other
+                modes ignore the option.
+            scene_unit_max: Unit capacity of ``solve_mode="scene"``: the most units (an articulation's
+                internal rows, its velocity-limit rows, a contact) one step holds. ``None`` (default) sizes it
+                from the scene's row capacity: one contact unit per three rows (per row when a contact may
+                have a normal row alone, under friction patches or a finite ``contact_friction_gap_max``),
+                plus one internal and one velocity-limit unit per articulation that can have such rows. Units
+                past the capacity are counted, not stored. At least 1, else :class:`ValueError` under the
+                mode; the other modes ignore the option.
         """
         solve_mode, articulated_contact_response = _normalize_solve_mode(solve_mode, articulated_contact_response)
         _validate_solve_mode(solve_mode, articulated_contact_response)
@@ -2728,6 +2836,25 @@ class SolverSteel(SolverBase, CouplingInterface):
                     f"contact torsion with articulated_contact_response={articulated_contact_response!r} requires "
                     "velocity_iterations=0"
                 )
+        # The scene mode solves the whole model as one solve world (_check_scene_mode, SceneSolve).
+        self._scene_mode = solve_mode == "scene"
+        # Under the scene mode the propagation response names the immediate response, which the scene's factor
+        # coordinates give exactly: the checks above ran on the requested response, which reads back, and nothing of
+        # the propagation response is built. Read articulated_contact_response for validation and its messages, and
+        # this for anything that allocates, builds or dispatches.
+        self._scene_contact_response = "immediate" if self._scene_mode else articulated_contact_response
+        if self._scene_mode:
+            # The propagation options configure rows the scene never builds: accepted and ignored.
+            self._propagation_max_constraints = self._requested_dense_max_constraints
+            self._propagation_torsion_rows = False
+        # scene_phase_order reads back as requested, and the scene runs _scene_phase_order: the phased schedule
+        # (internal rows, contacts, velocity limits) is the scene's own sweep with its coupled sides in the order "AB".
+        self._requested_scene_phase_order = scene_phase_order
+        self._scene_phase_order = "AB" if self._scene_mode and self._row_schedule == "phased" else scene_phase_order
+        # Checked with the mode's other rejections (_check_scene_mode), after the solver's own checks.
+        self._scene_unit_max = scene_unit_max
+        self._scene_units = None
+        self._scene = None
 
         # Stand-ins for models without the physx attributes.
         self._default_angular_damping = wp.full(
@@ -2782,7 +2909,7 @@ class SolverSteel(SolverBase, CouplingInterface):
         self._update_kinematic_state()
         # Fully kinematic free bodies are removed from the response mapping; their
         # prescribed motion enters the contact targets of the rows that touch them.
-        self._model_plan = _SteelModelPlan.build(model, self._kinematic_dof_mask_host)
+        self._model_plan = _SteelModelPlan.build(model, self._kinematic_dof_mask_host, fold_worlds=self._scene_mode)
         self._prescribed_articulation = wp.array(
             self._model_plan.prescribed_articulation, dtype=wp.int32, device=model.device
         )
@@ -2801,7 +2928,9 @@ class SolverSteel(SolverBase, CouplingInterface):
         self._init_joint_friction(model)
         if self._enable_joint_friction:
             self._validate_joint_friction()
-        self._warn_unsolvable_global_contacts(model)
+        if not self._scene_mode:
+            # The scene mode folds global articulations into its one solve world with the others.
+            self._warn_unsolvable_global_contacts(model)
         self._warn_persistent_row_capacity(model)
         self._build_mimic_plan(model)
         self._build_connect_plan(model)
@@ -2811,6 +2940,10 @@ class SolverSteel(SolverBase, CouplingInterface):
                 f"Loop-closing joints are not supported with articulated_contact_response="
                 f"{self._articulated_contact_response!r}"
             )
+        if self._scene_mode:
+            # The constructor's checks up to here ran first, so their messages win where both reject: the option
+            # checks above and the mimic and connect plans' model checks. The sleeping state's checks come later.
+            self._check_scene_mode(reuse_kinematics=bool(reuse_kinematics))
         self._build_preelimination_plan(model)
         self._setup_passive_joint_forces(model)
         self._compute_world_response_dof_mapping(model)
@@ -2832,10 +2965,23 @@ class SolverSteel(SolverBase, CouplingInterface):
             else ()
         )
         self._setup_propagation(model)
-        self._articulation_constraint_max = self._requested_dense_max_constraints
+        if self._scene_mode:
+            # The row budgets are per world; the scene's one solve world holds every world's rows.
+            self._articulation_constraint_max = scene_row_capacity(self, model)
+            max_rows = (2**31 - 1) >> _dense_meta_type_bits(self._enable_joint_friction)
+            if self._articulation_constraint_max > max_rows:
+                raise ValueError(
+                    f"solve_mode='scene' needs {self._articulation_constraint_max} rows for the scene "
+                    "(articulation_constraint_max and free_body_constraint_max per world, summed over the "
+                    f"model's worlds), more than the {max_rows} rows a scene can address"
+                )
+        else:
+            self._articulation_constraint_max = self._requested_dense_max_constraints
         self._setup_diagonal_mass(model)
         self._setup_sparse_diagonal(model)
         self._setup_sparse_mass_matrix(model)
+        # The scene's row plan; nothing without the scene mode (setup_scene_plan).
+        setup_scene_plan(self, model)
         self._setup_crba_topology_schedules(model)
         self._execution_plan = _SteelExecutionPlan.build(
             self._size_groups,
@@ -2870,20 +3016,48 @@ class SolverSteel(SolverBase, CouplingInterface):
         self._allocate_buffers(model)
         self._allocate_paired_response_buffers(model)
         self._allocate_world_buffers(model)
+        if self._scene_mode:
+            # The scene's units, sized from its row capacity unless scene_unit_max sizes them, and its rows' solve.
+            self._scene_units = SceneUnits(
+                self,
+                self._scene_unit_max,
+                row_max=self._scene_plan.row_max,
+                # A contact unit's fewest rows: three, or one under a finite contact_friction_gap_max or friction
+                # patches (a region's members past its anchors), so that only rows bound the units.
+                contact_rows=3 if self._friction_every_contact and not self._friction_anchors_enabled else 1,
+            )
+            self._scene = SceneSolve(self)
+            if len(self._scene.group_arrays) == 1:
+                # The single-plan factor attributes of the sparse factors view the one factor group's arrays when
+                # its members are the solver's size group in order, so that its rows are the size group's indices.
+                arrays = self._scene.group_arrays[0]
+                if arrays.group.arts == tuple(self._group_to_art[arrays.group.size].numpy().tolist()):
+                    self._sparse_mass_matrix_indices = arrays.indices
+                    self._sparse_Linv = arrays.Linv
+                    self._sparse_mass_matrix_status = arrays.status
+                    self._sparse_mass_matrix_scratch = arrays.scratch
+                    self._crba_sparse_factor_kernel = arrays.factor_kernel
         self._allocate_mf_buffers(model)
         self._allocate_sparse_diagonal_buffers(model)
-        # Contact rows keep row_parent for their friction/patch load linkage; torsion keeps
-        # its own group membership.
-        self._contact_torsion_group = wp.full(
-            self._row_parent.shape if self._contact_torsion_enabled else (1, 1),
-            -1,
-            dtype=wp.int32,
-            device=model.device,
-        )
-        # Effective spin radius [m] of each torsion row, the largest radius of its group's shapes.
-        self._torsion_row_radius = wp.zeros(
-            self._row_parent.shape if self._contact_torsion_enabled else (1, 1), dtype=wp.float32, device=model.device
-        )
+        if self._scene is not None and self._scene.features.torsion:
+            # The scene's spin rows keep their members' group ids and their radii in its own [1, row_max] arrays.
+            self._contact_torsion_group = self._scene.torsion_group
+            self._torsion_row_radius = self._scene.torsion_radius
+        else:
+            # Contact rows keep row_parent for their friction/patch load linkage; torsion keeps
+            # its own group membership.
+            self._contact_torsion_group = wp.full(
+                self._row_parent.shape if self._contact_torsion_enabled else (1, 1),
+                -1,
+                dtype=wp.int32,
+                device=model.device,
+            )
+            # Effective spin radius [m] of each torsion row, the largest radius of its group's shapes.
+            self._torsion_row_radius = wp.zeros(
+                self._row_parent.shape if self._contact_torsion_enabled else (1, 1),
+                dtype=wp.float32,
+                device=model.device,
+            )
         propagation_torsion_shape = (
             (self._world_count, self._propagation_max_constraints) if self._propagation_torsion_rows else (1, 1)
         )
@@ -2966,7 +3140,9 @@ class SolverSteel(SolverBase, CouplingInterface):
 
         self._contact_torsion_device = bool(contact_torsion_device)
         self._device_torsion = None
-        if self._contact_torsion_enabled and self._contact_torsion_device:
+        # The scene prepares its spin rows on the device itself (SceneSolve.prepare_torsion), whatever
+        # contact_torsion_device says, so the device preparation of the other modes is not built under it.
+        if self._contact_torsion_enabled and self._contact_torsion_device and not self._scene_mode:
             from .contact_torsion_device import enable_device_torsion  # noqa: PLC0415
 
             enable_device_torsion(self)
@@ -3202,7 +3378,12 @@ class SolverSteel(SolverBase, CouplingInterface):
         self._kinematic_dof_mask.assign(dof_mask)
 
     def _update_effective_armature(self) -> None:
-        """Rebuild the effective joint armature and its size-grouped copies on the device."""
+        """Rebuild the effective joint armature and its size-grouped copies on the device.
+
+        The scene mode's factor groups get their own copies (``SceneSolve.gather_armature``), which its
+        factors read. The per-size copies are still gathered for every size: the scene's step reads only
+        those of the sizes outside ``_scene_factor_only_sizes``, and the rest keep ``_R_by_size`` whole.
+        """
         model = self.model
         if model.joint_dof_count:
             wp.launch(
@@ -3225,6 +3406,8 @@ class SolverSteel(SolverBase, CouplingInterface):
                 outputs=[self._R_by_size[size]],
                 device=model.device,
             )
+        if self._scene is not None:
+            self._scene.gather_armature(self)
 
     @override
     def notify_model_changed(self, flags: ModelFlags | int, *, world_mask: wp.array[wp.bool] | None = None) -> None:
@@ -3256,8 +3439,8 @@ class SolverSteel(SolverBase, CouplingInterface):
         place. A captured
         notification reads the arrays it was captured with; after replacing a model array,
         notify eagerly or recapture. Body notifications read ``body_flags`` on the host.
-        Sleeping, and the positive-restitution check of sparse mass factors (with restitution
-        enabled), also read model data on the host, so issue those
+        Sleeping, and the positive-restitution check of sparse mass factors outside the scene mode
+        (with restitution enabled), also read model data on the host, so issue those
         notifications outside CUDA graph capture.
 
         With ``enable_joint_friction``, an eager joint DOF or DOF force notification also reads
@@ -3332,8 +3515,13 @@ class SolverSteel(SolverBase, CouplingInterface):
             self._friction_patches.update_geometry(self.model)
         if self._device_torsion is not None and flags & ModelFlags.SHAPE_TYPE_AND_SOURCE:
             self._device_torsion.update_shape_types(self.model)
+        scene_torsion = self._scene.torsion_shapes if self._scene is not None else None
+        if scene_torsion is not None and flags & ModelFlags.SHAPE_TYPE_AND_SOURCE:
+            # The scene's spin rows mark the shapes whose type supports torsion as the device preparation does.
+            scene_torsion.update(self.model)
         if (
-            self._sparse_mass_matrix_size is not None
+            not self._scene_mode
+            and self._sparse_mass_matrix_size is not None
             and flags & ModelFlags.SHAPE_PROPERTIES
             and not self._sparse_supports_contact_options(self.model)
         ):
@@ -3847,7 +4035,7 @@ class SolverSteel(SolverBase, CouplingInterface):
         return rows, inv_mass, inv_rot
 
     def _require_coupling_support(self) -> None:
-        """Reject solver options that are not validated inside a coupled simulation."""
+        """Reject solver options that are not validated inside a coupled simulation, and then the scene mode."""
         unsupported = [
             name
             for name, enabled in (
@@ -3862,6 +4050,8 @@ class SolverSteel(SolverBase, CouplingInterface):
         ]
         if unsupported:
             raise NotImplementedError(f"SolverSteel coupling does not support {', '.join(unsupported)}.")
+        if self._scene_mode:
+            raise ValueError("solve_mode='scene' does not support coupling")
 
     def _compute_articulation_metadata(self, model):
         self._compute_articulation_indices(model)
@@ -3985,13 +4175,24 @@ class SolverSteel(SolverBase, CouplingInterface):
                 rows[int(art_to_world[art])] += int(np.sum(per_dof[start : start + size]))
 
     def _warn_persistent_row_capacity(self, model) -> None:
-        """Warn once at construction if every step is certain to exceed ``articulation_constraint_max``."""
+        """Warn once at construction if every step is certain to exceed ``articulation_constraint_max``.
+
+        The scene mode's one solve world holds every model world's rows, so it compares them with the scene's
+        row capacity (:func:`~newton._src.solvers.steel.scene_solve.scene_row_capacity`).
+        """
         limit_rows, friction_rows = self._persistent_dense_rows_per_world(model)
         rows = limit_rows + friction_rows
-        capacity = self._requested_dense_max_constraints
+        if self._scene_mode:
+            capacity = scene_row_capacity(self, model)
+            budget = f"the scene's {capacity} rows (the per-world row budgets, summed over the model's worlds)"
+        else:
+            capacity = self._requested_dense_max_constraints
+            budget = f"articulation_constraint_max={capacity}"
         worlds = np.flatnonzero(rows > capacity)
         if not worlds.size:
             return
+        # The scene's one solve world holds the rows of every model world.
+        needing = "the scene needs" if self._scene_mode else f"worlds {worlds[:16].tolist()} need"
         causes, details, remedies = [], [], ["Raise articulation_constraint_max"]
         if np.any(limit_rows[worlds]):
             causes.append("the finite joint position limits")
@@ -4006,9 +4207,9 @@ class SolverSteel(SolverBase, CouplingInterface):
             remedies.append("set joint_friction to zero on the DOFs that need no friction")
         remedy = remedies[0] if len(remedies) == 1 else ", ".join(remedies[:-1]) + ", or " + remedies[-1]
         warnings.warn(
-            f"SolverSteel: worlds {worlds[:16].tolist()} need at least {int(rows.max())} dense rows in "
+            f"SolverSteel: {needing} at least {int(rows.max())} dense rows in "
             f"every step for {' and '.join(causes)} alone ({'; '.join(details)}), more than "
-            f"articulation_constraint_max={capacity}. Rows beyond the capacity are dropped and flagged in "
+            f"{budget}. Rows beyond the capacity are dropped and flagged in "
             f"constraint_overflow. {remedy}.",
             NewtonWarning,
             stacklevel=3,
@@ -4311,18 +4512,67 @@ class SolverSteel(SolverBase, CouplingInterface):
                     "kinematic, or remove the loop joint from the model and reconstruct the solver."
                 )
 
+    def _check_scene_mode(self, *, reuse_kinematics: bool) -> None:
+        """Reject what ``solve_mode="scene"`` does not implement yet, after the constructor's checks up to here.
+
+        It runs after the option checks and the mimic and connect plans' model checks, and before the sleeping
+        state's checks (``_SleepState``). The scene runs every option and model those checks accept but these, each
+        named in one :class:`ValueError`: ``nesterov_momentum`` (the scene's sweeps carry no momentum),
+        ``reuse_kinematics`` (the scene's step does not take the carried kinematics), a mesh shape with surface
+        velocity (the scene's contact rows have no surface-velocity target) and loop-closing REVOLUTE and FIXED joints
+        (the scene's connect rows are the three anchor rows of a BALL closure, where the other modes add two hinge rows
+        or three rotation rows). Coupling is refused by the coupling hooks (:meth:`_require_coupling_support`). The
+        mode's own options raise :class:`ValueError` too: ``scene_unit_max`` below 1 and a ``scene_phase_order`` other
+        than ``"BA"``, ``"AB"`` and ``"ABA"``.
+
+        The solver's other options pass, each with its effect under the mode documented with it:
+        ``articulated_contact_response="propagation"`` solves with the immediate response
+        (``_scene_contact_response``) and the ``propagation_*`` options change nothing; the row schedules run the
+        scene's own sweep (``_scene_phase_order``); ``enable_bilateral_preelimination`` runs the plain mimic and
+        connect rows of the internal units (:meth:`_build_preelimination_plan` builds nothing).
+        """
+        if self._scene_unit_max is not None:
+            if int(self._scene_unit_max) < 1:
+                raise ValueError(
+                    f"solve_mode='scene' does not support scene_unit_max={self._scene_unit_max!r}; "
+                    "it must be at least 1"
+                )
+            self._scene_unit_max = int(self._scene_unit_max)
+        if self._requested_scene_phase_order not in SCENE_PHASE_ORDERS:
+            raise ValueError(
+                f"solve_mode='scene' does not support scene_phase_order={self._requested_scene_phase_order!r}; "
+                "it must be 'BA', 'AB' or 'ABA'"
+            )
+        unsupported = []
+        if self._nesterov_momentum:
+            unsupported.append("nesterov_momentum=True")
+        if reuse_kinematics:
+            unsupported.append("reuse_kinematics=True")
+        if self._has_surface_velocity:
+            unsupported.append("mesh surface velocity (Mesh.enable_surface_velocity)")
+        if self._connect_count:
+            closure_type = self.model.joint_type.numpy()[self._connect_joint_np]
+            for joint_type in (JointType.REVOLUTE, JointType.FIXED):
+                joints = self._connect_joint_np[closure_type == int(joint_type)]
+                if joints.size:
+                    unsupported.append(f"loop-closing {joint_type.name} joints (joints {joints[:16].tolist()})")
+        if unsupported:
+            raise ValueError(f"solve_mode='scene' does not support {', '.join(unsupported)}")
+
     def _build_preelimination_plan(self, model) -> None:
         """Build the static tables of bilateral pre-elimination.
 
         Per articulation that owns bilateral rows this allocates an index into the packed
         per-articulation buffers and the factor scratch. The row slots and the factor are
         rebuilt on the device every step. Unsupported configurations warn and keep the
-        mimic and connect rows in the iterative sweep.
+        mimic and connect rows in the iterative sweep. The scene mode builds none of it, nor
+        warns: ``enable_bilateral_preelimination=True`` names its plain mimic and connect rows
+        there (the internal units' families).
         """
         self._preelim_count = 0
         self._preelim_active = False
         include_mimics = self._bilateral_preelimination_include_mimics
-        if not self._enable_bilateral_preelimination:
+        if not self._enable_bilateral_preelimination or self._scene_mode:
             return
         if self._connect_count == 0 and (self._mimic_count == 0 or not include_mimics):
             return
@@ -4828,10 +5078,11 @@ class SolverSteel(SolverBase, CouplingInterface):
         single-DOF branches of a fixed base. Every off-diagonal entry of their mass matrix is
         then zero, so the factor, the unconstrained solve and the row responses reduce to
         per-DOF divisions with the same results as the dense loop kernels. These groups keep
-        the dense row and response storage.
+        the dense row and response storage. The scene mode never selects them: it factors such a
+        topology as a factor group like any other, whose sparse plan has one entry per DOF.
         """
         self._diagonal_mass_sizes = frozenset()
-        if not self._kernel_overrides.get("diagonal_mass", True):
+        if self._scene_mode or not self._kernel_overrides.get("diagonal_mass", True):
             return
         # The propagation response builds its responses from dense factors.
         if self._articulated_contact_response != "immediate":
@@ -4926,13 +5177,16 @@ class SolverSteel(SolverBase, CouplingInterface):
         two. Without joint velocity limits, joint friction, drive rows, warm start, regularization, velocity-only
         iterations and torsion, with ``iterations > 0``, the interleaved
         schedule and the current friction projection, the rows and sweep work in factor
-        coordinates ``L^-1 J^T`` instead, for worlds without free-body rows.
+        coordinates ``L^-1 J^T`` instead, for worlds without free-body rows. The scene mode never
+        selects it.
         """
         self._paired_response_primary_size = None
         self._paired_response_secondary_size = None
         self._paired_response_secondary_groups = None
         self._paired_factor_coordinates = False
         self._factor_coordinate_contact_triples = False
+        if self._scene_mode:
+            return
         candidate_sizes = frozenset(
             size
             for size in self._size_groups
@@ -5089,6 +5343,7 @@ class SolverSteel(SolverBase, CouplingInterface):
         DOFs, with the same two sizes in every world. The diagonal articulation then keeps its
         inverse mass per DOF, its contact rows store only the two coordinates they touch, and its
         position limits are projected per DOF inside the solve instead of occupying dense rows.
+        The scene mode never selects it; the attributes keep their defaults.
         """
         self._sparse_diagonal_contact_solve = False
         self._sparse_diagonal_response_size = None
@@ -5098,7 +5353,8 @@ class SolverSteel(SolverBase, CouplingInterface):
         dense_offsets = np.zeros(1, dtype=np.int32)
         dense_groups = np.zeros(1, dtype=np.int32)
         supported = bool(
-            model.joint_dof_count > 0
+            not self._scene_mode
+            and model.joint_dof_count > 0
             and self._enable_joint_limits
             and self._articulated_contact_response == "immediate"
             and self._row_schedule == "interleaved"
@@ -5216,7 +5472,7 @@ class SolverSteel(SolverBase, CouplingInterface):
 
         Pair and residual owners are limited to small batches by the device SM count.
         Larger batches retain the single-articulation owner for contact-free worlds;
-        contact-bearing worlds use the general sweep.
+        contact-bearing worlds use the general sweep. The scene mode selects none.
         """
         self._local_solve_max_rows = min(_LOCAL_SOLVE_MAX_ROWS, self._articulation_constraint_max)
         self._local_residual_max_rows = min(_LOCAL_RESIDUAL_MAX_ROWS, self._articulation_constraint_max)
@@ -5244,6 +5500,7 @@ class SolverSteel(SolverBase, CouplingInterface):
             and not self._contact_compliance
             and not self._nesterov_momentum
             and self._sparse_mass_matrix_size is None
+            and not self._scene_mode
         )
         plan = self._model_plan
         local_primary_articulation = np.full(self._world_count, -1, dtype=np.int32)
@@ -5410,12 +5667,18 @@ class SolverSteel(SolverBase, CouplingInterface):
         projects the composite-inertia force of the deeper of the two DOFs onto the other, or
         is zero for unrelated branches. Results match the separate assembly and factorization
         up to float32 rounding.
+
+        The scene mode maps none: its contact rows read the free bodies' inverse factors
+        (``_Linv_by_size``), so a fused factor would change its results by that rounding, and
+        ``use_parallel_streams`` must leave them unchanged. Its articulated sizes are factored in
+        its factor groups anyway, and it never selects the sparse-diagonal response, the other
+        reader of these maps.
         """
         self._crba_dof_joint_offset_by_size = {}
         self._crba_source_dof_by_size = {}
         self._crba_lower_schedule_by_size = {}
         plan = self._model_plan
-        if not self._has_owned_dof_topology(model):
+        if self._scene_mode or not self._has_owned_dof_topology(model):
             return
         articulation_start = model.articulation_start.numpy()
         joint_qd_start = model.joint_qd_start.numpy()
@@ -5489,9 +5752,18 @@ class SolverSteel(SolverBase, CouplingInterface):
         Models with mimic relationships or loop-closing joints, including disabled ones that
         can be re-enabled at runtime, keep the dense factors: their bilateral rows are built
         on the dense response storage, which the sparse factors replace by placeholders.
+
+        ``_scene_factor_only_sizes`` records the response sizes whose every articulation is factored
+        sparsely, which the dense per-size pipeline skips: the selected size, or none. ``solve_mode="scene"``
+        plans its own factors instead (:meth:`_setup_scene_factors`).
         """
         self._sparse_mass_matrix_size = None
         self._sparse_mass_matrix_plan = None
+        self._sparse_mass_matrix_groups = ()
+        self._scene_factor_only_sizes = frozenset()
+        if self._scene_mode:
+            self._setup_scene_factors(model)
+            return
         if (
             not self._kernel_overrides.get("sparse_mass_matrix", True)
             or self._sparse_diagonal_contact_solve
@@ -5590,18 +5862,48 @@ class SolverSteel(SolverBase, CouplingInterface):
         group_count = self._n_arts_by_size[size]
         self._sparse_mass_matrix_size = size
         self._sparse_mass_matrix_plan = factor_plan
+        self._scene_factor_only_sizes = frozenset((size,))
         self._sparse_mass_matrix_indices = factor_plan.to_device(device)
         self._sparse_body_dof_mask = wp.array(body_masks, dtype=wp.uint64, device=device)
         self._sparse_Linv = wp.zeros((group_count, factor_plan.nonzero_count), dtype=wp.float32, device=device)
         self._sparse_mass_matrix_status = wp.zeros(group_count, dtype=wp.int32, device=device)
         self._sparse_mass_matrix_scratch = wp.empty((group_count, size), dtype=wp.float32, device=device)
+        # A dense contact has at most one free-body endpoint: six physical entries.
+        self._allocate_sparse_row_store(model, max_support, free_width=6)
+        self._crba_sparse_factor_kernel = _get_crba_sparse_factor_kernel(
+            size, factor_plan.nonzero_count, warps_per_block=factor_warps_per_block
+        )
+        self._sparse_factor_warps_per_block = factor_warps_per_block
+        self._sparse_contact_response_kernel = _get_sparse_contact_response_kernel(
+            size, lanes_per_contact=self._sparse_contact_lanes
+        )
+        self._pgs_solve_sparse_kernel = _get_pgs_solve_sparse_kernel(
+            self._articulation_constraint_max,
+            self._max_world_dofs,
+            max_support,
+            free_body_constraint_max=mf_capacity,
+            free_row_dofs=6 if self._has_free_rigid_bodies else 0,
+        )
+
+    def _allocate_sparse_row_store(self, model: Model, max_support: int, free_width: int) -> None:
+        """Allocate the rows of the sparse factors, ``max_support`` factor coordinates per row.
+
+        Shared by the sparse factor selection and the scene mode's (:meth:`_setup_scene_factors`), whose rows
+        the same row builders and decode kernels read: the drive gains in factor coordinates, each row's
+        coordinates and factor-coordinate response, the physical response of its free-body endpoints
+        (``free_width`` entries, stored apart from the factor coordinates; a placeholder without free bodies),
+        its incident velocity, each world's velocity change in factor coordinates and its free-body coordinates,
+        the free factor placeholder and the contact lanes.
+        """
+        device = model.device
+        plan = self._model_plan
+        response_dofs = plan.response_dof_count
+        free_rigid = plan.is_free_rigid != 0
         self._sparse_drive_dof_K = wp.zeros(max(model.joint_dof_count, 1), dtype=wp.float32, device=device)
         shape = (self._world_count, self._articulation_constraint_max, max_support)
         self._sparse_row_dof = wp.empty(shape, dtype=wp.int32, device=device)
         self._sparse_row_factor = wp.empty(shape, dtype=wp.float32, device=device)
-        # A dense contact has at most one free-body endpoint; its physical response is
-        # stored separately from the row's factor coordinates.
-        free_shape = (*shape[:2], 6) if self._has_free_rigid_bodies else (1, 1, 1)
+        free_shape = (*shape[:2], free_width) if self._has_free_rigid_bodies else (1, 1, 1)
         self._sparse_row_free_response = wp.empty(free_shape, dtype=wp.float32, device=device)
         self._sparse_row_incident = wp.empty(shape[:2], dtype=wp.float32, device=device)
         self._sparse_factor_velocity_delta = wp.empty(
@@ -5614,21 +5916,118 @@ class SolverSteel(SolverBase, CouplingInterface):
             free_dof_mask[world, offsets[art] : offsets[art] + response_dofs[art]] = 1
         self._sparse_world_free_dof_mask = wp.array(free_dof_mask, dtype=wp.int32, device=device)
         self._sparse_free_factor_dummy = wp.zeros((1, 6, 6), dtype=wp.float32, device=device)
-        self._crba_sparse_factor_kernel = _get_crba_sparse_factor_kernel(
-            size, factor_plan.nonzero_count, warps_per_block=factor_warps_per_block
-        )
-        self._sparse_factor_warps_per_block = factor_warps_per_block
         self._sparse_contact_lanes = 8
-        self._sparse_contact_response_kernel = _get_sparse_contact_response_kernel(
-            size, lanes_per_contact=self._sparse_contact_lanes
+
+    def _setup_scene_factors(self, model: Model) -> None:
+        """Plan the factor groups and allocate the row store of ``solve_mode="scene"``.
+
+        The scene factors every articulated joint topology in its own factor group
+        (:func:`~newton._src.solvers.steel.scene_solve.plan_scene_groups`), without the nonzero rule of the
+        sparse factors, without their per-world shared-memory gate and without their 64-DOF bound: a group's
+        support masks take ``ceil(DOFs / 64)`` ``uint64`` words, and ``_sparse_body_dof_mask`` holds the widest
+        group's words per body. Mimic and connect rows are rows of the internal units in factor coordinates, so
+        a model with them is factored as any other. A model of free bodies only has no factor
+        (:func:`~newton._src.solvers.steel.scene_solve.setup_scene_free_only`). A topology whose factor does not
+        fit one warp's static shared memory raises :class:`NotImplementedError`, naming the bytes it needs and the
+        bytes the device allows, and so does the test-only kernel override ``sparse_mass_matrix=False``, which
+        selects dense factors the scene does not have.
+
+        ``_sparse_mass_matrix_size`` and ``_sparse_mass_matrix_plan`` hold the first factor group's size and plan,
+        so that the size says a factor was selected, and ``_sparse_mass_matrix_groups`` the groups, the free group
+        last. The rows have one solve world, the support of
+        :func:`~newton._src.solvers.steel.scene_solve.scene_support`, a free response of
+        :data:`~newton._src.solvers.steel.scene_solve.SCENE_FREE_SUPPORT` entries when the scene has free bodies,
+        and no per-world sweep kernel. The factors live in the groups' storage
+        (:class:`~newton._src.solvers.steel.scene_solve.SceneSolve`), so the single-plan factor storage
+        (``_sparse_mass_matrix_indices``, ``_sparse_Linv``, ``_sparse_mass_matrix_status``,
+        ``_sparse_mass_matrix_scratch`` and ``_crba_sparse_factor_kernel``) is not allocated: with one factor group
+        whose members are the whole size group of their size these attributes view its arrays once the
+        ``SceneSolve`` exists, and otherwise (several factor groups, or a six-DOF topology sharing the size-6 group
+        with the free bodies) they stay ``None``. The test-only kernel override ``scene_group_split`` (default 1)
+        splits each factor group by articulation index, and ``scene_mask_words`` (default 1) widens every factor
+        group's masks to at least that many words.
+
+        ``_scene_factor_only_sizes`` records the response sizes whose every articulation is in a factor group,
+        which the dense per-size pipeline skips. A six-DOF topology beside free bodies is a factor group whose size
+        is not factor-only: the dense size-6 pipeline keeps running for the whole size, so the topology's dense
+        factors are computed and ignored (its rows, unconstrained solve and decode use its factor group), and the
+        free bodies' CRBA reads the composite inertias, which equal a single body's own.
+        """
+        split = int(self._kernel_overrides.get("scene_group_split", 1))
+        if split < 1:
+            raise ValueError(f"scene_group_split must be at least 1, got {split}")
+        mask_words = int(self._kernel_overrides.get("scene_mask_words", 1))
+        if mask_words < 1:
+            raise ValueError(f"scene_mask_words must be at least 1, got {mask_words}")
+        if not self._kernel_overrides.get("sparse_mass_matrix", True):
+            raise NotImplementedError("solve_mode='scene' does not support kernel override sparse_mass_matrix=False")
+        plan = self._model_plan
+        response_dofs = plan.response_dof_count
+        free_rigid = plan.is_free_rigid != 0
+        if not np.any((response_dofs > 0) & ~free_rigid):
+            setup_scene_free_only(self)
+            return
+        try:
+            groups = plan_scene_groups(
+                scene_topology_keys(self, model), free_rigid & (response_dofs > 0), split=split, mask_words=mask_words
+            )
+        except ValueError as error:
+            raise NotImplementedError(
+                f"solve_mode='scene' does not support this articulated topology: {error}"
+            ) from error
+        factor_groups = [group for group in groups if group.kind == "factor"]
+        # Every member's response DOFs are its plan's; setup_scene_plan raises when no factor was selected.
+        if any(np.any(response_dofs[list(group.arts)] != group.size) for group in factor_groups):
+            return
+        body_masks, body_group = factor_body_masks(self, model, groups)
+        max_support = scene_support(self, model, groups, body_masks, body_group)
+        if not max_support:
+            return
+        # Every factor group's factor fits one warp's static shared memory.
+        factor_warps = [scene_factor_warps(self, group.size, group.nonzero_count) for group in factor_groups]
+        if min(factor_warps) < 1:
+            # Past 64 DOFs the factor's shared memory is the scene's size limit; name it.
+            group = factor_groups[factor_warps.index(min(factor_warps))]
+            raise NotImplementedError(
+                f"solve_mode='scene' cannot factor a {group.size}-DOF topology of {group.nonzero_count} factor "
+                f"entries: one warp stages its factor in {factor_bytes_per_warp(group.size, group.nonzero_count)} B "
+                f"of static shared memory and Warp reserves {32 * WARP_SHARED_BYTES_PER_THREAD} B for its 32 "
+                f"threads, the device allows {static_shared_limit(model.device)} B per block"
+            )
+
+        device = model.device
+        factor_plan = factor_groups[0].plan
+        size = int(factor_plan.dof_count)
+        self._sparse_mass_matrix_size = size
+        self._sparse_mass_matrix_plan = factor_plan
+        self._sparse_mass_matrix_groups = groups
+        factor_arts = np.zeros(len(response_dofs), dtype=bool)
+        for group in factor_groups:
+            factor_arts[list(group.arts)] = True
+        self._scene_factor_only_sizes = frozenset(
+            group_size for group_size in self._size_groups if np.all(factor_arts[response_dofs == group_size])
         )
-        self._pgs_solve_sparse_kernel = _get_pgs_solve_sparse_kernel(
-            self._articulation_constraint_max,
-            self._max_world_dofs,
-            max_support,
-            free_body_constraint_max=mf_capacity,
-            free_row_dofs=6 if self._has_free_rigid_bodies else 0,
+        # A body's mask words are consecutive (the widest group's words).
+        self._sparse_body_dof_mask = wp.array(body_masks.reshape(-1), dtype=wp.uint64, device=device)
+        # The factor groups' storage is SceneSolve's (see the docstring).
+        self._sparse_mass_matrix_indices = None
+        self._sparse_Linv = None
+        self._sparse_mass_matrix_status = None
+        self._sparse_mass_matrix_scratch = None
+        self._crba_sparse_factor_kernel = None
+        # A scene row between two free bodies has two physical 6-entry blocks.
+        self._allocate_sparse_row_store(model, max_support, free_width=SCENE_FREE_SUPPORT)
+        self._sparse_factor_warps_per_block = factor_warps[0]
+        # A scene of several factor groups, or of masks wider than one word, reads its contact responses through
+        # the group table only.
+        self._sparse_contact_response_kernel = (
+            None
+            if len(factor_groups) > 1 or factor_groups[0].mask_words > 1
+            else _get_sparse_contact_response_kernel(size, lanes_per_contact=self._sparse_contact_lanes)
         )
+        # The per-world sparse sweep stages a world's rows and deltas in static shared memory, which the scene's one
+        # world outgrows; the scene sweeps its rows with its own kernels (SceneSolve).
+        self._pgs_solve_sparse_kernel = None
 
     def _setup_world_mapping(self, model):
         """Materialize articulation-to-world mappings from the model plan."""
@@ -5939,7 +6338,7 @@ class SolverSteel(SolverBase, CouplingInterface):
             n_arts = self._n_arts_by_size[size]
             # Armature, added to the mass-matrix diagonal by the factorization kernels.
             self._R_by_size[size] = wp.zeros((n_arts, size), dtype=wp.float32, device=device)
-            if size in (self._sparse_mass_matrix_size, self._sparse_diagonal_response_size):
+            if size in self._scene_factor_only_sizes or size == self._sparse_diagonal_response_size:
                 # Sparse factors and the sparse-diagonal response replace the dense matrices, rows
                 # and responses of this group; one-element stand-ins keep shared kernel arguments valid.
                 stand_in = wp.zeros((1, 1, 1), dtype=wp.float32, device=device)
@@ -5949,21 +6348,31 @@ class SolverSteel(SolverBase, CouplingInterface):
                 continue
             self._H_by_size[size] = wp.zeros((n_arts, size, size), dtype=wp.float32, device=device)
             self._L_by_size[size] = wp.zeros((n_arts, size, size), dtype=wp.float32, device=device)
-            self._J_by_size[size] = wp.zeros((n_arts, max_constraints, size), dtype=wp.float32, device=device)
-            self._Y_by_size[size] = wp.zeros((n_arts, max_constraints, size), dtype=wp.float32, device=device)
-            self._diag_by_size[size] = (
-                wp.zeros((n_arts, max_constraints), dtype=wp.float32, device=device)
-                if size in self._hinv_jt_diag_sizes
-                else self._dummy_hinv_diag
-            )
-            if self._sparse_mass_matrix_size is not None:
-                # The sparse contact response reads the free bodies' inverse factors.
+            if self._scene_mode:
+                # Scene rows keep their responses in the sparse row arrays, also for free bodies.
+                stand_in = wp.zeros((1, 1, 1), dtype=wp.float32, device=device)
+                self._J_by_size[size] = self._Y_by_size[size] = stand_in
+                self._diag_by_size[size] = self._dummy_hinv_diag
+            else:
+                self._J_by_size[size] = wp.zeros((n_arts, max_constraints, size), dtype=wp.float32, device=device)
+                self._Y_by_size[size] = wp.zeros((n_arts, max_constraints, size), dtype=wp.float32, device=device)
+                self._diag_by_size[size] = (
+                    wp.zeros((n_arts, max_constraints), dtype=wp.float32, device=device)
+                    if size in self._hinv_jt_diag_sizes
+                    else self._dummy_hinv_diag
+                )
+            if self._sparse_mass_matrix_size is not None or self._scene_mode:
+                # The sparse and the scene's contact responses read the free bodies' inverse factors.
                 self._Linv_by_size[size] = wp.zeros((n_arts, size, size), dtype=wp.float32, device=device)
             self._tau_by_size[size] = wp.zeros((n_arts, size, 1), dtype=wp.float32, device=device)
             self._qdd_by_size[size] = wp.zeros((n_arts, size, 1), dtype=wp.float32, device=device)
-        # Double buffering ping-pongs H and J; sparse factors keep their own storage.
+        # Double buffering ping-pongs H and J; sparse factors and scene rows keep their own storage.
         self._double_buffered = bool(
-            self._double_buffer and device.is_cuda and self._size_groups and self._sparse_mass_matrix_size is None
+            self._double_buffer
+            and device.is_cuda
+            and self._size_groups
+            and self._sparse_mass_matrix_size is None
+            and not self._scene_mode
         )
         self._H_bufs = None
         self._J_bufs = None
@@ -6035,8 +6444,8 @@ class SolverSteel(SolverBase, CouplingInterface):
         """Allocate the per-world dense row system (response, metadata and impulses)."""
         device = model.device
         shape = (self._world_count, self._articulation_constraint_max)
-        if self._sparse_mass_matrix_size is not None:
-            # Sparse rows store factor-coordinate responses instead of world J and Y.
+        if self._sparse_mass_matrix_size is not None or self._scene_mode:
+            # Sparse and scene rows store their responses instead of world J and Y.
             self._J_world = self._Y_world = wp.zeros((1, 1, 1), dtype=wp.float32, device=device)
         elif self._jy_world_aliased:
             # One articulation per world in a single size group: the world-indexed
@@ -6178,7 +6587,7 @@ class SolverSteel(SolverBase, CouplingInterface):
         )
         for size in self._size_groups:
             # Sparse and diagonal mass matrices need no dense factorization, solve or response kernels.
-            dense = size != self._sparse_mass_matrix_size and not self._execution_plan.use_diagonal_mass(size)
+            dense = size not in self._scene_factor_only_sizes and not self._execution_plan.use_diagonal_mass(size)
             # The explicit paired inverse reads the assembled mass matrix.
             fusable = (
                 dense
@@ -6291,11 +6700,14 @@ class SolverSteel(SolverBase, CouplingInterface):
             if self._sparse_diagonal_contact_solve
             else None
         )
+        # The scene mode has no per-world sweep: its one world would size this kernel's shared memory by the
+        # scene's rows and coordinates.
         if (
             self._world_count > 0
             and self._max_world_dofs > 0
             and self._sparse_mass_matrix_size is None
             and not self._sparse_diagonal_contact_solve
+            and not self._scene_mode
         ):
             mf_rows = self._mf_meta_packed.shape[1] // 4
             shared_metadata = _use_resident_mfgs_metadata(
@@ -10853,7 +11265,12 @@ class SolverSteel(SolverBase, CouplingInterface):
     # ------------------------------------------------------------------
 
     def _setup_propagation(self, model) -> None:
-        """Resolve the propagation response plan: tree groups and kernel choice."""
+        """Resolve the propagation response plan: tree groups and kernel choice.
+
+        It follows the response the solver solves with, ``_scene_contact_response``: under the scene mode the
+        immediate one, so the scene plans nothing here and allocates none of the propagation response's rows, tree
+        factors or caches (:meth:`_allocate_propagation_buffers` keeps its per-world counters).
+        """
         self._propagation_active = False
         self._propagation_colored = False
         self._propagation_tree_sizes: list[int] = []
@@ -10866,7 +11283,7 @@ class SolverSteel(SolverBase, CouplingInterface):
         # Tree groups whose responses are cached, with the warps of their extraction kernel.
         self._propagation_cached_warps: dict[int, int] = {}
         self._propagation_cache_max_bodies = 0
-        if self._articulated_contact_response == "immediate" or not self._size_groups or self._model_plan is None:
+        if self._scene_contact_response == "immediate" or not self._size_groups or self._model_plan is None:
             return
 
         plan = self._model_plan

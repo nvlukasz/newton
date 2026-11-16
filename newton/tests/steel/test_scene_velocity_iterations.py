@@ -33,7 +33,6 @@ from newton._src.solvers.steel.kernels import (
 )
 from newton._src.solvers.steel.scene_pgs import RANGE_ALL, get_sweep_rows_serial_kernel
 from newton._src.solvers.steel.scene_rows import _scene_row_dot
-from newton._src.solvers.steel.solver_steel import _SOLVE_MODES
 from newton.solvers import SolverSteel
 from newton.tests.steel._fixtures import DT, _build_contact_scene, _build_plane_model, _set_box_velocities
 from newton.tests.steel._scene_fixtures import (
@@ -63,7 +62,7 @@ from newton.tests.steel.test_scene_internal_unit import HUMANOID_HINGES, _hinge_
 from newton.tests.steel.test_scene_velocity_limits import CROWD_LIMIT, _limit_hinges
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
-needs_scene_mode = unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+needs_scene_step = unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 
 VELOCITY_ITERATIONS = 2
@@ -117,7 +116,7 @@ def _contact_rows(test, solver, count) -> dict:
     return {name: np.asarray(values) for name, values in rows.items()}
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_velocity_iterations_track_steel(test, device):
     """Refine the position solve's velocity with two velocity-only iterations, as Steel's matrix-free solve does.
 
@@ -150,7 +149,7 @@ def test_velocity_iterations_track_steel(test, device):
             )
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_velocity_rows_rhs_is_unbiased(test, device):
     """Give each contact row the velocity-pass right-hand side Steel's rows get, on the same contacts.
 
@@ -223,7 +222,7 @@ def test_velocity_rows_rhs_is_unbiased(test, device):
     test.assertTrue(np.all(scene["rhs"][dropped] < 0.0))
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_velocity_iterations_rebound_tracks_steel(test, device):
     """Land and rebound a falling sphere through the velocity pass as Steel does, as a free body and articulated.
 
@@ -257,7 +256,7 @@ def test_velocity_iterations_rebound_tracks_steel(test, device):
             assert_rebound_tracks_steel(test, runs, velocities, scene, atol=REBOUND_APEX_ATOL)
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_velocity_iterations_freeze_or_solve_drive_rows(test, device):
     """Leave the drive rows as the position solve left them under ``"freeze"``, and solve them under ``"active"``.
 
@@ -331,7 +330,7 @@ def _record_solves(solver, *, velocity_rhs=None) -> list:
     return records
 
 
-@needs_scene_mode
+@needs_scene_step
 @needs_read_back
 def test_velocity_pass_continues_the_position_solve(test, device):
     """Continue the position solve in the second solve: 3 sweeps, then 2 with ``reset=False``, are 5 sweeps.
@@ -390,7 +389,7 @@ def _speculative_rhs_dropped(solver) -> bool:
     return bool(np.any(rhs_unbiased[speculative] != rhs[speculative]))
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_velocity_iterations_match_the_serial_oracle(test, device):
     """Run both passes of the step in the phased sweep exactly as one thread walking the rows does.
 
@@ -442,7 +441,7 @@ class _FixedRun(_Run):
             wp.copy(getattr(self.state_0, name), getattr(self.state_1, name))
 
 
-@needs_scene_mode
+@needs_scene_step
 @needs_read_back
 def test_velocity_iterations_replay_under_capture(test, device):
     """Replay one captured step, its velocity pass included, exactly as eager steps.
@@ -484,7 +483,7 @@ def test_velocity_iterations_replay_under_capture(test, device):
     test.assertFalse(np.any(eager.solver.constraint_overflow.numpy()))
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_regularized_velocity_pass_tracks_steel(test, device):
     """Weigh no row in the velocity pass, as Steel's, beside the regularized position solve.
 
@@ -530,7 +529,7 @@ def _row_dots(
     dots[i] = _scene_row_dot(row_dof, row_factor, delta, i, steel_sums)
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_scene_row_dot_mirrors_the_thread_loop(test, device):
     """Sum each row's ``Z delta`` in ``_scene_row_dot`` as the one-thread row loop sums its ``dot``, bit for bit.
 

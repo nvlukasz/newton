@@ -34,7 +34,6 @@ from newton._src.solvers.steel.kernels import (
     PGS_CONSTRAINT_TYPE_JOINT_LIMIT,
 )
 from newton._src.solvers.steel.scene_pgs import RANGE_TWO_SIDED
-from newton._src.solvers.steel.solver_steel import _SOLVE_MODES
 from newton.solvers import SolverSteel
 from newton.tests.steel._compliance_reference import solve_reference
 from newton.tests.steel._fixtures import DT, _build_contact_scene, _set_box_velocities, run_fixture
@@ -407,7 +406,7 @@ def _compliant_rows(solver) -> np.ndarray:
     return np.flatnonzero(solver._scene.row_gamma.numpy()[0, :rows] > 0.0)
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_compliance_matches_reference_law(test, device):
     """Assemble and solve one compliant contact as the reference law does, closed and open.
 
@@ -539,7 +538,7 @@ def test_compliance_replays_under_capture(test, device):
     test.assertEqual(captured.solver.compliance_contact_count, eager.solver.compliance_contact_count)
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_compliant_friction_matches_steel_bitwise(test, device):
     """Weigh each compliant contact's friction rows' coefficient by its friction scale, as Steel's arrays.
 
@@ -641,7 +640,7 @@ def test_compliance_counts_match_steel(test, device):
                 test.assertEqual(raised["scene"], raised["serial"])
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_scene_step_checks_keep_steel_messages(test, device):
     """Raise ``start_step``'s step checks in scene mode with Steel's messages, before any work is launched.
 
@@ -688,7 +687,7 @@ def test_scene_step_checks_keep_steel_messages(test, device):
             assert_same_message(contacts_with(short=name), DT)
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_compliance_matches_the_serial_oracle(test, device):
     """Solve compliant rows in the phased sweep exactly as one thread walking the rows does, in every phase order.
 

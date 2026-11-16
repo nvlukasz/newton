@@ -46,7 +46,6 @@ from newton._src.solvers.steel.scene_solve import (
     scene_topology_keys,
     topology_key,
 )
-from newton._src.solvers.steel.solver_steel import _SOLVE_MODES
 from newton._src.solvers.steel.sparse_contact import build_sparse_joint_limit_rows
 from newton._src.solvers.steel.sparse_mass_matrix import _SparseMassMatrixPlan, distinct_mask_values, mask_value
 from newton.solvers import SolverSteel
@@ -67,7 +66,7 @@ from newton.tests.steel._scene_fixtures import (
 )
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
-needs_scene_mode = unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+needs_scene_step = unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 
 
 def _factor_plan(key) -> _SparseMassMatrixPlan:
@@ -221,7 +220,6 @@ def test_response_table_requires_a_group_per_articulation(test, device):
         scene_response_table(groups, 4, linv, device, articulated=np.array([True, True, True, False]))
 
 
-@needs_scene_mode
 def test_one_topology_scene_has_one_factor_group(test, device):
     """Plan one factor group, today's sparse factor, for a scene of one topology, and a free group for its props."""
     solver = SolverSteel(_humanoids(device, worlds=4), articulation_constraint_max=128, **SCENE)
@@ -248,7 +246,6 @@ def test_one_topology_scene_has_one_factor_group(test, device):
     test.assertIs(solver._scene.free_group_to_art, solver._group_to_art[6])
 
 
-@needs_scene_mode
 def test_free_only_scene_has_one_free_group(test, device):
     """Plan a scene of free bodies only as one free group, without an articulated size."""
     solver = SolverSteel(_heap(device), **SCENE)
@@ -260,7 +257,7 @@ def test_free_only_scene_has_one_free_group(test, device):
     test.assertIs(solver._scene.free_group_to_art, solver._group_to_art[6])
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_generic_response_kernel_is_bitwise_specialized(test, device):
     """Build the rows through the group table (the default) bit for bit as the specialised kernel.
 
@@ -349,7 +346,7 @@ def _contacts_between_groups(run) -> int:
     return int(np.count_nonzero(kept & (group_a >= 0) & (group_b >= 0) & (group_a != group_b)))
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_split_groups_are_bitwise_one_group(test, device):
     """Step a scene split into k factor groups of one topology bit for bit as its one group.
 
@@ -430,7 +427,7 @@ def test_split_groups_are_bitwise_one_group(test, device):
             SolverSteel(model, articulation_constraint_max=rows, **SCENE)
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_notify_armature_reaches_every_group(test, device):
     """Bring a notified armature to every scene group's factor, a group the ``world_mask`` leaves out included.
 
@@ -500,7 +497,7 @@ def _factor_groups(solver) -> list:
     return [group for group in solver._scene_plan.groups if group.kind == "factor"]
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_heterogeneous_worlds_match_isolated_worlds_bitwise(test, device):
     """Step each world of a scene of two topologies bit for bit as the same world alone in the scene solve.
 
@@ -556,7 +553,7 @@ def test_heterogeneous_worlds_match_isolated_worlds_bitwise(test, device):
                     SolverSteel(model, articulation_constraint_max=rows, **SCENE)
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_heterogeneous_scene_tracks_steel(test, device):
     """Follow Steel's dense solve on two chain topologies, one factor group each.
 
@@ -596,7 +593,7 @@ def test_heterogeneous_scene_tracks_steel(test, device):
                 test.assertFalse(np.any(run.solver.constraint_overflow.numpy()))
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_wide_rows_match_the_thread_oracle_bitwise(test, device):
     """Sweep rows wider than 32 entries (serial sums) as the serial oracle: bitwise with one thread per side and unit.
 
@@ -652,7 +649,7 @@ def test_wide_rows_match_the_thread_oracle_bitwise(test, device):
                 test.assertFalse(np.any(run.solver.constraint_overflow.numpy()))
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_global_body_between_two_topologies(test, device):
     """Couple two topologies through a free world -1 box that rests on both chains' tips.
 
@@ -746,7 +743,7 @@ def _kept_contacts_of(run, art: int) -> int:
     return int(np.count_nonzero(kept & touches))
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_diagonal_scene_tracks_steel(test, device):
     """Follow Steel's diagonal-mass path on a pendulum and three revolute siblings, each a factor group with a
     diagonal plan.
@@ -818,7 +815,7 @@ def test_diagonal_scene_tracks_steel(test, device):
                 test.assertFalse(np.any(run.solver.constraint_overflow.numpy()))
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_six_dof_chain_beside_free_boxes_tracks_steel(test, device):
     """Follow Steel's dense solve on six-DOF chains beside free boxes, the chains a factor group of their own.
 
@@ -931,7 +928,7 @@ def _chains_over_boxes(device) -> newton.Model:
     return builder.finalize(device=device)
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_six_dof_chain_on_a_free_box_tracks_steel(test, device):
     """Follow Steel's dense solve on six-DOF chains falling onto free boxes, with rows joining a chain link and a box.
 
@@ -1118,7 +1115,7 @@ def _wide_tree_tracks_steel(test, model, sizes, rows, *, collide=True, step_one=
     return rows_seen
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_tree_65_tracks_steel(test, device):
     """Follow Steel's dense solve on a 65-link chain, whose support masks take two words.
 
@@ -1150,7 +1147,7 @@ def test_tree_65_tracks_steel(test, device):
                 test.assertGreater(rows_seen, 0)
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_branched_tree_70_tracks_steel(test, device):
     """Follow Steel's dense solve on a 70-link binary tree, whose support masks take two words.
 
@@ -1170,7 +1167,7 @@ def test_branched_tree_70_tracks_steel(test, device):
             _wide_tree_tracks_steel(test, build(), [70], 512, collide=False, **options)
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_two_word_masks_are_bitwise_one_word(test, device):
     """Build rows and step bit for bit with support masks widened to two words (``scene_mask_words=2``).
 
@@ -1242,7 +1239,7 @@ def test_two_word_masks_are_bitwise_one_word(test, device):
             SolverSteel(_humanoids(device, worlds=2), articulation_constraint_max=128, **SCENE)
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_scene_refuses_groups_past_shared_memory(test, device):
     """Refuse at construction a topology whose factor or contact rows overflow a block's static shared memory.
 
@@ -1380,7 +1377,7 @@ def _crossing_worlds(device, worlds: int = 2) -> newton.Model:
     return _without_passive_springs(builder.finalize(device=device))
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_two_word_rows_match_the_thread_oracle_bitwise(test, device):
     """Sweep rows with coordinates past 63, and units between groups of two and one mask word, as the serial oracle.
 

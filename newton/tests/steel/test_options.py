@@ -1202,7 +1202,7 @@ class TestSteelSolveModeOptions(unittest.TestCase):
             self.assertEqual((solver.solve_mode, solver.articulated_contact_response), ("colored", "propagation"))
         with self.assertRaisesRegex(ValueError, re.escape("requires articulated_contact_response='propagation'")):
             SolverSteel(model, solve_mode="colored", articulated_contact_response="immediate")
-        with self.assertRaisesRegex(ValueError, "solve_mode must be 'serial' or 'colored'"):
+        with self.assertRaisesRegex(ValueError, "solve_mode must be 'serial', 'colored' or 'scene'"):
             SolverSteel(model, solve_mode="dense")
         with self.assertRaisesRegex(ValueError, "articulated_contact_response must be 'immediate' or 'propagation'"):
             SolverSteel(model, articulated_contact_response="colored")
@@ -1288,10 +1288,10 @@ class TestSteelPrivateApi(unittest.TestCase):
         self.assertNotIn("angular_damping", parameters)
 
     def test_pgs_mode_selects_only_the_supported_solves(self):
-        """Offer the serial and colored sweeps and the immediate and propagation responses, serial/immediate by default."""
+        """Offer the serial, colored and scene solves and the two contact responses, serial/immediate by default."""
         parameters = inspect.signature(SolverSteel.__init__).parameters
         self.assertEqual(parameters["solve_mode"].default, "serial")
-        self.assertEqual(typing.get_args(parameters["solve_mode"].annotation), ("serial", "colored"))
+        self.assertEqual(typing.get_args(parameters["solve_mode"].annotation), ("serial", "colored", "scene"))
         response = parameters["articulated_contact_response"]
         self.assertEqual(response.default, "immediate")
         self.assertEqual(typing.get_args(response.annotation), ("immediate", "propagation"))

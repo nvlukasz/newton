@@ -21,14 +21,13 @@ import warp as wp
 import newton
 from newton._src.solvers.steel.kernels import PGS_CONSTRAINT_TYPE_CONTACT, PGS_LOCAL_SOLVE_OWNER_GENERAL
 from newton._src.solvers.steel.scene_solve import cap_scene_depenetration
-from newton._src.solvers.steel.solver_steel import _SOLVE_MODES
 from newton.solvers import SolverSteel
 from newton.tests.steel._fixtures import DT
 from newton.tests.steel._scene_fixtures import SCENE, _steel_on
 from newton.tests.steel.test_scene_features import TRACK_ATOL, TRACK_RTOL
 from newton.tests.unittest_utils import add_function_test, get_test_devices
 
-needs_scene_mode = unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+needs_scene_step = unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 
 DEPENETRATION_CAP = 0.1
 """``rigid_body_max_depenetration_velocity`` [m/s] of the capped boxes: below the 0.24 m/s Baumgarte bias of their
@@ -184,7 +183,7 @@ def _normal_rows(solvers, contacts):
     return free, scene._rhs.numpy()[0, scene_rows], steel._mf_rhs.numpy()[0, steel_rows], scene_rows
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_depenetration_cap_tracks_steel(test, device):
     """Separate two boxes 5 mm deep in each other at their bodies' depenetration cap, as Steel's free-body solve does.
 
@@ -235,7 +234,7 @@ def test_depenetration_cap_tracks_steel(test, device):
     test.assertEqual(sorted(zero_bound.values()), [False, True], zero_bound)
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_depenetration_cap_leaves_articulated_contacts(test, device):
     """Bound a capped box's contacts with the ground and not those with an articulated link, as Steel does.
 
@@ -298,7 +297,7 @@ def _launch_cap(solver, contacts):
     )
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_depenetration_cap_writes_only_where_it_binds(test, device):
     """Write a free-body contact's right-hand side only where the cap binds; every other row keeps its own.
 
@@ -333,7 +332,7 @@ def test_depenetration_cap_writes_only_where_it_binds(test, device):
                 test.assertEqual(written.size, 0, f"the loose cap wrote rows {written}")
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_zero_jacobian_contact_rows_solve_as_steel(test, device):
     """Solve a slider link's ground contacts, whose normal rows have ``J = 0``, as Steel's general sweep does.
 

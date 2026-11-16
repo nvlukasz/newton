@@ -50,7 +50,6 @@ from newton._src.solvers.steel.scene_warmstart import (
     scene_reset_world_selection,
     scene_seed_sides,
 )
-from newton._src.solvers.steel.solver_steel import _SOLVE_MODES
 from newton.solvers import SolverSteel
 from newton.tests.steel._fixtures import CONTACT_MAX, DT, _build_contact_scene, _heap, _set_box_velocities
 from newton.tests.steel._scene_fixtures import _global_box_model, _humanoids, _rms, _Run, _scene_heap
@@ -417,7 +416,7 @@ def _steel_mu(steel, c):
     return rows.numpy()[world, slot : slot + 3]
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_anchor_beta_none_resolves_as_steel(test, device):
     """Resolve an omitted ``friction_anchor_beta`` as Steel's constructor does, under the scene solve too.
 
@@ -496,7 +495,7 @@ def _track_patches(test, model, *, init, rtol, atol):
     return scene, steel
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_patch_friction_tracks_steel(test, device):
     """Step Steel's default friction patches as Steel's matrix-free solve does: one step and thirty.
 
@@ -531,7 +530,7 @@ def test_patch_friction_tracks_steel(test, device):
             _track_patches(test, build(), **options)
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_patch_radius_uses_divided_row_mu(test, device):
     """Share a region's friction budget among its anchors and bound their pairs by the region's pooled load.
 
@@ -595,7 +594,7 @@ def test_patch_radius_uses_divided_row_mu(test, device):
             test.assertGreater(ring_loaded, 0, "no anchor's pair passed its own normal's disk")
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 @unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 def test_patch_rows_follow_the_anchors(test, device):
     """Give the anchors three rows and every other contact one, under the infinite friction gap.
@@ -628,7 +627,7 @@ def test_patch_rows_follow_the_anchors(test, device):
     test.assertEqual(stats["dropped_rows"], 0)
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_patch_anchors_take_precedence_over_shared_anchors(test, device):
     """Put the anchors' tangent rows at the anchor points whatever the shared-anchor flags, as Steel does.
 
@@ -698,7 +697,7 @@ def _two_sided_ring(solver) -> bool:
     return bool(np.any((linked >= begin) & (linked < end)))
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_patches_match_the_serial_oracle(test, device):
     """Walk the regions' rings in the phased sweep exactly as one thread walking the rows does, in every order.
 
@@ -718,7 +717,7 @@ def test_patches_match_the_serial_oracle(test, device):
             )
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_patches_replay_under_capture(test, device):
     """Replay one captured step with Steel's default patches exactly as eager steps, as regions come and go.
 
@@ -763,7 +762,7 @@ def test_patches_replay_under_capture(test, device):
     test.assertTrue(np.all(np.isfinite(captured.state_0.joint_q.numpy())))
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_seed_sides_matches_host_reference(test, device):
     """Apply the gathered seeds to ``delta`` side by side, each side its own block, as a NumPy walk does bit for bit.
 
@@ -824,7 +823,7 @@ def test_seed_sides_matches_host_reference(test, device):
             test.assertFalse(np.any(solver._sparse_factor_velocity_delta.numpy()))
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_sweep_and_seed_share_the_response_rule(test, device):
     """Tie the seed's response rule to the sweep's: after a position solve, ``delta`` is ``resp_k * lambda`` summed
     over every row's final impulse.
@@ -1062,7 +1061,7 @@ def _compare_seeds(test, model, scene, steel, step, diverged, totals, *, patches
         totals["compared"] += 1
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_warmstart_tracks_steel(test, device):
     """Step Steel's contact warm start as Steel's matrix-free solve does: one step and thirty, and the seeds.
 
@@ -1147,7 +1146,7 @@ def _two_sided_seeded(solver) -> bool:
     return bool(np.any(solver.seeds[0][0, begin:end]))
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_warmstart_matches_the_serial_oracle(test, device):
     """Sweep from the seeds in the phased sweep exactly as one thread walking the rows does, in every order.
 
@@ -1163,7 +1162,7 @@ def test_warmstart_matches_the_serial_oracle(test, device):
     )
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_warmstart_replays_under_capture(test, device):
     """Replay one captured warm-started step exactly as eager steps, as contacts come and go, and keep its history.
 
@@ -1235,7 +1234,7 @@ def test_warmstart_replays_under_capture(test, device):
         test.assertEqual(bool(np.any(impulses)), warm, sequence)
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_warmstart_carries_into_the_velocity_pass(test, device):
     """Start the velocity pass from the position solve's impulses and ``delta``, the seeds included, as Steel does.
 
@@ -1269,7 +1268,7 @@ def test_warmstart_carries_into_the_velocity_pass(test, device):
     test.assertFalse(np.array_equal(solver._impulses.numpy()[0], entry["impulses"]), "the velocity pass did not act")
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_warmstart_rejections_and_cold_start(test, device):
     """Start cold exactly as without the warm start, clear the whole impulse capacity, and refuse unmatched contacts.
 
@@ -1330,7 +1329,7 @@ def _contact_worlds(model, contacts) -> np.ndarray:
     return np.maximum(shape_world[shape0], shape_world[shape1])
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_warmstart_resets_by_world_mask(test, device):
     """Discard the carried impulses of the masked worlds alone, contact by contact, as Steel's per-world reset does.
 
@@ -1504,7 +1503,7 @@ def _set_free_body(model, state, body, *, position=None, velocity=None):
         state.body_qd.assign(body_qd)
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_sleeping_tracks_steel(test, device):
     """Sleep the heap's islands as Steel does: every box asleep within :data:`SLEEP_STEPS` steps in both solvers, the
     same islands, and each box resting within :data:`REST_ATOL` of Steel's height.
@@ -1536,7 +1535,7 @@ def test_sleeping_tracks_steel(test, device):
     np.testing.assert_allclose(heights["scene"], heights["steel"], rtol=0.0, atol=REST_ATOL)
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 @unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 def test_sleeping_island_gets_no_units(test, device):
     """Give a sleeping island's contacts no units: once every box of the heap sleeps, a step has no unit, row or color.
@@ -1564,7 +1563,7 @@ def test_sleeping_island_gets_no_units(test, device):
     test.assertEqual({key: stats[key] for key in ("units", "rows", "colors")}, {"units": 0, "rows": 0, "colors": 0})
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 @unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 def test_all_asleep_scene_replays_under_capture(test, device):
     """Replay a step captured while the heap was awake through a scene without units, and wake the heap on contact.
@@ -1700,7 +1699,7 @@ def _internal_rows(solver) -> tuple[int, int, int]:
     return int(families[FAMILY_LIMIT]), int(families[FAMILY_JOINT_FRICTION]), internal
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 @unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 def test_sleeping_articulation_gets_no_internal_rows(test, device):
     """Give a sleeping articulation no internal rows, and restore them when a force wakes it, under capture.
@@ -1768,7 +1767,7 @@ def _two_world_box_model(device):
     return builder.finalize(device=device)
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_masked_reset_wakes_model_worlds(test, device):
     """Wake only the model worlds a masked reset selects, though the scene folds them into one solve world.
 
@@ -1808,7 +1807,7 @@ def _two_boxes(device):
     return builder.finalize(device=device)
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_contact_with_an_awake_box_wakes_its_island(test, device):
     """Wake a sleeping box on the step an awake box first touches it, as Steel's island union does.
 
@@ -1857,7 +1856,7 @@ def _global_box_on_world_zero(device):
     return model
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 def test_islands_join_within_steel_solve_worlds(test, device):
     """Join islands over a contact only within Steel's solve worlds, which the scene's fold leaves Steel's.
 

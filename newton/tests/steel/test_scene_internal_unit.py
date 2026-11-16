@@ -33,7 +33,6 @@ import warp as wp
 import newton
 from newton._src.solvers.steel import scene_rows, scene_solve, sparse_contact
 from newton._src.solvers.steel.kernels import PGS_CONSTRAINT_TYPE_JOINT_FRICTION
-from newton._src.solvers.steel.solver_steel import _SOLVE_MODES
 from newton.solvers import SolverSteel
 from newton.tests.steel._fixtures import DT
 from newton.tests.steel._scene_fixtures import (
@@ -57,7 +56,7 @@ from newton.tests.steel.test_scene_features import (
 )
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
-needs_scene_mode = unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+needs_scene_step = unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 
 FRICTION = 0.5
@@ -113,7 +112,7 @@ def _steel_friction_bounds(solver) -> np.ndarray:
     return np.concatenate(bounds)
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_joint_friction_tracks_steel(test, device):
     """Hold the hinges of two lying humanoids with dry friction, as Steel's matrix-free solve does.
 
@@ -153,7 +152,7 @@ def test_joint_friction_tracks_steel(test, device):
     )
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_joint_friction_bounds_match_steel_bitwise(test, device):
     """Bound each joint-friction row by ``f dt``, Steel's dense rows' ``mu``, bit for bit and in Steel's order.
 
@@ -236,7 +235,7 @@ class _Stepper:
             wp.copy(getattr(self.state_0, name), getattr(self.state_1, name))
 
 
-@needs_scene_mode
+@needs_scene_step
 @needs_read_back
 def test_internal_unit_rows_change_under_capture(test, device):
     """Replay one captured step exactly as eager steps while the internal units' rows appear and disappear.
@@ -289,7 +288,7 @@ def test_internal_unit_rows_change_under_capture(test, device):
     test.assertFalse(np.any(eager.solver.constraint_overflow.numpy()))
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_joint_friction_matches_the_serial_oracle(test, device):
     """Clamp the joint-friction rows in the phased sweep exactly as one thread walking the rows does.
 
@@ -326,7 +325,7 @@ def test_joint_friction_matches_the_serial_oracle(test, device):
             )
 
 
-@needs_scene_mode
+@needs_scene_step
 def test_internal_units_count_toward_the_unit_capacity(test, device):
     """Size the units with one internal unit per articulation that can have internal rows, whatever its rows.
 

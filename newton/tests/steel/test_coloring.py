@@ -11,7 +11,6 @@ import warp as wp
 
 import newton
 from newton._src.solvers.steel.scene_units import COLOR_ROUND_MAX, SCAN_TILE, SceneUnits
-from newton._src.solvers.steel.solver_steel import _SOLVE_MODES
 from newton.solvers import SolverSteel
 from newton.tests.steel._fixtures import CONTACT_MAX
 from newton.tests.steel._scene_fixtures import _scene_heap, _units_for, _units_view
@@ -488,7 +487,7 @@ def test_color_statistics_reads_back(test, device):
                 test.assertGreaterEqual(stats["tail"], stats["tail_fallback"])
 
 
-@unittest.skipUnless("scene" in _SOLVE_MODES, "needs the scene mode")
+@unittest.skipUnless(hasattr(SolverSteel, "_seed_contact_impulses"), "needs the scene step")
 @unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 def test_time_scene_units_keeps_the_step(test, device):
     """Time build and color on the last step's contacts, from graphs or eagerly, leaving the step's units as they were."""
