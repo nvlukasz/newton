@@ -13,7 +13,14 @@ import unittest
 
 import warp as wp
 
-from newton._src.solvers.steel import contact_compliance, contact_torsion, friction, solver_steel, sparse_contact
+from newton._src.solvers.steel import (
+    contact_compliance,
+    contact_torsion,
+    friction,
+    solver_steel,
+    sparse_contact,
+    sparse_mass_matrix,
+)
 from newton.tests.steel._scene_fixtures import STEEL_TEXT_SHA256
 
 MF_GS_SHAPE = (128, 64, 27)
@@ -28,6 +35,10 @@ SPARSE_CONTACT_DOFS = 27
 
 TORSION_DOFS = 12
 """DOFs of the pinned contact torsion sweeps (two free bodies)."""
+
+FACTOR_SHAPE = (27, 243, 4)
+"""``(dof_count, nonzero_count, warps_per_block)`` of the pinned sparse mass-factor kernel: the factor plan of one
+``nv_humanoid.xml`` humanoid and Steel's default warps per block."""
 
 
 def _sha256(text: str) -> str:
@@ -59,6 +70,15 @@ def _mf_gs_snippet(**flags) -> str:
     return _native_snippet(kernel)
 
 
+def factor_kernel_text(**options) -> str:
+    """The native snippet of Steel's sparse mass-factor kernel at :data:`FACTOR_SHAPE`, built with ``options``."""
+    dof_count, nonzero_count, warps = FACTOR_SHAPE
+    kernel = sparse_mass_matrix._get_crba_sparse_factor_kernel(
+        dof_count, nonzero_count, warps_per_block=warps, **options
+    )
+    return _native_snippet(kernel)
+
+
 def steel_kernel_texts() -> dict[str, str]:
     """The default path's kernel texts that :data:`STEEL_TEXT_SHA256` pins, by key."""
     return {
@@ -76,6 +96,7 @@ def steel_kernel_texts() -> dict[str, str]:
         "mf_desaxce_bias": solver_steel._MF_DESAXCE_BIAS_SOURCE,
         "mf_coulomb_newton_friction": solver_steel._MF_COULOMB_NEWTON_FRICTION_SOURCE,
         "compliance_prepare_contacts": inspect.getsource(contact_compliance._prepare_contacts.func),
+        "factor_kernel": factor_kernel_text(),
     }
 
 

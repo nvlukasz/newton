@@ -622,3 +622,6 @@ load.
 The six tables pin the row families' builder text. All six were re-recorded when the template was re-cut from Steel's
 current joint-limit builder, whose reservation comment names ``reserve_world_row_slots``; that comment is the only
 change to every family's text. A change to a family's builder must change its table on purpose."""
+
+# sparse_mass_matrix: the sparse mass-factor kernel at one nv_humanoid.xml humanoid's factor plan
+STEEL_TEXT_SHA256["factor_kernel"] = "6378a91d66938b3fb79213e8ac5f1b09fbbef2aa9dfb502863b2e2e41e8f93c7"

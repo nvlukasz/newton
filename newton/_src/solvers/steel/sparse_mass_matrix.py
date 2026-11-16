@@ -7,6 +7,7 @@ permutation, ``P H P.T = L L.T`` and ``Linv = inverse(L)`` have the same lower
 ancestor pattern. Neither assembly nor factorization allocates a dense H.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache
 
@@ -16,6 +17,40 @@ import warp as wp
 from .kernels import WARP_DETERMINISM_OFF
 
 wp.set_module_options(WARP_DETERMINISM_OFF)
+
+_WORD = (1 << 64) - 1
+
+
+def _mask_array(masks: Sequence[int], mask_words: int) -> np.ndarray:
+    """``uint64`` support masks of ``mask_words`` words: ``[len]`` for one word, ``[len, mask_words]`` for more.
+
+    Word ``w`` of a mask holds coordinates ``64 w`` to ``64 w + 63``.
+    """
+    if mask_words == 1:
+        return np.asarray(masks, dtype=np.uint64)
+    words = [[(int(mask) >> (64 * word)) & _WORD for word in range(mask_words)] for mask in masks]
+    return np.asarray(words, dtype=np.uint64).reshape(len(masks), mask_words)
+
+
+def mask_value(mask) -> int:
+    """One support mask as a Python int: a ``uint64`` scalar, or a row of ``uint64`` words with word 0 lowest."""
+    return sum(int(word) << (64 * index) for index, word in enumerate(np.ravel(mask)))
+
+
+def distinct_mask_values(masks) -> list[int]:
+    """The distinct masks of ``masks`` as Python ints, in increasing order.
+
+    ``masks`` is ``uint64`` ``[k]`` (one word each) or ``[k, words]`` (rows of words, word 0 lowest).
+    numpy removes the duplicates first, so only the distinct masks become ints (:func:`mask_value`):
+    a scene's contact shapes share a few masks per topology.
+    """
+    masks = np.asarray(masks, dtype=np.uint64)
+    if masks.ndim == 1:
+        return sorted(mask_value(mask) for mask in np.unique(masks))
+    # Rows of words as single void items: one-dimensional unique, faster than unique(axis=0).
+    words = masks.shape[1]
+    rows = np.ascontiguousarray(masks).view(np.dtype((np.void, 8 * words))).ravel()
+    return sorted(mask_value(row) for row in np.unique(rows).view(np.uint64).reshape(-1, words))
 
 
 @wp.struct
@@ -46,7 +81,12 @@ class _SparseMassMatrixPlan:
     Parent indices are local joint indices, not body indices. Fixed joints have
     zero DOFs; physical DOFs are consecutive in input joint order. Mask bits use
     sparse coordinates, including every coordinate in an ancestor joint block.
-    The initial device path is bounded to 64 DOFs, not to a robot or task name.
+    A mask has ``mask_words`` ``uint64`` words, so a plan holds at most
+    ``64 * mask_words`` DOFs, a bound on the mask width, not on a robot or task
+    name. Steel's sparse path builds one word; the scene mode
+    (``solve_mode="scene"``) builds ``ceil(dof_count / 64)``. With one word the
+    masks are ``uint64`` arrays of one entry per coordinate or joint, as before
+    multi-word masks.
     """
 
     joint_parent: np.ndarray
@@ -68,9 +108,13 @@ class _SparseMassMatrixPlan:
     dof_joint: np.ndarray
     """Local joint owning each physical coordinate."""
     ancestor_mask: np.ndarray
-    """Sparse-coordinate ancestor support for each physical coordinate."""
+    """Sparse-coordinate ancestor support for each physical coordinate.
+
+    ``uint64`` ``[dof_count]``, or ``[dof_count, mask_words]`` with more than one word (word ``w``
+    holds coordinates ``64 w`` to ``64 w + 63``; :func:`mask_value` reads one mask as an int).
+    """
     joint_ancestor_mask: np.ndarray
-    """Sparse-coordinate endpoint support including fixed-joint endpoints."""
+    """Sparse-coordinate endpoint support including fixed-joint endpoints, per joint, words as ``ancestor_mask``."""
     column_offsets: np.ndarray
     """CSC offsets for each factor column's ancestor chain."""
     column_entries: np.ndarray
@@ -83,6 +127,8 @@ class _SparseMassMatrixPlan:
     """Offsets of off-diagonal factor entries at each dependency level."""
     factor_level_entries: np.ndarray
     """Packed off-diagonal entries grouped by their column's dependency level."""
+    mask_words: int = 1
+    """``uint64`` words of each support mask; the plan holds at most ``64 * mask_words`` DOFs."""
 
     @property
     def dof_count(self) -> int:
@@ -97,8 +143,15 @@ class _SparseMassMatrixPlan:
         return len(self.factor_level_offsets) - 1
 
     @classmethod
-    def build(cls, joint_parent, joint_dof_count) -> "_SparseMassMatrixPlan":
-        """Build a fill-free scalar pattern from a checked joint forest."""
+    def build(cls, joint_parent, joint_dof_count, *, mask_words: int = 1) -> "_SparseMassMatrixPlan":
+        """Build a fill-free scalar pattern from a checked joint forest, with support masks of ``mask_words`` words.
+
+        Raises :class:`ValueError` for an invalid forest, or one of more than ``64 * mask_words`` DOFs.
+        """
+        if int(mask_words) != mask_words or mask_words < 1:
+            raise ValueError(f"Sparse mass-matrix masks need at least one word, got mask_words={mask_words}")
+        words = int(mask_words)
+        dof_max = 64 * words
         parents = np.asarray(joint_parent)
         counts = np.asarray(joint_dof_count)
         if parents.ndim != 1 or counts.shape != parents.shape or not len(parents):
@@ -107,13 +160,13 @@ class _SparseMassMatrixPlan:
             raise ValueError("Joint parents and DOF counts must be integers")
         if np.any(parents < -1) or np.any(parents >= len(parents)) or np.any(counts < 0):
             raise ValueError("Invalid joint parent or negative DOF count")
-        if np.any(counts > 64):
-            raise ValueError("Sparse mass-matrix factors currently require 1 to 64 DOFs")
+        if np.any(counts > dof_max):
+            raise ValueError(f"Sparse mass-matrix factors currently require 1 to {dof_max} DOFs")
         parents = parents.astype(np.int32)
         counts = counts.astype(np.int32)
         n = int(np.sum(counts, dtype=np.int64))
-        if n < 1 or n > 64:
-            raise ValueError("Sparse mass-matrix factors currently require 1 to 64 DOFs")
+        if n < 1 or n > dof_max:
+            raise ValueError(f"Sparse mass-matrix factors currently require 1 to {dof_max} DOFs")
         children = [[] for _ in parents]
         roots = []
         for joint, parent in enumerate(parents):
@@ -187,8 +240,8 @@ class _SparseMassMatrixPlan:
             "entry_rows": np.asarray(entry_rows, dtype=np.int32),
             "lookup": lookup,
             "dof_joint": dof_joint,
-            "ancestor_mask": np.asarray([joint_masks[joint] for joint in dof_joint], dtype=np.uint64),
-            "joint_ancestor_mask": np.asarray(joint_masks, dtype=np.uint64),
+            "ancestor_mask": _mask_array([joint_masks[joint] for joint in dof_joint], words),
+            "joint_ancestor_mask": _mask_array(joint_masks, words),
             "column_offsets": np.asarray(column_offsets, dtype=np.int32),
             "column_entries": np.asarray(column_entries, dtype=np.int32),
             "factor_level_offsets": np.asarray(level_offsets, dtype=np.int32),
@@ -198,7 +251,7 @@ class _SparseMassMatrixPlan:
         }
         for value in values.values():
             value.setflags(write=False)
-        return cls(**values)
+        return cls(**values, mask_words=words)
 
     def endpoint_support(self, joint_a: int, joint_b: int = -1) -> np.ndarray:
         """Return sparse DOFs supporting either endpoint; -1 denotes the world."""
@@ -207,11 +260,15 @@ class _SparseMassMatrixPlan:
             if joint < -1 or joint >= len(self.joint_parent):
                 raise ValueError("Endpoint must be a local joint index or -1")
             if joint != -1:
-                mask |= int(self.joint_ancestor_mask[joint])
+                mask |= mask_value(self.joint_ancestor_mask[joint])
         return np.asarray([dof for dof in range(self.dof_count) if mask & (1 << dof)], dtype=np.int32)
 
     def to_device(self, device) -> _SparseMassMatrixIndices:
-        """Upload the topology once; all per-step values remain caller-owned."""
+        """Upload the topology once; all per-step values remain caller-owned.
+
+        ``ancestor_mask`` goes flat, ``[dof_count * mask_words]``: coordinate ``i``'s word ``w`` is
+        entry ``i * mask_words + w`` (with one word, entry ``i``).
+        """
         indices = _SparseMassMatrixIndices()
         indices.dof_count = self.dof_count
         indices.nonzero_count = self.nonzero_count
@@ -232,22 +289,29 @@ class _SparseMassMatrixPlan:
             "factor_level_entry_offsets",
             "factor_level_entries",
         ):
-            dtype = wp.uint64 if name == "ancestor_mask" else int
-            setattr(indices, name, wp.array(getattr(self, name), dtype=dtype, device=device))
+            value = getattr(self, name)
+            # A mask's words are consecutive: coordinate i's word w is entry i * mask_words + w.
+            dtype, value = (wp.uint64, value.reshape(-1)) if name == "ancestor_mask" else (int, value)
+            setattr(indices, name, wp.array(value, dtype=dtype, device=device))
         return indices
 
 
 @cache
-def _get_crba_sparse_factor_kernel(dof_count: int, nonzero_count: int, *, warps_per_block: int = 4) -> wp.Kernel:
+def _get_crba_sparse_factor_kernel(
+    dof_count: int, nonzero_count: int, *, warps_per_block: int = 4, mask_words: int = 1
+) -> wp.Kernel:
     """Assemble CRBA and produce packed Linv, one warp per articulation.
 
     Launch ``group_count * 32`` threads with ``warps_per_block * 32`` threads per
     block. All value arrays must be contiguous. A zero articulation update mask
     retains the inverse factor and status. Status is zero after a successful refresh,
     or one for a nonpositive/nonfinite pivot; no pivot floor is introduced.
+    ``mask_words`` is the plan's :attr:`_SparseMassMatrixPlan.mask_words`: the factor
+    reads no support mask, so it bounds only the size, at ``64 * mask_words`` DOFs
+    (Steel's 64 at one word); the kernel text does not depend on it.
     """
     n, nnz, warps = int(dof_count), int(nonzero_count), int(warps_per_block)
-    if not 1 <= n <= 64 or not n <= nnz <= n * (n + 1) // 2 or not 1 <= warps <= 32:
+    if not 1 <= n <= 64 * mask_words or not n <= nnz <= n * (n + 1) // 2 or not 1 <= warps <= 32:
         raise ValueError("Invalid sparse factor dimensions or warp count")
     snippet = f"""
     const int group = tid >> 5;
