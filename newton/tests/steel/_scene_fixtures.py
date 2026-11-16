@@ -420,39 +420,43 @@ def assert_rebound_tracks_steel(test, runs, velocities, label="", atol=0.0):
     np.testing.assert_allclose(scene, steel, rtol=REBOUND_RTOL, atol=atol, err_msg=label)
 
 
-DEFAULT_SNIPPET_SHA256 = {
+# scene_pgs: the default scene kernels' hashes
+
+DEFAULT_SNIPPET_SHA256: dict[str, str] = {
     "21/False/response": "ec4be98c37f0472d3732b02bc4e3c9c542166e637882bc8f65ed4fd79708a3b8",
-    "21/False/sides": "3472e3fd06815c582caacdc8e9c11d7a27b2bca438573d284650cd45f88d3dc0",
-    "21/False/serial": "19f13ca0d9afd9b90543634d6dd3930f21a28b5aa3ed236cfdc314c83f66bcdd",
-    "21/False/order_serial": "b85810ce312f07c8ce22fcc36dd44311ff04c9bfac736e64ea5470bf6a6dd63f",
-    "21/False/color": "5b5e441e6ffba3122bcab0a870f4394c34ae26d8054a5ff696a56f1474a2cdc8",
-    "21/False/block": "b930566f420010d999fc516dd28b7bffe77953eb928da8d0b60d39590551f6e7",
+    "21/False/sides": "a7044ccdd33238488b6fd7d3d80ed2b5c9dbd5bd99ddfb11c35c2b6377515717",
+    "21/False/serial": "9c3aac047231f15dffa59807e510a529fc2c196ab32a1cbbadb8bc1d898e332a",
+    "21/False/order_serial": "fc8156a5e4e43de031af4d866058adcbaa645ad12293021f4a425cbbda9a2187",
+    "21/False/color": "8b53b2a0f00b890131bbf9419492dcb3a882dfa63e1d3005a02484284c932b01",
+    "21/False/block": "7636af455fbe81e57f8619e6602875f59a10a1f683e74c5a9f0be1a653992f86",
     "30/False/response": "ec4be98c37f0472d3732b02bc4e3c9c542166e637882bc8f65ed4fd79708a3b8",
-    "30/False/sides": "f60d2a1a6dcebb7a83282b95ebf34e7bc2808fca3abc17ac4147e3592ae21496",
-    "30/False/serial": "1b5cadb4ca02e4c0c7d957e77f672e397fed97811771e3327249bfac421553a9",
-    "30/False/order_serial": "de5fabd12540f2083d1bde70d61b615425ca4a9da737bf972fa4104a07f8131c",
-    "30/False/color": "0f7d8bcc84e92f37295e2c101f051933db4863ab03aab44ad70a6f7b9137a489",
-    "30/False/block": "2a66874bc5f1d884f307738c3f18e16964fb225581ce616b0dd3316d450e5902",
+    "30/False/sides": "68ec644078a5661feea0878b20e8394d07fd0fd9fea63d17f87243a686dc0ad1",
+    "30/False/serial": "f4d618a884644c9c0a9d418cdafb752d5735be3384a847a8355c3b5d3f5dffd9",
+    "30/False/order_serial": "0d5575b2444afb13132e8f5247d62ebf879b365148239bd4bd8308a6657a1c0c",
+    "30/False/color": "2c87549e875242daa61b7178ecb650ba40661c53be2bc22d730702ee567edd5c",
+    "30/False/block": "6d9ceafd87a3f19cbf71922d8c3bc158a574e1221653b5ec487a60b6505e1d18",
     "12/True/response": "b581394683041fab33354fd795767bbba058196b8a3991b99c5d2fc114c16c0f",
-    "12/True/sides": "183448440bc0de3bf8ebe95957da53c6eae874ca9fa74eb9ec129986a5c461f7",
-    "12/True/serial": "0c3b53fe9273c039b67c7f5bbc3ec948d594b243cf015dc7ba53e961fb31a8c4",
-    "12/True/order_serial": "cd52f91369cc5df2ba2b87a0eb89fdfa2094f627be0a067dac627b88cf324a34",
-    "12/True/color": "74ee0dacb6774af1fb3846a4539a01245cdd3f7a47e1c518fdd203828758c57c",
-    "12/True/block": "0a7b59190104d3dad9c99f405642dafefc758ec4838140721109fd3ed1fc3a81",
+    "12/True/sides": "4e128591b2fcac2895457c6fe1b5c787db92957c63af195cd66c5542a0684cef",
+    "12/True/serial": "0257ef2aec4c98961bc43d60dffcb73f0c72d6bf6b06143da958817d42f24529",
+    "12/True/order_serial": "19d94921f78e705e844e317dd8908be3cd51f98cad9f49c74e84a5bc6cd3638b",
+    "12/True/color": "d4437d281a3de2a91e195d9f4beff49bd75f5503142ea9bcdc913ae5271f0b34",
+    "12/True/block": "78f3cc1d3386dfb85458d476837f8ba1065fa2a6b118e7b97fe57bcef73b9259",
     "sparse_contact/27": "2d4ce7c5be47447f2463a1a302e4e1e52efb65f0f215f00d60cc234d67179bff",
 }
 """SHA-256 of the native snippets of the default scene kernels and of Steel's sparse contact response snippet.
 
-A ``"<support>/<free_response>/<kernel>"`` key hashes one snippet of ``scene_kernel_snippets(support,
+A ``"<support>/<free_response>/<kernel>"`` key hashes one snippet of ``scene_pgs.scene_kernel_snippets(support,
 free_response=free_response, dof_max=dof_max)`` for the configurations (21, False, 27), (30, False, 27) and
 (12, True, 6): the group-table contact response (``response``) and the sweep snippets (``sides``, ``serial``,
 ``order_serial``, ``color``, ``block``) with ``"lanes8"`` sides and units, Steel-order sums and the ``"BA"`` order
-oracle. ``sparse_contact/27`` hashes the snippet of ``_get_sparse_contact_response_kernel(27)``, Steel's own text,
-and equals that entry of :data:`STEEL_TEXT_SHA256`.
+oracle. ``sparse_contact/27`` hashes ``scene_rows._response_snippet(27, specialized=True)``, which is the snippet of
+``_get_sparse_contact_response_kernel(27)``, Steel's own text, and equals that entry of :data:`STEEL_TEXT_SHA256`.
 
-The scene entries are the scene kernels' text from before it was re-derived from Steel's current text.
-``test_scene_tripwire.test_scene_kernels_are_pinned`` checks them once the scene sweep exists, and the entries are
-re-recorded then, on purpose: a change to a default scene kernel's source must change this table.
+Recorded from ``scene_pgs`` as it re-derived the sweep from Steel's current text. Against the text before, the
+fifteen sweep entries moved and nothing else: the line-number citations in the snippets' comments became names, and
+the thread loop's tree macro is ``STEEL_SCENE_TREE_LEVEL``; the code of every default snippet is unchanged. The
+``response`` entries and ``sparse_contact/27`` did not move. ``test_scene_tripwire.test_scene_kernels_are_pinned``
+checks the table: a change to a default scene kernel's source must change it on purpose.
 """
 
 

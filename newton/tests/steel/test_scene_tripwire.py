@@ -17,11 +17,13 @@ from newton._src.solvers.steel import (
     contact_compliance,
     contact_torsion,
     friction,
+    scene_pgs,
+    scene_rows,
     solver_steel,
     sparse_contact,
     sparse_mass_matrix,
 )
-from newton.tests.steel._scene_fixtures import STEEL_TEXT_SHA256
+from newton.tests.steel._scene_fixtures import DEFAULT_SNIPPET_SHA256, STEEL_TEXT_SHA256
 
 MF_GS_SHAPE = (128, 64, 27)
 """``(max_constraints, free_body_constraint_max, max_world_dofs)`` of the pinned fused matrix-free kernels: the
@@ -39,6 +41,11 @@ TORSION_DOFS = 12
 FACTOR_SHAPE = (27, 243, 4)
 """``(dof_count, nonzero_count, warps_per_block)`` of the pinned sparse mass-factor kernel: the factor plan of one
 ``nv_humanoid.xml`` humanoid and Steel's default warps per block."""
+
+SCENE_CONFIGURATIONS = ((21, False, 27), (30, False, 27), (12, True, 6))
+"""``(support, free_response, dof_max)`` of the pinned default scene kernels: rows of 21 entries (two humanoid
+articulations together) and 30 entries (the widest Steel-order sums), each with groups of one humanoid's 27 DOFs, and a
+scene of free bodies only (12 entries, a free-body prefix, groups of 6 DOFs)."""
 
 
 def _sha256(text: str) -> str:
@@ -105,12 +112,36 @@ def steel_kernel_hashes() -> dict[str, str]:
     return {key: _sha256(text) for key, text in steel_kernel_texts().items()}
 
 
+def scene_kernel_texts() -> dict[str, str]:
+    """The default scene kernels' texts that :data:`DEFAULT_SNIPPET_SHA256` pins, by key.
+
+    ``"<support>/<free_response>/<kernel>"`` for each snippet of ``scene_pgs.scene_kernel_snippets`` at each of
+    :data:`SCENE_CONFIGURATIONS`, and ``sparse_contact/27``, the scene's response template at one word specialised on
+    one factor plan, which is Steel's own contact response.
+    """
+    texts = {}
+    for support, free_response, dof_max in SCENE_CONFIGURATIONS:
+        snippets = scene_pgs.scene_kernel_snippets(support, free_response=free_response, dof_max=dof_max)
+        texts.update({f"{support}/{free_response}/{key}": snippet for key, snippet in snippets.items()})
+    texts[f"sparse_contact/{SPARSE_CONTACT_DOFS}"] = scene_rows._response_snippet(SPARSE_CONTACT_DOFS, specialized=True)
+    return texts
+
+
+def scene_kernel_hashes() -> dict[str, str]:
+    """SHA-256 of each text of :func:`scene_kernel_texts`."""
+    return {key: _sha256(text) for key, text in scene_kernel_texts().items()}
+
+
 def record() -> None:
-    """Print :data:`STEEL_TEXT_SHA256` as recorded from the current text, ready to paste."""
-    print("STEEL_TEXT_SHA256: dict[str, str] = {")
-    for key, digest in steel_kernel_hashes().items():
-        print(f'    "{key}": "{digest}",')
-    print("}")
+    """Print :data:`STEEL_TEXT_SHA256` and :data:`DEFAULT_SNIPPET_SHA256` as recorded from the current text."""
+    for name, hashes in (
+        ("STEEL_TEXT_SHA256", steel_kernel_hashes()),
+        ("DEFAULT_SNIPPET_SHA256", scene_kernel_hashes()),
+    ):
+        print(f"{name}: dict[str, str] = {{")
+        for key, digest in hashes.items():
+            print(f'    "{key}": "{digest}",')
+        print("}")
 
 
 class TestSteelSceneTripwire(unittest.TestCase):
@@ -127,9 +158,26 @@ class TestSteelSceneTripwire(unittest.TestCase):
             "(python -m newton.tests.steel.test_scene_tripwire --record) with the reason in the same commit",
         )
 
-    @unittest.skip("the scene kernels do not exist yet")
     def test_scene_kernels_are_pinned(self):
-        """The default scene kernels' text is the text recorded in ``DEFAULT_SNIPPET_SHA256``."""
+        """The default scene kernels' text is the text recorded in ``DEFAULT_SNIPPET_SHA256``.
+
+        The scene's own text with every feature off, not Steel's: the guards of ``test_scene_pgs`` compare the laws
+        it restates with Steel's text, and ``sparse_contact/27`` equals Steel's pin of its contact response.
+        """
+        hashes = scene_kernel_hashes()
+        self.assertEqual(len(hashes), 19)
+        changed = sorted(
+            key
+            for key in hashes.keys() | DEFAULT_SNIPPET_SHA256.keys()
+            if hashes.get(key) != DEFAULT_SNIPPET_SHA256.get(key)
+        )
+        self.assertEqual(
+            changed,
+            [],
+            "the default scene kernels' text differs from DEFAULT_SNIPPET_SHA256; if the change is intended, re-record "
+            "the table (python -m newton.tests.steel.test_scene_tripwire --record) with the reason in the same commit",
+        )
+        self.assertEqual(DEFAULT_SNIPPET_SHA256["sparse_contact/27"], STEEL_TEXT_SHA256["sparse_contact/27"])
 
 
 if __name__ == "__main__":
