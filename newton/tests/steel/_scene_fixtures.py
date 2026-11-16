@@ -576,3 +576,49 @@ def _heap_worlds(device, worlds=2, nx=6, ny=6, nz=3, pitch=0.042, half=0.02) -> 
     # Sizes the solver's contact scratch, so it is set before the solver is built.
     model.rigid_contact_max = CONTACT_MAX
     return model
+
+# scene_rows: the internal-unit family hashes
+
+LIMIT_ROWS_SNIPPET_SHA256 = {
+    1: "1be38e441e3d224d07a1245b2f0e6976e57ee2a96da629a10911a38bb6f185ed",
+    2: "8d8ab3bc6edfcbcbe8eb9565f56fd7a0e0cad32dc62a235ef20c1e5f325187c9",
+}
+"""SHA-256 of ``scene_rows.sparse_joint_limit_rows_snippet(mask_words)``, the joint-limit family's expansion of the
+internal-row template. The one-word hash is Steel's own builder's text, ``STEEL_TEXT_SHA256["joint_limit_rows/1"]``."""
+
+FRICTION_ROWS_SNIPPET_SHA256 = {
+    1: "622fc7e13c428c745fac15579c9c80eeb5893f2fd804c2b7769247c06d0676a5",
+    2: "3bcdad2341a30a3ec1c1da6bf06f31ae6245161edef489fbc286c7992970fa03",
+}
+"""SHA-256 of ``scene_rows.sparse_joint_friction_rows_snippet(mask_words)``, the joint-friction family's expansion."""
+
+DRIVE_ROWS_SNIPPET_SHA256 = {
+    1: "6949cfb63e42a400b8b4540e3ac89e26049a00b6cf9d2b72ae1fc11ceee9fb8f",
+    2: "0f579a2623470681cd25bbbfcd7055a77f7315355f4f09991ace11e6ec5344b5",
+}
+"""SHA-256 of ``scene_rows.sparse_drive_rows_snippet(mask_words)``, the drive family's expansion."""
+
+FUSED_DRIVE_ROWS_SNIPPET_SHA256 = {
+    1: "785aaa59cd24c15ff8de1154ca2beea10a45566291e4ac344a82959cebcdcf63",
+    2: "e5139dc4b643912976486aae6e1eca4d68bf31a96ad7091598392db07f2b7fbd",
+}
+"""SHA-256 of ``scene_rows.sparse_drive_rows_snippet(mask_words, fused=True)``, the drive family's expansion with the
+fused velocity clamp's row tail."""
+
+VELOCITY_LIMIT_ROWS_SNIPPET_SHA256 = {
+    1: "ee33027949e01772d12908033acc719d42d8e3748a29cc1a1da6e40bcbde023c",
+    2: "749782aa3890db926c1bd6acd1962c2455e944d7520bf88043e6fc96797b1238",
+}
+"""SHA-256 of ``scene_rows.sparse_joint_velocity_limit_rows_snippet(mask_words)``, the velocity-limit family's
+expansion."""
+
+MIMIC_ROWS_SNIPPET_SHA256 = {
+    1: "6fc618e56aa17820d621bf9b152f19aba4cd8832ff03f270da7ec480ead8d51a",
+    2: "90530fb5b90c6318a510756d896910f7870a6447fbda9be6dfaa9e3ca66459ab",
+}
+"""SHA-256 of ``scene_rows.sparse_mimic_rows_snippet(mask_words)``, the mimic family's expansion with its support-mask
+load.
+
+The six tables pin the row families' builder text. All six were re-recorded when the template was re-cut from Steel's
+current joint-limit builder, whose reservation comment names ``reserve_world_row_slots``; that comment is the only
+change to every family's text. A change to a family's builder must change its table on purpose."""
