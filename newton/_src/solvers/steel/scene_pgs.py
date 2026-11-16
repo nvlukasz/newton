@@ -1109,18 +1109,18 @@ def _thread_loop(features: SceneFeatures) -> str:
                     crosses[lane] = cross_low + cross_high;
                 }
                 // Levels 8, 4, 2, 1, each with a constant trip count so the arrays stay in registers.
-                #define STEEL_SCENE_TREE_LEVEL(SHIFT) \\
+                #define SCENE_TREE_LEVEL(SHIFT) \\
                     _Pragma("unroll") \\
                     for (int lane = 0; lane < SHIFT; ++lane) { \\
                         dots[lane] += dots[lane + SHIFT]; \\
                         sibling_dots[lane] += sibling_dots[lane + SHIFT]; \\
                         crosses[lane] += crosses[lane + SHIFT]; \\
                     }
-                STEEL_SCENE_TREE_LEVEL(8)
-                STEEL_SCENE_TREE_LEVEL(4)
-                STEEL_SCENE_TREE_LEVEL(2)
-                STEEL_SCENE_TREE_LEVEL(1)
-                #undef STEEL_SCENE_TREE_LEVEL
+                SCENE_TREE_LEVEL(8)
+                SCENE_TREE_LEVEL(4)
+                SCENE_TREE_LEVEL(2)
+                SCENE_TREE_LEVEL(1)
+                #undef SCENE_TREE_LEVEL
                 dot = dots[0];
                 sibling_dot = sibling_dots[0];
                 cross = crosses[0];
@@ -3966,10 +3966,10 @@ _MIRROR_ROWS = 64
 _MIRROR_DOFS = 27
 """Row capacity and DOFs of the Steel kernels whose text the guards read: their laws do not depend on them."""
 
-_FRICTION_LAW = {"scene_begin": "if (G_nn >= 1.0e-20f)", "scene_end": "lambda[0] = new_lambda_n;"}
+_SCENE_FRICTION_LAW = {"scene_begin": "if (G_nn >= 1.0e-20f)", "scene_end": "lambda[0] = new_lambda_n;"}
 """The region of the scene's friction laws: their ``if (G_nn >= 1.0e-20f)``, before the new impulses are returned."""
 
-_STEEL_FRICTION_LAW = {"steel_begin": "if (G_nn >= 1.0e-20f)", "steel_end": "d_n_total = new_lambda_n - old_lambda_n;"}
+_SOURCE_FRICTION_LAW = {"steel_begin": "if (G_nn >= 1.0e-20f)", "steel_end": "d_n_total = new_lambda_n - old_lambda_n;"}
 """The region of Steel's friction laws: their ``if (G_nn >= 1.0e-20f)``, before the changes are applied."""
 
 _TORSION_LAW = frozenset(
@@ -4005,7 +4005,7 @@ _SCENE_TORSION_NAMES = {
     "torsion_bound": "bound",
     "new_impulse": "next",
 }
-_STEEL_TORSION_NAMES = {
+_SOURCE_TORSION_NAMES = {
     "s_lam_dense[$row]": "impulse[$row]",
     "torsion_row_radius.data[$row]": "spin_radius",
     "world_row_mu.data[$row]": "spin_mu",
@@ -4021,21 +4021,21 @@ _MIRRORS = {
     "coulomb_newton": _Mirror(
         lambda: _FRICTION_MODE_COULOMB_NEWTON_CUDA,
         _steel_text("_MF_COULOMB_NEWTON_FRICTION_SOURCE"),
-        **_FRICTION_LAW,
-        **_STEEL_FRICTION_LAW,
+        **_SCENE_FRICTION_LAW,
+        **_SOURCE_FRICTION_LAW,
         drop=frozenset({"alpha"}),
     ),
     "bisection_free": _Mirror(
         lambda: _FRICTION_MODE_BISECTION_CUDA,
         _steel_text("_MF_BISECTION_FRICTION_SOURCE"),
-        **_FRICTION_LAW,
-        **_STEEL_FRICTION_LAW,
+        **_SCENE_FRICTION_LAW,
+        **_SOURCE_FRICTION_LAW,
     ),
     "bisection_dense": _Mirror(
         lambda: _FRICTION_MODE_BISECTION_CUDA,
         _steel_text("_DENSE_BISECTION_FRICTION_SOURCE"),
-        **_FRICTION_LAW,
-        **_STEEL_FRICTION_LAW,
+        **_SCENE_FRICTION_LAW,
+        **_SOURCE_FRICTION_LAW,
     ),
     "desaxce": _Mirror(
         lambda: _FRICTION_MODE_DESAXCE_CUDA,
@@ -4059,7 +4059,7 @@ _MIRRORS = {
             partial(lambda group: _torsion_budget(group=group) + _TORSION_UPDATE_CUDA, group),
             partial(torque_sweep_source, _MIRROR_DOFS, linked=linked),
             scene_names=_SCENE_TORSION_NAMES,
-            steel_names=_STEEL_TORSION_NAMES,
+            steel_names=_SOURCE_TORSION_NAMES,
             keep=_TORSION_LAW,
         )
         for group in (False, True)

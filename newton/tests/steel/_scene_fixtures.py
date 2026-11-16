@@ -425,22 +425,22 @@ def assert_rebound_tracks_steel(test, runs, velocities, label="", atol=0.0):
 DEFAULT_SNIPPET_SHA256: dict[str, str] = {
     "21/False/response": "ec4be98c37f0472d3732b02bc4e3c9c542166e637882bc8f65ed4fd79708a3b8",
     "21/False/sides": "a7044ccdd33238488b6fd7d3d80ed2b5c9dbd5bd99ddfb11c35c2b6377515717",
-    "21/False/serial": "9c3aac047231f15dffa59807e510a529fc2c196ab32a1cbbadb8bc1d898e332a",
-    "21/False/order_serial": "fc8156a5e4e43de031af4d866058adcbaa645ad12293021f4a425cbbda9a2187",
+    "21/False/serial": "f6f99bb7535380233ef006f8fd8b4f41d6cbac50ec5af4113fa960ff7b3ed6c7",
+    "21/False/order_serial": "ee903605980b90591544724b91a7dfe4f7f876c136a0641907c5b0a78cfff345",
     "21/False/color": "8b53b2a0f00b890131bbf9419492dcb3a882dfa63e1d3005a02484284c932b01",
-    "21/False/block": "7636af455fbe81e57f8619e6602875f59a10a1f683e74c5a9f0be1a653992f86",
+    "21/False/block": "df41b9e6aeff7ea08b62d41f1d17325bf092f6eb88326db31f6982004d38d7e1",
     "30/False/response": "ec4be98c37f0472d3732b02bc4e3c9c542166e637882bc8f65ed4fd79708a3b8",
     "30/False/sides": "68ec644078a5661feea0878b20e8394d07fd0fd9fea63d17f87243a686dc0ad1",
-    "30/False/serial": "f4d618a884644c9c0a9d418cdafb752d5735be3384a847a8355c3b5d3f5dffd9",
-    "30/False/order_serial": "0d5575b2444afb13132e8f5247d62ebf879b365148239bd4bd8308a6657a1c0c",
+    "30/False/serial": "3dd994d6e4e1015d74eaa70ac25973debb01e8a3b3f885f6c49400a77097fa26",
+    "30/False/order_serial": "1890a16108be081847e6d4125c2c029c70a72e4ec8887be48b6119d52a843a48",
     "30/False/color": "2c87549e875242daa61b7178ecb650ba40661c53be2bc22d730702ee567edd5c",
-    "30/False/block": "6d9ceafd87a3f19cbf71922d8c3bc158a574e1221653b5ec487a60b6505e1d18",
+    "30/False/block": "a40816654e1e7e7700256d3cf62fcf7b15562093f2da8c5a51dce5061896899e",
     "12/True/response": "b581394683041fab33354fd795767bbba058196b8a3991b99c5d2fc114c16c0f",
     "12/True/sides": "4e128591b2fcac2895457c6fe1b5c787db92957c63af195cd66c5542a0684cef",
-    "12/True/serial": "0257ef2aec4c98961bc43d60dffcb73f0c72d6bf6b06143da958817d42f24529",
-    "12/True/order_serial": "19d94921f78e705e844e317dd8908be3cd51f98cad9f49c74e84a5bc6cd3638b",
+    "12/True/serial": "240f01468759b6ed31e151ef928291477b7dc5026083dd48ea10b9e3b8c9625d",
+    "12/True/order_serial": "2aad0922add4631bb18a30cbce109cf3993be43a74b1b2bddfb962cc306b79da",
     "12/True/color": "d4437d281a3de2a91e195d9f4beff49bd75f5503142ea9bcdc913ae5271f0b34",
-    "12/True/block": "78f3cc1d3386dfb85458d476837f8ba1065fa2a6b118e7b97fe57bcef73b9259",
+    "12/True/block": "fe909a2cdbdbaa909d216842cb6b823729f530ea45a9fea017e709ac1d8781f6",
     "sparse_contact/27": "2d4ce7c5be47447f2463a1a302e4e1e52efb65f0f215f00d60cc234d67179bff",
 }
 """SHA-256 of the native snippets of the default scene kernels and of Steel's sparse contact response snippet.
@@ -454,9 +454,12 @@ oracle. ``sparse_contact/27`` hashes ``scene_rows._response_snippet(27, speciali
 
 Recorded from ``scene_pgs`` as it re-derived the sweep from Steel's current text. Against the text before, the
 fifteen sweep entries moved and nothing else: the line-number citations in the snippets' comments became names, and
-the thread loop's tree macro is ``STEEL_SCENE_TREE_LEVEL``; the code of every default snippet is unchanged. The
-``response`` entries and ``sparse_contact/27`` did not move. ``test_scene_tripwire.test_scene_kernels_are_pinned``
-checks the table: a change to a default scene kernel's source must change it on purpose.
+the thread loop's tree macro was renamed; the code of every default snippet is unchanged. The ``response`` entries and
+``sparse_contact/27`` did not move. The tree macro is now ``SCENE_TREE_LEVEL``, so that no name of the solver package
+holds ``STEEL_`` (``test_options.test_solver_reads_no_environment_variables``): the snippets with the one-thread loop
+(``serial``, ``order_serial`` and ``block`` of each configuration) were re-recorded for that rename alone.
+``test_scene_tripwire.test_scene_kernels_are_pinned`` checks the table: a change to a default scene kernel's source
+must change it on purpose.
 """
 
 
