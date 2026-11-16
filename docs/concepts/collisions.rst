@@ -755,6 +755,34 @@ Broad Phase and Shape Compatibility
      - Sweep-and-prune AABB broad phase. O(N log N), better for larger scenes with spatial coherence.
    * - **EXPLICIT**
      - Uses precomputed shape pairs (default). Combines static pair efficiency with advanced contact algorithms.
+   * - **AGGREGATE**
+     - Experimental two-level broad phase for many articulations in one world: a uniform grid (or SAP) over
+       one box per aggregate (an articulation, or a chunk of about 32 members of a long one, by default), then
+       the member pairs of overlapping aggregates, each aggregate's own pairs and its infinite planes and
+       heightfields (:class:`~geometry.BroadPhaseAggregate`). Its pair buffer defaults to 12 pairs per colliding
+       shape; pairs past it are dropped and reported by :meth:`~CollisionPipeline.broad_phase_statistics`, which
+       also warns if a box outgrew the grid's cell, and under ``verify_buffers`` (the default) the device prints
+       both. With ``deterministic=True`` the pairs are also
+       written in a deterministic order. Finite static shapes go to a static grid built at construction;
+       call :meth:`~CollisionPipeline.refresh_static_shapes` after moving them. Models with body variants are
+       not supported.
+
+The ``"aggregate"`` mode keeps the uniform grid only where it should pay and otherwise sweeps the aggregate
+boxes with SAP. By default :meth:`~geometry.BroadPhaseAggregate.from_model` builds SAP when fewer than 2,048
+worlds hold aggregates and there are fewer than 32,768 aggregates (the grid's main stage costs about 0.1-0.25 ms
+at every size); and, in any number of worlds, when one long aggregate would make the grid's cells too large
+(with a warning), or when the aggregates crowd the cells at the initial pose: more than 90 on average share an
+aggregate's cell, itself included. The thresholds are judgments bracketed by scenes measured on an NVIDIA L40
+at their initial pose, not measured optima. In one world, piled humanoids favour the grid
+from about 28,400 aggregates while a sparse crowd favours SAP up to at least 65,536 (24 % and 8 % slower on the
+grid at 32,768 and 65,536; the latter within the 10 % the grid default was adopted under). In worlds of one
+humanoid, SAP sorts every world's segment, 0.289 ms of main stage at 4,096 worlds and 4.29 ms at 65,536 against
+the grid's 0.15 ms; nothing was measured between 1 and 4,096 worlds. The grid-side scenes read an occupancy of
+at most 18.9 and the chains of long articulations at least 428, with nothing measured between; the chains fall
+below the size threshold too, so the occupancy guard decides only for crowded scenes above it or in many worlds.
+:meth:`~geometry.BroadPhaseAggregate.statistics` reports the outcome as ``main_level`` and ``main_fallback``
+(``"size"``, ``"cell"`` or ``"occupancy"``), with ``aggregate_worlds`` and ``grid_occupancy``. An explicit
+``main="grid"`` or ``main="sap"`` in :meth:`~geometry.BroadPhaseAggregate.from_model` skips these rules.
 
 :meth:`ModelBuilder.finalize` computes :attr:`Model.shape_contact_pair_count`
 without enumerating pairs. The explicit pair array,
@@ -2913,6 +2941,15 @@ All broad phase classes expose a ``launch`` method that writes candidate pairs
        and ``sort_type`` tuning parameters.
    * - :class:`~geometry.BroadPhaseExplicit`
      - Tests precomputed ``shape_pairs`` against AABBs. No constructor arguments.
+   * - :class:`~geometry.BroadPhaseAggregate`
+     - Experimental two-level broad phase: one union box per aggregate (an
+       articulation, or a chunk of a long one) binned in a uniform grid (or swept
+       by SAP, ``main="sap"``), then member pairs per overlapping aggregate pair,
+       self pairs,
+       and infinite planes and heightfields, and finite static shapes through a hashed static grid
+       binned by ``build_static`` outside the collide step. Built with
+       ``BroadPhaseAggregate.from_model(model)``; ``ordered=True`` writes the pairs in a deterministic
+       order.
 
 When :class:`~CollisionPipeline` uses the ``"explicit"`` broad-phase mode, the
 explicit pair array is fixed for the lifetime of the pipeline. Its initial pair
@@ -3044,7 +3081,9 @@ See Also
 - :meth:`~CollisionPipeline.contacts` - Create a compatible contacts buffer
 - :meth:`~CollisionPipeline.collide` - Run collision detection
 - :class:`~CollisionPipeline` - Collision pipeline with configurable broad phase
-- ``broad_phase`` - Broad phase algorithm: ``"nxn"``, ``"sap"``, or ``"explicit"``
+- ``broad_phase`` - Broad phase algorithm: ``"nxn"``, ``"sap"``, ``"explicit"``, or ``"aggregate"``
+- :meth:`~CollisionPipeline.broad_phase_statistics` - Read the broad phase's pair count, capacity and overflow
+- :meth:`~CollisionPipeline.refresh_static_shapes` - Rebin moved static shapes for the ``"aggregate"`` broad phase
 - :class:`~Contacts` - Contact data container
 - :class:`~GeoType` - Shape geometry types
 - :class:`~ModelBuilder.ShapeConfig` - Shape configuration options
@@ -3053,7 +3092,7 @@ See Also
 - :meth:`~Mesh.build_sdf` - Precompute SDF for a mesh
 - :meth:`~ModelBuilder.approximate_meshes` - Replace mesh collision shapes with simpler geometry
 - :meth:`~ModelBuilder.replicate` - Stamp out multi-world copies of a template builder
-- :class:`~geometry.BroadPhaseAllPairs`, :class:`~geometry.BroadPhaseSAP`, :class:`~geometry.BroadPhaseExplicit` - Broad phase implementations
+- :class:`~geometry.BroadPhaseAllPairs`, :class:`~geometry.BroadPhaseSAP`, :class:`~geometry.BroadPhaseExplicit`, :class:`~geometry.BroadPhaseAggregate` - Broad phase implementations
 - :class:`~geometry.NarrowPhase` - Narrow phase contact generation
 
 **Model attributes:**

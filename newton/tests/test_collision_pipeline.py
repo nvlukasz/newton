@@ -4,6 +4,7 @@
 import gc
 import itertools
 import math
+import sys
 import unittest
 import warnings
 from collections import Counter
@@ -16,7 +17,8 @@ import warp.examples
 
 import newton
 from newton import GeoType
-from newton._src.geometry import broad_phase_nxn, create_mesh_terrain
+from newton._src.geometry import broad_phase_aggregate, broad_phase_nxn, create_mesh_terrain
+from newton._src.geometry.broad_phase_aggregate import SHAPE_PAIRS_PER_SHAPE, infer_shape_aggregates
 from newton._src.geometry.flags import MeshProperties, MeshSignMethod, ParticleFlags, ShapeFlags
 from newton._src.geometry.kernels import (
     create_soft_contacts,
@@ -58,14 +60,16 @@ from newton._src.sim.collide import (
     _compute_per_world_mask_pair_max,
     _compute_per_world_shape_pairs_max,
     _count_soft_particle_rigid_contact_pairs,
+    _default_aggregate_shape_pairs_max,
     _estimate_rigid_contact_max,
     write_contact,
 )
 from newton._src.solvers.coupled.model_view import ModelView
 from newton._src.utils.heightfield import HeightfieldData
 from newton.examples import test_body_state
-from newton.geometry import BroadPhaseAllPairs, BroadPhaseExplicit, NarrowPhase
+from newton.geometry import BroadPhaseAggregate, BroadPhaseAllPairs, BroadPhaseExplicit, NarrowPhase
 from newton.tests.unittest_utils import (
+    StdOutCapture,
     add_function_test,
     configure_sdf_for_collision_shapes,
     get_cuda_test_devices,
@@ -8015,6 +8019,763 @@ add_function_test(
     test_plane_convex_support,
     devices=get_test_devices(),
 )
+
+
+class TestCollisionPipelineAggregate(unittest.TestCase):
+    pass
+
+
+def _aggregate_humanoids(
+    device, *, worlds: int, per_world: int, spacing: float, static_boxes: bool = False
+) -> newton.Model:
+    """``worlds`` copies of ``per_world`` ``nv_humanoid.xml`` humanoids lying on a ground plane.
+
+    Each humanoid lies on its right side, its root turned 90 degrees about x at
+    z = 0.375 m, and the humanoids of a world sit ``spacing`` [m] apart on x, so
+    that close neighbours overlap. Every humanoid is one aggregate. With
+    ``static_boxes``, each world also has a static box against each humanoid,
+    and one world -1 box lies against the first humanoids.
+    """
+    humanoid = newton.ModelBuilder(up_axis=newton.Axis.Z)
+    humanoid.rigid_gap = 0.005
+    root = wp.transform(wp.vec3(0.0, 0.0, 0.375), wp.quat_from_axis_angle(wp.vec3(1.0, 0.0, 0.0), 0.5 * np.pi))
+    humanoid.add_mjcf(
+        newton.examples.get_asset("nv_humanoid.xml"), xform=root, ignore_names=["floor", "ground"], up_axis="Z"
+    )
+    template = newton.ModelBuilder(up_axis=newton.Axis.Z)
+    template.rigid_gap = 0.005
+    template.replicate(
+        humanoid,
+        per_world,
+        separate_worlds=False,
+        xforms=[wp.transform(wp.vec3(i * spacing, 0.0, 0.0), wp.quat_identity()) for i in range(per_world)],
+    )
+    if static_boxes:
+        for i in range(per_world):
+            xform = wp.transform(wp.vec3(i * spacing, 0.5, 0.15), wp.quat_identity())
+            template.add_shape_box(-1, xform=xform, hx=0.1, hy=0.1, hz=0.15)
+    builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
+    builder.rigid_gap = 0.005
+    builder.replicate(template, worlds)
+    if static_boxes:
+        builder.add_shape_box(
+            -1, xform=wp.transform(wp.vec3(0.0, -0.5, 0.15), wp.quat_identity()), hx=0.1, hy=0.1, hz=0.15
+        )
+    builder.add_ground_plane()
+    return builder.finalize(device=device)
+
+
+def _aggregate_state(model: newton.Model) -> newton.State:
+    state = model.state()
+    newton.eval_fk(model, model.joint_q, model.joint_qd, state)
+    return state
+
+
+def _published_pairs(pipeline: newton.CollisionPipeline) -> set[tuple[int, int]]:
+    """The candidate pairs the last :meth:`~newton.CollisionPipeline.collide` published."""
+    count = int(pipeline.broad_phase_pair_count.numpy()[0])
+    return {(int(a), int(b)) for a, b in pipeline.broad_phase_shape_pairs.numpy()[:count]}
+
+
+def _collide_pairs(pipeline: newton.CollisionPipeline, state: newton.State):
+    """Collide once into fresh contacts; return them and the published pair set."""
+    contacts = pipeline.contacts()
+    pipeline.collide(state, contacts)
+    return contacts, _published_pairs(pipeline)
+
+
+def _nxn_pairs(model: newton.Model, state: newton.State) -> set[tuple[int, int]]:
+    return _collide_pairs(newton.CollisionPipeline(model, broad_phase="nxn"), state)[1]
+
+
+def _device_output(launch) -> str:
+    """Run ``launch`` and return what the device printed to stdout meanwhile.
+
+    The capture redirects the process's file descriptor 1, which C ``printf``
+    writes, also inside the test runner's own capture (which swaps
+    ``sys.stdout`` for a file of its own).
+    """
+    wp.synchronize()
+    outer = sys.stdout
+    sys.stdout = sys.__stdout__
+    try:
+        capture = StdOutCapture()
+        capture.begin()
+        try:
+            launch()
+            wp.synchronize()
+        finally:
+            output = capture.end()
+    finally:
+        sys.stdout = outer
+    # Lazily loaded modules announce themselves; CheckOutput lets those lines through too.
+    return "".join(
+        line
+        for line in output.splitlines(keepends=True)
+        if not (line.startswith("Module") and "load on device" in line)
+    )
+
+
+_AGGREGATE_LEVELS = (({}, "sap"), ({"grid_min_aggregates": 0}, "grid"))
+"""Knobs and the main level they give the small test scenes: by default the size rule's sweep, relaxed the grid."""
+
+
+def _aggregate_pipeline(test, model: newton.Model, knobs: dict, level: str, **kwargs) -> newton.CollisionPipeline:
+    """An ``"aggregate"`` pipeline built under ``knobs``, checked to run the ``level`` main level."""
+    with mock.patch.dict(broad_phase_aggregate._KNOBS, knobs):
+        pipeline = newton.CollisionPipeline(model, broad_phase="aggregate", **kwargs)
+    test.assertEqual(pipeline.broad_phase.statistics()["main_level"], level)
+    return pipeline
+
+
+_CONTACT_FIELDS = (
+    "rigid_contact_shape0",
+    "rigid_contact_shape1",
+    "rigid_contact_point0",
+    "rigid_contact_point1",
+    "rigid_contact_normal",
+)
+
+
+def test_aggregate_mode_constructs_and_dispatches(test, device):
+    """The aggregate mode builds its broad phase, sizes its pair buffer per colliding shape and finds nxn's pairs.
+
+    Six humanoids in two worlds are too few for the grid by default: the
+    size rule builds the sweep. With the rule relaxed, the grid.
+    """
+    model = _aggregate_humanoids(device, worlds=2, per_world=3, spacing=0.4)
+    state = _aggregate_state(model)
+    nxn_pairs = _nxn_pairs(model, state)
+    # The scene has pairs across humanoids and with the ground, so both the
+    # expansion and the plane pass are compared.
+    aggregate = infer_shape_aggregates(model)
+    test.assertTrue(any(aggregate[a] >= 0 and aggregate[b] >= 0 and aggregate[a] != aggregate[b] for a, b in nxn_pairs))
+    test.assertTrue(any(aggregate[a] < 0 or aggregate[b] < 0 for a, b in nxn_pairs))
+    for knobs, level, fallback in (({}, "sap", "size"), ({"grid_min_aggregates": 0}, "grid", "")):
+        with test.subTest(knobs=knobs):
+            with mock.patch.dict(broad_phase_aggregate._KNOBS, knobs):
+                pipeline = newton.CollisionPipeline(model, broad_phase="aggregate")
+            test.assertEqual(pipeline.broad_phase_mode, "aggregate")
+            test.assertIsInstance(pipeline.broad_phase, BroadPhaseAggregate)
+            stats = pipeline.broad_phase.statistics()
+            test.assertEqual(
+                (stats["main_level"], stats["main_fallback"], stats["aggregates"], stats["aggregate_worlds"]),
+                (level, fallback, 6, 2),
+            )
+            test.assertEqual(pipeline.shape_pairs_max, _default_aggregate_shape_pairs_max(model))
+            colliding = int(np.count_nonzero(model.shape_flags.numpy() & int(ShapeFlags.COLLIDE_SHAPES)))
+            test.assertEqual(pipeline.shape_pairs_max, SHAPE_PAIRS_PER_SHAPE * colliding)
+            test.assertLess(pipeline.shape_pairs_max, _compute_per_world_shape_pairs_max(model))
+            test.assertEqual(_collide_pairs(pipeline, state)[1], nxn_pairs)
+
+
+def test_aggregate_mode_contacts_match_sap_deterministic(test, device):
+    """With deterministic contacts, the aggregate mode, on either main level, and the sap mode give bitwise-equal
+    contacts."""
+    model = _aggregate_humanoids(device, worlds=2, per_world=3, spacing=0.4)
+    state = _aggregate_state(model)
+
+    def deterministic_contacts(pipeline):
+        contacts, _ = _collide_pairs(pipeline, state)
+        count = int(contacts.rigid_contact_count.numpy()[0])
+        return count, {name: getattr(contacts, name).numpy()[:count] for name in _CONTACT_FIELDS}
+
+    sap_count, sap_fields = deterministic_contacts(
+        newton.CollisionPipeline(model, broad_phase="sap", deterministic=True, shape_pairs_max=4096)
+    )
+    test.assertGreater(sap_count, 0)
+    for knobs, level in _AGGREGATE_LEVELS:
+        pipeline = _aggregate_pipeline(test, model, knobs, level, deterministic=True, shape_pairs_max=4096)
+        count, fields = deterministic_contacts(pipeline)
+        test.assertEqual(count, sap_count)
+        for name in _CONTACT_FIELDS:
+            with test.subTest(level=level, field=name):
+                test.assertTrue(np.array_equal(fields[name], sap_fields[name]))
+
+
+def test_aggregate_mode_overflow_narrow_phase_runs(test, device):
+    """Review Focus 5: an overflowing buffer is published full, the demand is reported and the narrow phase
+    makes contacts from the published pairs only."""
+    model = _aggregate_humanoids(device, worlds=1, per_world=4, spacing=0.3)
+    state = _aggregate_state(model)
+    nxn = newton.CollisionPipeline(model, broad_phase="nxn", shape_pairs_max=100000)
+    _, nxn_pairs = _collide_pairs(nxn, state)
+    nxn_count = int(nxn.broad_phase_pair_count.numpy()[0])
+    test.assertGreater(nxn_count, 8)
+
+    for knobs, level in _AGGREGATE_LEVELS:
+        with test.subTest(level=level):
+            pipeline = _aggregate_pipeline(test, model, knobs, level, shape_pairs_max=8)
+            quiet = _aggregate_pipeline(test, model, knobs, level, shape_pairs_max=8, verify_buffers=False)
+            # verify_buffers (the default) has the device print the overflow; without it nothing is printed.
+            output = _device_output(lambda pipeline=pipeline: _collide_pairs(pipeline, state))
+            test.assertEqual(output.count(f"candidate pair buffer overflowed {nxn_count} > 8"), 1, output)
+            test.assertEqual(_device_output(lambda quiet=quiet: _collide_pairs(quiet, state)), "")
+            contacts, published = _collide_pairs(quiet, state)
+            stats = quiet.broad_phase_statistics()
+            test.assertEqual(int(quiet.broad_phase_pair_count.numpy()[0]), 8)
+            test.assertEqual(len(published), 8)
+            test.assertTrue(published <= nxn_pairs)
+            test.assertEqual(stats["pair_overflow"], 1)
+            test.assertEqual(stats["pair_demand"], nxn_count)
+
+            count = int(contacts.rigid_contact_count.numpy()[0])
+            test.assertGreater(count, 0)
+            shape0 = contacts.rigid_contact_shape0.numpy()[:count]
+            shape1 = contacts.rigid_contact_shape1.numpy()[:count]
+            contact_pairs = {(min(int(a), int(b)), max(int(a), int(b))) for a, b in zip(shape0, shape1, strict=True)}
+            test.assertTrue(contact_pairs <= published)
+            test.assertTrue(np.isfinite(contacts.rigid_contact_point0.numpy()[:count]).all())
+            test.assertTrue(np.isfinite(contacts.rigid_contact_point1.numpy()[:count]).all())
+
+
+def test_aggregate_mode_two_pipelines_capture(test, device):
+    """Review Focus 4: two aggregate pipelines on two models, captured and replayed alternately, match eager.
+
+    With ``deterministic=True`` (ordered pairs) the replayed pair lists must equal the eager ones entry for entry.
+    Both main levels run: the sweep the small scenes get by default and the grid, so two grid instances are
+    replayed alternately.
+    """
+    for (knobs, level), deterministic in itertools.product(_AGGREGATE_LEVELS, (False, True)):
+        runs = []
+        for worlds, per_world, spacing in ((2, 3, 0.4), (1, 4, 0.3)):
+            model = _aggregate_humanoids(device, worlds=worlds, per_world=per_world, spacing=spacing)
+            state = _aggregate_state(model)
+            pipeline = _aggregate_pipeline(test, model, knobs, level, deterministic=deterministic)
+            contacts, pairs = _collide_pairs(pipeline, state)
+            count = int(pipeline.broad_phase_pair_count.numpy()[0])
+            listed = pipeline.broad_phase_shape_pairs.numpy()[:count].tolist() if deterministic else sorted(pairs)
+            reference = (listed, len(pairs), int(contacts.rigid_contact_count.numpy()[0]))
+            test.assertGreater(reference[2], 0)
+            runs.append((pipeline, state, contacts, reference))
+        test.assertNotEqual(runs[0][3], runs[1][3])
+
+        graphs = []
+        for pipeline, state, contacts, _ in runs:
+            with wp.ScopedCapture(device=device) as capture:
+                pipeline.collide(state, contacts)
+            graphs.append(capture.graph)
+
+        for replay in range(6):
+            index = replay % 2
+            for pipeline, _, contacts, _ in runs:
+                pipeline.broad_phase_shape_pairs.fill_(wp.vec2i(-7, -7))
+                pipeline.broad_phase_pair_count.fill_(12345)
+                contacts.rigid_contact_count.fill_(12345)
+            wp.capture_launch(graphs[index])
+            pipeline, _, contacts, reference = runs[index]
+            count = int(pipeline.broad_phase_pair_count.numpy()[0])
+            pairs = pipeline.broad_phase_shape_pairs.numpy()[:count].tolist()
+            result = (
+                pairs if deterministic else sorted(_published_pairs(pipeline)),
+                count,
+                int(contacts.rigid_contact_count.numpy()[0]),
+            )
+            with test.subTest(level=level, deterministic=deterministic, replay=replay):
+                test.assertEqual(result, reference)
+
+
+def test_aggregate_mode_expert_path(test, device):
+    """A prebuilt aggregate broad phase sets the mode and its own default capacity, checked against the narrow phase."""
+    model = _aggregate_humanoids(device, worlds=2, per_world=3, spacing=0.4)
+    need = _default_aggregate_shape_pairs_max(model)
+
+    def components(max_candidate_pairs, knobs, level):
+        with mock.patch.dict(broad_phase_aggregate._KNOBS, knobs):
+            broad_phase = BroadPhaseAggregate.from_model(model)
+        test.assertEqual(broad_phase.statistics()["main_level"], level)
+        narrow_phase = NarrowPhase(
+            max_candidate_pairs=max_candidate_pairs,
+            max_triangle_pairs=100000,
+            device=model.device,
+            shape_aabb_lower=wp.zeros(model.shape_count, dtype=wp.vec3, device=model.device),
+            shape_aabb_upper=wp.zeros(model.shape_count, dtype=wp.vec3, device=model.device),
+            contact_writer_warp_func=write_contact,
+        )
+        return broad_phase, narrow_phase
+
+    state = _aggregate_state(model)
+    nxn_pairs = _nxn_pairs(model, state)
+    for knobs, level in _AGGREGATE_LEVELS:
+        with test.subTest(level=level):
+            broad_phase, narrow_phase = components(need, knobs, level)
+            pipeline = newton.CollisionPipeline(model, broad_phase=broad_phase, narrow_phase=narrow_phase)
+            test.assertEqual(pipeline.broad_phase_mode, "aggregate")
+            test.assertIs(pipeline.broad_phase, broad_phase)
+            test.assertEqual(pipeline.shape_pairs_max, need)
+            test.assertEqual(_collide_pairs(pipeline, state)[1], nxn_pairs)
+
+            broad_phase, narrow_phase = components(need - 1, knobs, level)
+            with test.assertRaisesRegex(ValueError, "too small"):
+                newton.CollisionPipeline(model, broad_phase=broad_phase, narrow_phase=narrow_phase)
+
+
+def test_broad_phase_statistics_every_mode(test, device):
+    """Every mode reports its mode, count and capacity; the aggregate mode adds its own; capture raises."""
+    model = _aggregate_humanoids(device, worlds=2, per_world=3, spacing=0.4)
+    state = _aggregate_state(model)
+    for mode in ("explicit", "nxn", "sap", "aggregate"):
+        with test.subTest(mode=mode):
+            pipeline = newton.CollisionPipeline(model, broad_phase=mode)
+            contacts, _ = _collide_pairs(pipeline, state)
+            stats = pipeline.broad_phase_statistics()
+            test.assertEqual(stats["mode"], mode)
+            test.assertEqual(stats["pair_count"], int(pipeline.broad_phase_pair_count.numpy()[0]))
+            test.assertGreater(stats["pair_count"], 0)
+            test.assertEqual(stats["shape_pairs_max"], pipeline.shape_pairs_max)
+            if mode == "aggregate":
+                test.assertEqual(stats["aggregates"], 6)
+                test.assertEqual(stats["pair_demand"], stats["pair_count"])
+                test.assertEqual(stats["pair_overflow"], 0)
+            else:
+                test.assertEqual(set(stats), {"mode", "pair_count", "shape_pairs_max"})
+            if device.is_cuda:
+                with wp.ScopedCapture(device=device):
+                    pipeline.collide(state, contacts)
+                    with test.assertRaisesRegex(RuntimeError, "capture"):
+                        pipeline.broad_phase_statistics()
+
+
+def test_aggregate_mode_finite_statics_match_nxn(test, device):
+    """Static boxes in every world and in world -1 go to the static grid at construction and pair as under nxn."""
+    model = _aggregate_humanoids(device, worlds=2, per_world=3, spacing=0.4, static_boxes=True)
+    state = _aggregate_state(model)
+    nxn_pairs = _nxn_pairs(model, state)
+    static = model.shape_body.numpy() < 0
+    box = model.shape_type.numpy() == int(GeoType.BOX)
+    test.assertEqual(sorted(model.shape_world.numpy()[static & box].tolist()), [-1, 0, 0, 0, 1, 1, 1])
+    test.assertTrue(any(static[a] != static[b] and (box[a] or box[b]) for a, b in nxn_pairs))
+    for (knobs, level), deterministic in itertools.product(_AGGREGATE_LEVELS, (False, True)):
+        with test.subTest(level=level, deterministic=deterministic):
+            pipeline = _aggregate_pipeline(test, model, knobs, level, deterministic=deterministic)
+            test.assertEqual(pipeline.broad_phase.statistics()["static_shapes"], 7)
+            test.assertEqual(_collide_pairs(pipeline, state)[1], nxn_pairs)
+
+    # A prebuilt broad phase is binned by the pipeline too.
+    for knobs, level in _AGGREGATE_LEVELS:
+        with test.subTest(level=level, prebuilt=True):
+            with mock.patch.dict(broad_phase_aggregate._KNOBS, knobs):
+                broad_phase = BroadPhaseAggregate.from_model(model)
+            test.assertEqual(broad_phase.statistics()["main_level"], level)
+            narrow_phase = NarrowPhase(
+                max_candidate_pairs=_default_aggregate_shape_pairs_max(model),
+                max_triangle_pairs=100000,
+                device=model.device,
+                shape_aabb_lower=wp.zeros(model.shape_count, dtype=wp.vec3, device=model.device),
+                shape_aabb_upper=wp.zeros(model.shape_count, dtype=wp.vec3, device=model.device),
+                contact_writer_warp_func=write_contact,
+            )
+            pipeline = newton.CollisionPipeline(model, broad_phase=broad_phase, narrow_phase=narrow_phase)
+            test.assertEqual(broad_phase.statistics()["static_shapes"], 7)
+            test.assertEqual(_collide_pairs(pipeline, state)[1], nxn_pairs)
+
+
+def _static_box_on_ground(device):
+    """A ground plane, a sphere body touching it and a static box 3 m away; returns the model, sphere and box."""
+    builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
+    builder.add_ground_plane()
+    body = builder.add_body(xform=wp.transform(wp.vec3(0.0, 0.0, 0.15), wp.quat_identity()))
+    sphere = builder.add_shape_sphere(body, radius=0.2)
+    box = builder.add_shape_box(
+        -1, xform=wp.transform(wp.vec3(3.0, 0.0, 0.15), wp.quat_identity()), hx=0.2, hy=0.2, hz=0.2
+    )
+    return builder.finalize(device=device), sphere, box
+
+
+def _move_shape(model: newton.Model, shape: int, position) -> None:
+    transforms = model.shape_transform.numpy()
+    transforms[shape] = (*position, 0.0, 0.0, 0.0, 1.0)
+    model.shape_transform.assign(transforms)
+
+
+def test_aggregate_refresh_static_shapes_moves_statics(test, device):
+    """A static box moved through ``model.shape_transform`` pairs only after ``refresh_static_shapes()``."""
+    model, sphere, box = _static_box_on_ground(device)
+    state = model.state()
+    pair = (min(sphere, box), max(sphere, box))
+    pipeline = newton.CollisionPipeline(model, broad_phase="aggregate")
+    sap = newton.CollisionPipeline(model, broad_phase="sap")
+    test.assertEqual(_collide_pairs(pipeline, state)[1], _nxn_pairs(model, state))
+
+    _move_shape(model, box, (0.25, 0.0, 0.15))
+    nxn_pairs = _nxn_pairs(model, state)
+    test.assertIn(pair, nxn_pairs)
+    # Without a refresh the static grid still holds the box at its old place.
+    test.assertEqual(_collide_pairs(pipeline, state)[1], nxn_pairs - {pair})
+    pipeline.refresh_static_shapes()
+    test.assertEqual(_collide_pairs(pipeline, state)[1], nxn_pairs)
+
+    _move_shape(model, box, (-3.0, 0.0, 0.15))
+    pipeline.refresh_static_shapes(state)
+    test.assertEqual(_collide_pairs(pipeline, state)[1], _nxn_pairs(model, state))
+    test.assertNotIn(pair, _published_pairs(pipeline))
+    sap.refresh_static_shapes()  # a no-op outside the aggregate mode
+
+
+def test_aggregate_mode_refresh_static_shapes_capture(test, device):
+    """A captured collide replays the static grid refreshed between replays; refreshing during a capture raises.
+
+    The scene has one aggregate, so neither main level has a main stage; both are captured.
+    """
+    for knobs, level in _AGGREGATE_LEVELS:
+        with test.subTest(level=level):
+            model, sphere, box = _static_box_on_ground(device)
+            state = model.state()
+            pipeline = _aggregate_pipeline(test, model, knobs, level)
+            contacts, pairs = _collide_pairs(pipeline, state)
+            with wp.ScopedCapture(device=device) as capture:
+                pipeline.collide(state, contacts)
+                with test.assertRaisesRegex(RuntimeError, "capture"):
+                    pipeline.refresh_static_shapes()
+            _move_shape(model, box, (0.25, 0.0, 0.15))
+            pipeline.refresh_static_shapes()
+            pipeline.broad_phase_pair_count.fill_(12345)
+            wp.capture_launch(capture.graph)
+            replayed = _published_pairs(pipeline)
+            test.assertEqual(replayed, _nxn_pairs(model, state))
+            test.assertIn((min(sphere, box), max(sphere, box)), replayed - pairs)
+
+
+def test_aggregate_mode_deterministic_orders_pairs(test, device):
+    """``deterministic=True`` orders the aggregate broad phase, and two such pipelines publish one pair list.
+
+    The list is the same on either main level.
+    """
+    model = _aggregate_humanoids(device, worlds=2, per_world=3, spacing=0.4)
+    state = _aggregate_state(model)
+    test.assertIs(newton.CollisionPipeline(model, broad_phase="aggregate").broad_phase.ordered, False)
+    lists = []
+    for (knobs, level), _ in itertools.product(_AGGREGATE_LEVELS, range(2)):
+        pipeline = _aggregate_pipeline(test, model, knobs, level, deterministic=True)
+        test.assertIs(pipeline.broad_phase.ordered, True)
+        _collide_pairs(pipeline, state)
+        count = int(pipeline.broad_phase_pair_count.numpy()[0])
+        lists.append(pipeline.broad_phase_shape_pairs.numpy()[:count])
+    test.assertGreater(len(lists[0]), 0)
+    for other in lists[1:]:
+        test.assertTrue(np.array_equal(lists[0], other))
+    test.assertEqual({(int(a), int(b)) for a, b in lists[0]}, _nxn_pairs(model, state))
+
+
+def test_aggregate_mode_warns_once_on_extent_overflow(test, device):
+    """A union box wider than the grid's cell warns once per latch, on the first statistics read that sees it.
+
+    ``reset_statistics()`` clears the latch and re-arms the warning. With ``verify_buffers`` (the
+    default) the device also prints when the latch is set, once until the
+    reset; without it the device prints nothing. The warning names the likely
+    causes and the remedies a pipeline user can reach, and points at the
+    caller. The size rule, which would build the sweep for two humanoids, is
+    relaxed.
+    """
+    model = _aggregate_humanoids(device, worlds=1, per_world=2, spacing=0.4)
+    state = _aggregate_state(model)
+    with mock.patch.dict(broad_phase_aggregate._KNOBS, {"grid_min_aggregates": 0}):
+        pipeline = newton.CollisionPipeline(model, broad_phase="aggregate")
+        quiet = newton.CollisionPipeline(model, broad_phase="aggregate", verify_buffers=False)
+    contacts = pipeline.contacts()
+    pipeline.collide(state, contacts)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        stats = pipeline.broad_phase_statistics()
+    test.assertEqual((stats["main_level"], stats["aggregate_extent_overflow"]), ("grid", 0))
+    test.assertEqual([w for w in caught if issubclass(w.category, newton.NewtonWarning)], [])
+
+    # One body of the first humanoid drifts 30 m from the rest of it, far past the cell.
+    body_q = state.body_q.numpy()
+    body_q[1, 0] += 30.0
+    state.body_q.assign(body_q)
+    outputs = [_device_output(lambda: pipeline.collide(state, contacts))]
+    test.assertEqual(_device_output(lambda: quiet.collide(state, quiet.contacts())), "")
+    test.assertEqual(quiet.broad_phase.statistics()["aggregate_extent_overflow"], 1)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        reads = [pipeline.broad_phase_statistics() for _ in range(3)]
+        outputs.append(_device_output(lambda: pipeline.collide(state, contacts)))
+        reads.append(pipeline.broad_phase_statistics())
+    test.assertEqual([read["aggregate_extent_overflow"] for read in reads], [1, 1, 1, 1])
+    test.assertEqual(outputs[0].count("does not fit the grid cell"), 1, outputs[0])
+    test.assertEqual(outputs[1], "")
+    warned = [w for w in caught if issubclass(w.category, newton.NewtonWarning)]
+    test.assertEqual(len(warned), 1)
+    test.assertEqual(warned[0].filename, __file__)
+    message = str(warned[0].message)
+    for text in (
+        "pairs may have been missed",
+        "far from its frame origin",
+        "initial extent",
+        "long articulation",
+        "BroadPhaseAggregate.from_model(model, main='sap', verify=True)",
+        "speculative_contact_gap_max",
+        "shape_extent",
+        "shape_reach",
+    ):
+        test.assertIn(text, message)
+    test.assertNotIn("_KNOBS", message)
+
+    # reset_statistics() clears the latch and re-arms both the device print and the warning.
+    pipeline.broad_phase.reset_statistics()
+    output = _device_output(lambda: pipeline.collide(state, contacts))
+    test.assertEqual(output.count("does not fit the grid cell"), 1, output)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        reads = [pipeline.broad_phase_statistics() for _ in range(2)]
+    test.assertEqual([read["aggregate_extent_overflow"] for read in reads], [1, 1])
+    test.assertEqual(len([w for w in caught if issubclass(w.category, newton.NewtonWarning)]), 1)
+
+
+def _off_centre_mesh_model(device, worlds: int) -> newton.Model:
+    """Per world, a two-link articulation whose child mesh sits 2 m from its origin, and a free sphere at its end.
+
+    The root is a 0.1 m sphere under a free joint; its revolute child carries
+    a box mesh 0.2 m long whose vertices sit 1.9-2.1 m from the child's origin
+    on x and 0.1-0.3 m on y, turned 30 degrees about x; a free 0.2 m sphere
+    touches the mesh's far end.
+    """
+    vertices = np.array(
+        [[x, y, z] for x in (1.9, 2.1) for y in (0.1, 0.3) for z in (-0.1, 0.1)],
+        dtype=np.float32,
+    )
+    faces = np.array(
+        [0, 1, 3, 0, 3, 2, 4, 6, 7, 4, 7, 5, 0, 4, 5, 0, 5, 1, 2, 3, 7, 2, 7, 6, 0, 2, 6, 0, 6, 4, 1, 5, 7, 1, 7, 3],
+        dtype=np.int32,
+    )
+    mesh = newton.Mesh(vertices, faces)
+    template = newton.ModelBuilder()
+    root = template.add_link(xform=wp.transform(wp.vec3(0.0, 0.0, 1.0), wp.quat_identity()))
+    template.add_shape_sphere(root, radius=0.1)
+    free = template.add_joint_free(root)
+    child = template.add_link(xform=wp.transform(wp.vec3(0.0, 0.0, 1.0), wp.quat_identity()))
+    turn = wp.quat_from_axis_angle(wp.vec3(1.0, 0.0, 0.0), np.pi / 6.0)
+    template.add_shape_mesh(child, xform=wp.transform(wp.vec3(0.0, 0.0, 0.0), turn), mesh=mesh)
+    hinge = template.add_joint_revolute(root, child, axis=newton.Axis.Z)
+    template.add_articulation([free, hinge])
+    ball = template.add_body(xform=wp.transform(wp.vec3(2.0, 0.0, 1.25), wp.quat_identity()))
+    template.add_shape_sphere(ball, radius=0.2)
+    builder = newton.ModelBuilder()
+    builder.replicate(template, worlds)
+    return builder.finalize(device=device)
+
+
+def test_aggregate_mode_off_centre_mesh_matches_nxn(test, device):
+    """The grid's reach covers mesh geometry authored away from its shape's origin (review C1).
+
+    ``shape_collision_radius`` bounds the mesh's size, not its offset; the
+    reach takes the farthest corner of the shape's local box too, so the
+    default grid's cell holds the 2.4 m union box and finds every mesh-sphere
+    pair. The occupancy rule's host boxes are the mesh's rotated local box, as
+    the pipeline computes them. Four worlds take the worlds rule, relaxed to 2.
+    """
+    model = _off_centre_mesh_model(device, worlds=4)
+    state = _aggregate_state(model)
+    nxn = newton.CollisionPipeline(model, broad_phase="nxn")
+    _, nxn_pairs = _collide_pairs(nxn, state)
+    mesh = np.flatnonzero(model.shape_type.numpy() == int(GeoType.MESH))
+    sphere_of = {int(m): int(m) + 1 for m in mesh}
+    test.assertEqual(nxn_pairs, set(sphere_of.items()))
+    with mock.patch.dict(broad_phase_aggregate._KNOBS, {"grid_min_worlds": 2}):
+        pipeline = newton.CollisionPipeline(model, broad_phase="aggregate")
+    test.assertEqual(_collide_pairs(pipeline, state)[1], nxn_pairs)
+    stats = pipeline.broad_phase_statistics()
+    test.assertEqual((stats["main_level"], stats["main_fallback"], stats["aggregate_worlds"]), ("grid", "", 4))
+    test.assertEqual(stats["aggregate_extent_overflow"], 0)
+    test.assertGreater(stats["extent_max"], 2.3)
+    test.assertGreaterEqual(stats["cell_size"], stats["extent_max"])
+
+    lower, upper = broad_phase_aggregate._model_shape_box(model)
+    np.testing.assert_allclose(lower[mesh], nxn.narrow_phase.shape_aabb_lower.numpy()[mesh], rtol=0.0, atol=1.0e-5)
+    np.testing.assert_allclose(upper[mesh], nxn.narrow_phase.shape_aabb_upper.numpy()[mesh], rtol=0.0, atol=1.0e-5)
+
+
+def _approximated_mesh_model(device, method: str, worlds: int) -> newton.Model:
+    """Per world, the off-centre layout with a child mesh that ``approximate_meshes(method)`` turns into a primitive.
+
+    The child's mesh is a dense cluster of vertices at its origin plus a spike
+    out to x = 2 m: its collision radius (half its box's diagonal) is about
+    1.03 m, while the bounding sphere about the vertex mean has a radius of
+    about 1.98 m. ``approximate_meshes`` keeps the mesh's collision radius. A
+    free 0.15 m ball touches the far end.
+    """
+    rng = np.random.default_rng(0)
+    vertices = np.vstack((rng.uniform(-0.05, 0.05, (400, 3)), [[2.0, 0.0, 0.0], [2.0, 0.02, 0.0], [2.0, 0.0, 0.02]]))
+    faces = np.array([0, 1, 2, 400, 401, 402, 0, 400, 401], dtype=np.int32)
+    mesh = newton.Mesh(vertices.astype(np.float32), faces)
+    template = newton.ModelBuilder()
+    root = template.add_link(xform=wp.transform(wp.vec3(0.0, 0.0, 3.0), wp.quat_identity()))
+    template.add_shape_sphere(root, radius=0.1)
+    free = template.add_joint_free(root)
+    child = template.add_link(xform=wp.transform(wp.vec3(0.0, 0.0, 3.0), wp.quat_identity()))
+    shape = template.add_shape_mesh(child, mesh=mesh)
+    hinge = template.add_joint_revolute(root, child, axis=newton.Axis.Z)
+    template.add_articulation([free, hinge])
+    template.approximate_meshes(method, shape_indices=[shape])
+    ball = template.add_body(xform=wp.transform(wp.vec3(2.05, 0.0, 3.0), wp.quat_identity()))
+    template.add_shape_sphere(ball, radius=0.15)
+    builder = newton.ModelBuilder()
+    builder.replicate(template, worlds)
+    return builder.finalize(device=device)
+
+
+def test_aggregate_mode_approximated_primitives_match_nxn(test, device):
+    """Spheres and boxes made by ``approximate_meshes`` are bounded by their scale, not the mesh's stale radius.
+
+    The bounding sphere's scale (about 1.98 m) is twice the collision radius
+    it keeps, so the reach takes the scale's bound and the grid's cell holds
+    the union box. Builder-authored primitives keep their collision radius
+    exactly. Each method runs at 20 shifts across a cell under the default
+    grid (four worlds, the worlds rule relaxed to 2): every set equals nxn's,
+    and the latch stays 0.
+    """
+    for method, kind in (("bounding_sphere", GeoType.SPHERE), ("bounding_box", GeoType.BOX)):
+        with test.subTest(method=method):
+            model = _approximated_mesh_model(device, method, worlds=4)
+            shape_type = model.shape_type.numpy()
+            scale = np.abs(model.shape_scale.numpy().astype(np.float64))
+            radius = model.shape_collision_radius.numpy().astype(np.float64)
+            bound = broad_phase_aggregate._model_shape_bound(model)
+            approximated = np.arange(model.shape_count) % 3 == 1
+            test.assertTrue(np.all(shape_type[approximated] == int(kind)))
+            scale_bound = scale[:, 0] if kind == GeoType.SPHERE else np.linalg.norm(scale, axis=1)
+            test.assertTrue(np.all(bound[approximated] >= scale_bound[approximated]))
+            np.testing.assert_array_equal(bound[~approximated], radius[~approximated])
+            if kind == GeoType.SPHERE:
+                test.assertTrue(np.all(scale_bound[approximated] > 1.9 * radius[approximated]))
+
+            rest = model.state()
+            nxn = newton.CollisionPipeline(model, broad_phase="nxn")
+            with mock.patch.dict(broad_phase_aggregate._KNOBS, {"grid_min_worlds": 2}):
+                pipeline = newton.CollisionPipeline(model, broad_phase="aggregate")
+            stats = pipeline.broad_phase.statistics()
+            test.assertEqual((stats["main_level"], stats["main_fallback"]), ("grid", ""))
+            for shift in range(20):
+                state = model.state()
+                body_q = rest.body_q.numpy()
+                body_q[:, 0] += shift * pipeline.broad_phase.cell_size / 20.0
+                state.body_q.assign(body_q)
+                pairs = [_collide_pairs(p, state)[1] for p in (nxn, pipeline)]
+                test.assertEqual(len(pairs[0]), 4)  # each approximated child and its ball, in four worlds
+                test.assertEqual(pairs[1], pairs[0], f"shift {shift}")
+            stats = pipeline.broad_phase_statistics()
+            test.assertEqual(stats["aggregate_extent_overflow"], 0)
+            test.assertGreaterEqual(stats["cell_size"], stats["extent_max"])
+
+
+def _dumbbell_model(device, worlds: int) -> newton.Model:
+    """Per world, a dumbbell and a free sphere 8 cm beyond each of its ends, with 1 cm gaps.
+
+    The dumbbell's root is a 0.1 m sphere under a free joint, and its two
+    revolute children are 0.1 m spheres 1 m from it on +x and -x, so its union
+    box at rest is exactly twice its largest reach on x (1.11 m), a full grid
+    cell. Each ball touches its end only once the boxes grow speculatively.
+    """
+    template = newton.ModelBuilder()
+    template.rigid_gap = 0.01
+    root = template.add_link(xform=wp.transform(wp.vec3(0.0, 0.0, 1.0), wp.quat_identity()))
+    template.add_shape_sphere(root, radius=0.1)
+    joints = [template.add_joint_free(root)]
+    for side in (1.0, -1.0):
+        child = template.add_link(xform=wp.transform(wp.vec3(side, 0.0, 1.0), wp.quat_identity()))
+        template.add_shape_sphere(child, radius=0.1)
+        joints.append(
+            template.add_joint_revolute(
+                root, child, parent_xform=wp.transform(wp.vec3(side, 0.0, 0.0), wp.quat_identity()), axis=newton.Axis.Y
+            )
+        )
+    template.add_articulation(joints)
+    for side in (1.0, -1.0):
+        ball = template.add_body(xform=wp.transform(wp.vec3(1.3 * side, 0.0, 1.0), wp.quat_identity()))
+        template.add_shape_sphere(ball, radius=0.1)
+    builder = newton.ModelBuilder()
+    builder.replicate(template, worlds)
+    return builder.finalize(device=device)
+
+
+def test_aggregate_mode_speculative_grid_matches_nxn(test, device):
+    """The grid's cell covers the speculative growth of the union boxes (review I3).
+
+    Each body's box grows by up to ``speculative_contact_gap_max`` on every
+    side and the union sweeps by up to it more, so the union can reach twice
+    the reach plus four times the cap. The dumbbell's union fills the cell at
+    rest; spinning at the cap and moving at it, together (three caps of
+    growth) and with its ends apart (four), its grown union must still fit.
+    Each pattern runs at 40 shifts across a cell, on both main levels, and
+    every set equals nxn's: without the growth in the cell, a ball 2.3-2.35 m
+    above the union's lower corner lands two cells up within the top 3-5 % of
+    a cell, and its pair is missed. The grid's cell guard is relaxed with the
+    size rule: the dumbbell's cell is about six times the balls' extent.
+    """
+    cap, dt = 0.05, 0.02
+    model = _dumbbell_model(device, worlds=2)
+    rest = _aggregate_state(model)
+    # Each world's bodies: the root, the +x and -x children, then the +x and -x balls.
+    side = np.tile([0.0, 1.0, -1.0, 1.0, -1.0], 2)
+    for pattern in ("together", "apart"):
+        qd = np.zeros((model.body_count, 6), dtype=np.float32)
+        qd[:, 3] = 50.0  # spin about x: each box grows by the cap on every side
+        qd[:, 0] = cap / dt
+        if pattern == "apart":
+            qd[:, 0] = side * cap / dt
+        for knobs, level in (({}, "sap"), ({"grid_min_aggregates": 0, "grid_cell_ratio_max": 20.0}, "grid")):
+            with test.subTest(pattern=pattern, level=level):
+                pipeline = _aggregate_pipeline(test, model, knobs, level, speculative_contact_gap_max=cap)
+                nxn = newton.CollisionPipeline(model, broad_phase="nxn", speculative_contact_gap_max=cap)
+                cell = max(pipeline.broad_phase.cell_size or 0.0, 2.2)
+                for shift in range(40):
+                    state = model.state()
+                    body_q = rest.body_q.numpy()
+                    body_q[:, 0] += shift * cell / 40.0
+                    state.body_q.assign(body_q)
+                    state.body_qd.assign(qd)
+                    pairs = []
+                    for p in (nxn, pipeline):
+                        p.collide(state, p.contacts(), dt=dt)
+                        pairs.append(_published_pairs(p))
+                    test.assertEqual(len(pairs[0]), 4)  # each child and its ball, in two worlds
+                    test.assertEqual(pairs[1], pairs[0], f"shift {shift}")
+                stats = pipeline.broad_phase_statistics()
+                test.assertEqual(stats["aggregate_extent_overflow"], 0)
+                if level == "grid":
+                    test.assertGreater(stats["extent_max"], 2.22 + (3.9 if pattern == "apart" else 2.9) * cap)
+                    test.assertGreaterEqual(stats["cell_size"], stats["extent_max"])
+
+
+def test_aggregate_mode_rejects_body_variants(test, device):
+    """Body variants change a row's geometry and flags after the aggregates are built, so the mode rejects them."""
+    variant_a = newton.ModelBuilder()
+    variant_a.add_shape_box(variant_a.add_body(), hx=0.25, hy=0.25, hz=0.25)
+    variant_b = newton.ModelBuilder()
+    variant_b.add_shape_sphere(variant_b.add_body(), radius=0.1)
+    builder = newton.ModelBuilder()
+    body = builder.add_body(xform=wp.transform((0.0, 0.0, 0.5), wp.quat_identity()))
+    builder.add_body_variants(body, [variant_a, variant_b])
+    builder.add_ground_plane()
+    model = builder.finalize(device=device)
+    with test.assertRaisesRegex(NotImplementedError, "body variants"):
+        newton.CollisionPipeline(model, broad_phase="aggregate")
+    with test.assertRaisesRegex(NotImplementedError, "body variants"):
+        BroadPhaseAggregate.from_model(model, main="sap")
+
+
+for _name, _func in (
+    ("test_aggregate_mode_constructs_and_dispatches", test_aggregate_mode_constructs_and_dispatches),
+    ("test_aggregate_mode_contacts_match_sap_deterministic", test_aggregate_mode_contacts_match_sap_deterministic),
+    ("test_aggregate_mode_overflow_narrow_phase_runs", test_aggregate_mode_overflow_narrow_phase_runs),
+    ("test_aggregate_mode_expert_path", test_aggregate_mode_expert_path),
+    ("test_broad_phase_statistics_every_mode", test_broad_phase_statistics_every_mode),
+    ("test_aggregate_mode_finite_statics_match_nxn", test_aggregate_mode_finite_statics_match_nxn),
+    ("test_aggregate_mode_deterministic_orders_pairs", test_aggregate_mode_deterministic_orders_pairs),
+    ("test_aggregate_refresh_static_shapes_moves_statics", test_aggregate_refresh_static_shapes_moves_statics),
+    ("test_aggregate_mode_warns_once_on_extent_overflow", test_aggregate_mode_warns_once_on_extent_overflow),
+    ("test_aggregate_mode_off_centre_mesh_matches_nxn", test_aggregate_mode_off_centre_mesh_matches_nxn),
+    ("test_aggregate_mode_approximated_primitives_match_nxn", test_aggregate_mode_approximated_primitives_match_nxn),
+    ("test_aggregate_mode_speculative_grid_matches_nxn", test_aggregate_mode_speculative_grid_matches_nxn),
+    ("test_aggregate_mode_rejects_body_variants", test_aggregate_mode_rejects_body_variants),
+):
+    add_function_test(TestCollisionPipelineAggregate, _name, _func, devices=get_test_devices())
+for _name, _func in (
+    ("test_aggregate_mode_two_pipelines_capture", test_aggregate_mode_two_pipelines_capture),
+    ("test_aggregate_mode_refresh_static_shapes_capture", test_aggregate_mode_refresh_static_shapes_capture),
+):
+    add_function_test(TestCollisionPipelineAggregate, _name, _func, devices=get_cuda_test_devices())
 
 
 if __name__ == "__main__":

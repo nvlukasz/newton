@@ -817,7 +817,7 @@ def add_broad_phase_arg(parser):
         "--broad-phase",
         type=str,
         default="explicit",
-        choices=["nxn", "sap", "explicit"],
+        choices=["nxn", "sap", "explicit", "aggregate"],
         help="Broad phase for collision detection.",
     )
     return parser
@@ -1046,7 +1046,7 @@ def create_collision_pipeline(model, args=None, broad_phase=None, **kwargs):
     Args:
         model: The Newton model to create the pipeline for.
         args: Parsed arguments from create_parser() (optional).
-        broad_phase: Override broad phase ("nxn", "sap", "explicit"). Default from args or "explicit".
+        broad_phase: Override broad phase ("nxn", "sap", "explicit", "aggregate"). Default from args or "explicit".
         **kwargs: Additional keyword arguments passed to CollisionPipeline.
 
     Returns:

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
+from .broad_phase_aggregate import BroadPhaseAggregate
 from .broad_phase_common import test_group_pair, test_world_and_group_pair
 from .broad_phase_nxn import BroadPhaseAllPairs, BroadPhaseExplicit
 from .broad_phase_sap import BroadPhaseSAP
@@ -48,6 +49,7 @@ from .utils import compute_shape_radius
 
 __all__ = [
     "SDF",
+    "BroadPhaseAggregate",
     "BroadPhaseAllPairs",
     "BroadPhaseExplicit",
     "BroadPhaseSAP",

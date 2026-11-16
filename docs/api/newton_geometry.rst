@@ -13,6 +13,7 @@ newton.geometry
    :toctree: _generated
    :nosignatures:
 
+   BroadPhaseAggregate
    BroadPhaseAllPairs
    BroadPhaseExplicit
    BroadPhaseSAP

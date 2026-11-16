@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from ._src.geometry import (
+    BroadPhaseAggregate,
     BroadPhaseAllPairs,
     BroadPhaseExplicit,
     BroadPhaseSAP,
@@ -28,6 +29,7 @@ from ._src.geometry.sdf_hydroelastic import HydroelasticSDF
 from ._src.geometry.sdf_utils import compute_offset_mesh, create_empty_sdf_data
 
 __all__ = [
+    "BroadPhaseAggregate",
     "BroadPhaseAllPairs",
     "BroadPhaseExplicit",
     "BroadPhaseSAP",

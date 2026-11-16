@@ -11,8 +11,10 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 import warp as wp
 
+from ..core._warnings import _external_warning_stacklevel
 from ..core.reset import normalize_reset_world_mask
 from ..exceptions import NewtonDeprecationWarning, NewtonWarning
+from ..geometry.broad_phase_aggregate import SHAPE_PAIRS_PER_SHAPE, BroadPhaseAggregate
 from ..geometry.broad_phase_nxn import BroadPhaseAllPairs, BroadPhaseExplicit
 from ..geometry.broad_phase_sap import BroadPhaseSAP
 from ..geometry.collision_core import compute_tight_aabb_from_support
@@ -1355,7 +1357,17 @@ def _resolve_shape_pairs_max(model: Model, override: int | None) -> int:
     return int(override)
 
 
-BROAD_PHASE_MODES = ("nxn", "sap", "explicit")
+def _default_aggregate_shape_pairs_max(model: Model) -> int:
+    """Default candidate-pair capacity of the ``"aggregate"`` broad phase.
+
+    ``SHAPE_PAIRS_PER_SHAPE`` pairs per colliding shape, and never more than the
+    per-world all-pairs bound the other modes default to.
+    """
+    colliding = int(np.count_nonzero(_shape_collide_mask(model)))
+    return min(_compute_per_world_shape_pairs_max(model), SHAPE_PAIRS_PER_SHAPE * colliding)
+
+
+BROAD_PHASE_MODES = ("nxn", "sap", "explicit", "aggregate")
 # The fused kernel inlines overlap refinement for every pair, while split
 # kernels refine on a concurrent stream. Splitting pays off once the extra
 # launches amortize: from about 4k lean or 8k full-support pairs.
@@ -1434,16 +1446,20 @@ def _normalize_broad_phase_mode(mode: str) -> str:
     return mode_str
 
 
-def _infer_broad_phase_mode_from_instance(broad_phase: BroadPhaseAllPairs | BroadPhaseSAP | BroadPhaseExplicit) -> str:
+def _infer_broad_phase_mode_from_instance(
+    broad_phase: BroadPhaseAllPairs | BroadPhaseSAP | BroadPhaseExplicit | BroadPhaseAggregate,
+) -> str:
     if isinstance(broad_phase, BroadPhaseAllPairs):
         return "nxn"
     if isinstance(broad_phase, BroadPhaseSAP):
         return "sap"
     if isinstance(broad_phase, BroadPhaseExplicit):
         return "explicit"
+    if isinstance(broad_phase, BroadPhaseAggregate):
+        return "aggregate"
     raise TypeError(
-        "broad_phase must be a BroadPhaseAllPairs, BroadPhaseSAP, or BroadPhaseExplicit instance "
-        f"(got {type(broad_phase)!r})"
+        "broad_phase must be a BroadPhaseAllPairs, BroadPhaseSAP, BroadPhaseExplicit, or BroadPhaseAggregate "
+        f"instance (got {type(broad_phase)!r})"
     )
 
 
@@ -1759,10 +1775,11 @@ class CollisionPipeline:
         soft_contact_margin: float | None = None,
         enable_rigid_soft_full_surface_contact: bool = False,
         requires_grad: bool | None = None,
-        broad_phase: Literal["nxn", "sap", "explicit"]
+        broad_phase: Literal["nxn", "sap", "explicit", "aggregate"]
         | BroadPhaseAllPairs
         | BroadPhaseSAP
         | BroadPhaseExplicit
+        | BroadPhaseAggregate
         | None = None,
         narrow_phase: NarrowPhase | None = None,
         sdf_hydroelastic_config: HydroelasticSDF.Config | None = None,
@@ -1864,8 +1881,16 @@ class CollisionPipeline:
                 :func:`newton.eval_rigid_contact_kinematics` do not
                 depend on this flag.
             broad_phase:
-                Either a broad phase mode string ("explicit", "nxn", "sap") or
-                a prebuilt broad phase instance for expert usage.
+                Either a broad phase mode string ("explicit", "nxn", "sap",
+                "aggregate") or a prebuilt broad phase instance for expert usage.
+                The experimental ``"aggregate"`` mode builds
+                :class:`~newton.geometry.BroadPhaseAggregate` from the model's
+                articulations and bins the finite static shapes into its static
+                grid; a static shape moved afterwards is seen at its new place
+                only after :meth:`refresh_static_shapes`. It raises
+                :class:`NotImplementedError` for world -1 articulations beside
+                per-world finite static shapes, and for models with body
+                variants.
             narrow_phase: Optional prebuilt narrow phase instance. Must be
                 provided together with a broad phase instance for expert usage.
                 If its voxel-resolution table is omitted, use the model's table.
@@ -1881,8 +1906,15 @@ class CollisionPipeline:
             sdf_hydroelastic_config: Configuration for hydroelastic collision
                 handling. Defaults to None.
             shape_pairs_max: Override for the broad-phase candidate-pair
-                buffer capacity used by the ``"nxn"`` and ``"sap"`` modes.
-                Defaults to the worst-case ``N*(N-1)/2`` per-world bound,
+                buffer capacity used by the ``"nxn"``, ``"sap"`` and
+                ``"aggregate"`` modes. ``"aggregate"`` defaults to 12 pairs per
+                colliding shape, at most the per-world bound below. It clamps
+                its published pair count to the buffer: pairs past it are
+                dropped and reported by :meth:`broad_phase_statistics`
+                (``pair_overflow``, ``pair_demand_max``) and, under
+                ``verify_buffers``, by a warning its publish kernel prints.
+                ``"nxn"`` and ``"sap"``
+                default to the worst-case ``N*(N-1)/2`` per-world bound,
                 which is rarely hit by either ``"nxn"`` or ``"sap"`` in
                 practice -- ``"nxn"`` still applies AABB overlap, group,
                 and excluded-pair filtering inside ``BroadPhaseAllPairs``
@@ -1890,16 +1922,27 @@ class CollisionPipeline:
                 the default sizing is typically 10-100x larger than what
                 gets emitted on real scenes. Set this to a tighter value
                 (e.g. measured peak with ~25% headroom) to avoid multi-GB
-                allocations on large scenes; a too-small value triggers
-                a buffer overflow warning at runtime. Ignored for the
-                ``"explicit"`` mode (which uses the filtered pair list
-                length directly) and for expert paths that pass a
-                pre-built ``narrow_phase``.
+                allocations on large scenes; under ``"nxn"`` and ``"sap"``
+                a too-small value triggers a buffer overflow warning at
+                runtime (see ``verify_buffers``). Ignored for the
+                ``"explicit"`` mode, which uses the filtered pair list
+                length directly, and for expert paths that pass a
+                pre-built ``narrow_phase``. There the capacity is the
+                filtered pair count for an explicit instance, the
+                per-world bound for an nxn or sap instance and the
+                12-per-shape default for a prebuilt
+                :class:`~newton.geometry.BroadPhaseAggregate`, and
+                ``narrow_phase.max_candidate_pairs`` must be at least that.
             deterministic: Sort contacts after the narrow phase so that results
                 are independent of GPU thread scheduling. This also enables
                 deterministic hydroelastic accumulation and contact allocation.
                 Adds a radix sort + gather pass. Limits the shape count; see
-                :ref:`Deterministic Contacts`.
+                :ref:`Deterministic Contacts`. The ``"aggregate"`` mode then
+                also builds its broad phase with ``ordered=True``, so the
+                candidate pair list is deterministic as well while
+                ``aggregate_pairs_max`` is not exceeded; a prebuilt
+                :class:`~newton.geometry.BroadPhaseAggregate` keeps its own
+                setting.
             contact_matching: Frame-to-frame contact matching mode.  One of
                 ``"disabled"``, ``"latest"``, or ``"sticky"``.  Any
                 non-disabled mode implies ``deterministic=True``, including
@@ -1931,13 +1974,32 @@ class CollisionPipeline:
                 :class:`NarrowPhase` for the full counter list.  Defaults to
                 ``True``.  Overhead is one extra kernel launch per collision
                 pass; disable in hot loops or CUDA graph capture once buffer
-                sizes are known to be adequate.
+                sizes are known to be adequate. The ``"aggregate"`` broad
+                phase clamps its published pair count to ``shape_pairs_max``,
+                so this check cannot see its overflow; instead the flag is
+                passed to :class:`~newton.geometry.BroadPhaseAggregate`
+                (``verify``), whose kernels print a warning, with no host read,
+                when a collide drops candidate pairs or aggregate pairs, and
+                when its grid's extent latch is set (once, until
+                ``reset_statistics()``). :meth:`broad_phase_statistics` reports
+                the same (``pair_overflow``, ``aggregate_pair_overflow``,
+                ``aggregate_extent_overflow``). A prebuilt
+                :class:`~newton.geometry.BroadPhaseAggregate` keeps its own
+                ``verify``.
             speculative_contact_gap_max: Cap on the velocity-derived rigid-contact
                 detection gap [m]. The effective gap is the larger of the authored
                 gap and the capped velocity-derived gap. Must be a non-negative
                 finite number or ``None``. ``None`` disables speculative contacts;
                 ``0.0`` enables them without enlarging authored gaps. Defaults to
-                ``None``. See
+                ``None``. The ``"aggregate"`` mode passes it to
+                :meth:`BroadPhaseAggregate.from_model
+                <newton.geometry.BroadPhaseAggregate.from_model>`, whose grid
+                cell grows by four times the cap to hold the grown boxes; a
+                prebuilt :class:`~newton.geometry.BroadPhaseAggregate` must be
+                built with the same ``speculative_contact_gap_max``. The cap is
+                read on every :meth:`collide`, so raising
+                :attr:`speculative_contact_gap_max` after construction can outgrow
+                the aggregate grid's cell (its extent latch reports it). See
                 :ref:`Speculative contacts <speculative-contacts>`.
             dynamic_shape_scale: Query texture SDFs built without a baked scale with the current
                 :attr:`Model.shape_scale <newton.Model.shape_scale>` on every call, which is slower.
@@ -2001,7 +2063,9 @@ class CollisionPipeline:
             deterministic = True
 
         mode_from_broad_phase: str | None = None
-        broad_phase_instance: BroadPhaseAllPairs | BroadPhaseSAP | BroadPhaseExplicit | None = None
+        broad_phase_instance: BroadPhaseAllPairs | BroadPhaseSAP | BroadPhaseExplicit | BroadPhaseAggregate | None = (
+            None
+        )
         if broad_phase is not None:
             if isinstance(broad_phase, str):
                 mode_from_broad_phase = _normalize_broad_phase_mode(broad_phase)
@@ -2070,6 +2134,9 @@ class CollisionPipeline:
         self.include_static_kinematic_pairs = include_static_kinematic_pairs
         self.speculative_contact_gap_max = speculative_contact_gap_max
         self._speculative_enabled = speculative_contact_gap_max is not None
+        # broad_phase_statistics() warns once when the aggregate grid's extent latch is set: the broad phase's
+        # reset_statistics() count at the warning, so that a reset re-arms it.
+        self._aggregate_extent_warned_at: int | None = None
         contact_writer = write_contact_speculative if self._speculative_enabled else write_contact
 
         unit_scale_sdf_shapes = None
@@ -2088,6 +2155,13 @@ class CollisionPipeline:
             inferred_mode = _infer_broad_phase_mode_from_instance(broad_phase_instance)
             self.broad_phase_mode = inferred_mode
             self.broad_phase = broad_phase_instance
+            if isinstance(broad_phase_instance, BroadPhaseAggregate) and model._has_variant_rows:
+                raise NotImplementedError(
+                    "BroadPhaseAggregate does not support models with body variants (ModelBuilder.add_body_variants)"
+                )
+            if isinstance(broad_phase_instance, BroadPhaseAggregate) and broad_phase_instance.static_cell_size is None:
+                # Bin the finite statics unless the caller already did.
+                self.refresh_static_shapes()
 
             if self.broad_phase_mode == "explicit":
                 if shape_pairs_filtered is None:
@@ -2104,7 +2178,10 @@ class CollisionPipeline:
                 self.broad_phase._warn_large_pair_count(shape_pairs_filtered, shape_world, model.world_count)
             else:
                 self.shape_pairs_filtered = None
-                self.shape_pairs_max = _compute_per_world_shape_pairs_max(model)
+                if self.broad_phase_mode == "aggregate":
+                    self.shape_pairs_max = _default_aggregate_shape_pairs_max(model)
+                else:
+                    self.shape_pairs_max = _compute_per_world_shape_pairs_max(model)
                 self.shape_pairs_excluded = self._build_excluded_pairs(model)
                 self.shape_pairs_excluded_count = (
                     self.shape_pairs_excluded.shape[0] if self.shape_pairs_excluded is not None else 0
@@ -2164,6 +2241,28 @@ class CollisionPipeline:
                 self.broad_phase = BroadPhaseSAP(shape_world, shape_flags=shape_flags, sort_type="auto", device=device)
                 self.shape_pairs_filtered = None
                 self.shape_pairs_max = _resolve_shape_pairs_max(model, shape_pairs_max)
+                self.shape_pairs_excluded = self._build_excluded_pairs(model)
+                self.shape_pairs_excluded_count = (
+                    self.shape_pairs_excluded.shape[0] if self.shape_pairs_excluded is not None else 0
+                )
+            elif self.broad_phase_mode == "aggregate":
+                if shape_world is None:
+                    raise ValueError("model.shape_world is required for broad_phase=AGGREGATE")
+                # Deterministic contacts also order the candidate pairs; otherwise the module default. The grid's
+                # cell covers the speculative growth, and verify_buffers turns on the device-side warnings.
+                self.broad_phase = BroadPhaseAggregate.from_model(
+                    model,
+                    ordered=True if deterministic else None,
+                    speculative_contact_gap_max=speculative_contact_gap_max,
+                    verify=verify_buffers,
+                )
+                self.refresh_static_shapes()
+                self.shape_pairs_filtered = None
+                self.shape_pairs_max = (
+                    _default_aggregate_shape_pairs_max(model)
+                    if shape_pairs_max is None
+                    else _resolve_shape_pairs_max(model, shape_pairs_max)
+                )
                 self.shape_pairs_excluded = self._build_excluded_pairs(model)
                 self.shape_pairs_excluded_count = (
                     self.shape_pairs_excluded.shape[0] if self.shape_pairs_excluded is not None else 0
@@ -3043,6 +3142,142 @@ class CollisionPipeline:
             device=model.device,
         )
 
+    def broad_phase_statistics(self) -> dict[str, int | float | str]:
+        """Read the broad phase's pair count and capacity, and the aggregate mode's statistics.
+
+        Reads the device, so call it outside graph capture, after :meth:`collide`.
+
+        Returns:
+            In every mode: ``mode``, the broad-phase mode; ``pair_count``, the
+            candidate-pair count of the last :meth:`collide`; ``shape_pairs_max``,
+            the capacity of the candidate-pair buffer. Under ``"nxn"`` and ``"sap"``
+            ``pair_count`` keeps counting the pairs dropped past the buffer, while
+            ``"aggregate"`` clamps it to the buffer. The ``"aggregate"`` mode adds the
+            keys of :meth:`BroadPhaseAggregate.statistics()
+            <newton.geometry.BroadPhaseAggregate.statistics>`, among them
+            ``pair_demand`` (the pairs found, dropped ones included),
+            ``pair_overflow`` and the latched maxima. The first read that finds
+            ``aggregate_extent_overflow`` set warns, once until the broad phase's
+            ``reset_statistics()`` clears the latch.
+
+        Raises:
+            RuntimeError: While the pipeline's device is capturing a graph.
+
+        Warns:
+            NewtonWarning: Once per latch, when an aggregate's union box exceeded
+                the ``"aggregate"`` broad phase's grid cell, so pairs may have been
+                missed.
+        """
+        if wp.get_device(self.device).is_capturing:
+            raise RuntimeError(
+                "CollisionPipeline.broad_phase_statistics() reads the device; call it outside graph capture"
+            )
+        statistics: dict[str, int | float | str] = {
+            "mode": self.broad_phase_mode,
+            "pair_count": int(self.broad_phase_pair_count.numpy()[0]),
+            "shape_pairs_max": int(self.shape_pairs_max),
+        }
+        if isinstance(self.broad_phase, BroadPhaseAggregate):
+            statistics.update(self.broad_phase.statistics())
+            resets = self.broad_phase._statistics_resets
+            if statistics["aggregate_extent_overflow"] and self._aggregate_extent_warned_at != resets:
+                self._aggregate_extent_warned_at = resets
+                warnings.warn(
+                    "CollisionPipeline: an aggregate's union box exceeded the aggregate broad phase's grid cell "
+                    f"({statistics['cell_size']:g} m; longest union-box edge {statistics['extent_max']:g} m), so "
+                    "candidate pairs may have been missed. Likely causes: a shape whose geometry sits far from its "
+                    "frame origin, beyond the reach the cell was sized for; bodies travelling far beyond the "
+                    "scene's initial extent; a speculative_contact_gap_max above the one the broad phase was built "
+                    "with; or a given shape_aggregate that keeps a long articulation whole. Remedies: pass "
+                    "broad_phase=BroadPhaseAggregate.from_model(model, main='sap', verify=True) (the exact sweep) "
+                    "with a NarrowPhase to CollisionPipeline (the expert path), or build the BroadPhaseAggregate "
+                    "there with a larger shape_extent or shape_reach",
+                    NewtonWarning,
+                    stacklevel=_external_warning_stacklevel(),
+                )
+        return statistics
+
+    def refresh_static_shapes(self, state: State | None = None) -> None:
+        """Rebin the finite static shapes of the ``"aggregate"`` broad phase at their current places.
+
+        The aggregate broad phase finds finite static shapes through a grid built
+        outside the collide step, so that the step stays graph-capturable. The
+        constructor builds it; call this method after moving static shapes (for
+        example by assigning ``model.shape_transform``), outside graph capture.
+        Until then, their pairs at the new places are missed. The grid is rebinned
+        in place, so captured graphs see the new grid. Shape boxes come from
+        ``compute_shape_aabbs``, as in :meth:`collide`, written to private
+        scratch arrays.
+
+        A no-op outside the ``"aggregate"`` mode, and without finite static
+        shapes.
+
+        Args:
+            state: State whose ``body_q`` places the body shapes, which set the
+                grid's cell size at the first build. ``None`` uses
+                ``model.body_q``.
+
+        Raises:
+            RuntimeError: While the pipeline's device is capturing a graph (in the
+                ``"aggregate"`` mode), or when a static shape's box crossed the size
+                that separates the grid from the unbounded shapes (rebuild the
+                pipeline then).
+            ValueError: If a finite static shape's box is not finite.
+
+        Warns:
+            NewtonWarning: When the static grid's capacity, set at the first
+                build, cannot hold every static; the statics left out are not seen
+                until the pipeline is rebuilt.
+        """
+        broad_phase = self.broad_phase
+        if not isinstance(broad_phase, BroadPhaseAggregate):
+            return
+        if wp.get_device(self.device).is_capturing:
+            raise RuntimeError(
+                "CollisionPipeline.refresh_static_shapes() reads the device; call it outside graph capture"
+            )
+        if not broad_phase.static_grid:
+            return
+        model = self.model
+        shape_count = model.shape_count
+        device = self.device
+        lower = wp.empty(shape_count, dtype=wp.vec3, device=device)
+        upper = wp.empty(shape_count, dtype=wp.vec3, device=device)
+        # Private scratch: the kernel also bumps a generation, zeroes a pair count and writes narrow-phase data.
+        counters = wp.zeros(2, dtype=wp.int32, device=device)
+        wp.launch(
+            kernel=compute_shape_aabbs,
+            dim=shape_count,
+            inputs=[
+                (state if state is not None else model).body_q,
+                model.shape_transform,
+                model.shape_body,
+                model.shape_type,
+                model.shape_scale,
+                model.shape_collision_radius,
+                model.shape_source_ptr,
+                model.shape_margin,
+                model.shape_gap,
+                model.shape_collision_aabb_lower,
+                model.shape_collision_aabb_upper,
+                model.shape_flags,
+                wp.empty(0, dtype=wp.bool, device=device),  # the aggregate mode rejects body variants
+                counters[0:0],
+                counters[0:1],
+                counters[1:2],
+                0,
+            ],
+            outputs=[
+                lower,
+                upper,
+                wp.empty(shape_count, dtype=wp.vec4, device=device),
+                wp.empty(shape_count, dtype=wp.transform, device=device),
+            ],
+            device=device,
+            record_tape=False,
+        )
+        broad_phase.build_static(lower, upper)
+
     def collide(
         self,
         state: State,
@@ -3247,7 +3482,8 @@ class CollisionPipeline:
                 skip_count_zero=True,  # Already zeroed by compute_shape_aabbs
                 **broad_phase_speculative_kwargs,
             )
-        elif isinstance(self.broad_phase, BroadPhaseSAP):
+        elif isinstance(self.broad_phase, (BroadPhaseSAP, BroadPhaseAggregate)):
+            # BroadPhaseAggregate.launch takes BroadPhaseSAP.launch's arguments.
             if speculative_active:
                 broad_phase_speculative_kwargs["sort_axis_displacement_limit"] = max_speculative_extension
             self.broad_phase.launch(
