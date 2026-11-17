@@ -1331,7 +1331,10 @@ def test_warmstart_resets_by_world_mask(test, device):
     from newton.tests.steel.test_scene_friction_modes import FREE_MODE_ATOL  # noqa: PLC0415
 
     model = _build_contact_scene(device, worlds=3)
-    runs = {"scene": _WarmRun(model, TRACK_ROWS, {}), "steel": _WarmRun(model, TRACK_ROWS, {}, solve_mode="serial")}
+    # Steel's default reserves contact rows in the order its threads arrive, so its sweep order, and its impulses past
+    # these tolerances, would change from run to run; the run-to-run mode fixes the order.
+    steel = _WarmRun(model, TRACK_ROWS, {}, solve_mode="serial", deterministic=wp.DeterministicMode.RUN_TO_RUN)
+    runs = {"scene": _WarmRun(model, TRACK_ROWS, {}), "steel": steel}
     for run in runs.values():
         _set_box_velocities(model, run.state_0, speed=SLIDE_SPEED)
         for _ in range(SETTLE_STEPS):

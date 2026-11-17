@@ -806,21 +806,36 @@ def test_spin_rows_count_in_the_row_watermarks(test, device):
 
     Steel appends a world's torsion rows to its dense rows and counts them in its marks (``prepare_torsion_rows`` sets
     the world's row and slot counts past them). The stacked boxes' three worlds, each with a one-sided and a two-sided
-    spin row, step ``WATERMARK_STEPS`` times with ``row_watermark`` under the scene solve and under Steel (its host
-    preparation): every mark equals Steel's, the articulation family's kept and requested rows among them, which hold
-    each world's spin rows. On the pads, at a budget one row short of the spin row, the dropped spin
-    row is requested and not kept (Steel raises there): the requested mark is the rows with it, the kept mark one
-    less, an excess of one row in one overflowing world-step and no dropped contact row.
+    spin row, step ``WATERMARK_STEPS`` times with ``row_watermark`` under the scene solve and under Steel in lockstep:
+    before each step Steel's state is the scene's, so both group the same contacts. Each step's groups are Steel's, as
+    partitions of the contacts, and every mark equals Steel's, the articulation family's kept and requested rows among
+    them, which hold each world's spin rows. (Two free trajectories drift apart by about 1e-4 m within a few steps, and
+    the grouping's 1e-5 m contact-plane tolerance then splits their groups differently.) On the pads, at a budget one
+    row short of the spin row, the dropped spin row is requested and not kept (Steel raises there): the requested mark
+    is the rows with it, the kept mark one less, an excess of one row in one overflowing world-step and no dropped
+    contact row.
     """
     watermark_steps = test_scene_features.WATERMARK_STEPS
     model = _stacked_boxes(device)
     scene = _StackRun(model, STACK_ROWS, {}, row_watermark=True)
     steel = _StackRun(model, STACK_ROWS, {}, solve_mode="serial", row_watermark=True)
-    for _ in range(watermark_steps):
+    for step in range(watermark_steps):
+        for name in ("joint_q", "joint_qd", "body_q", "body_qd"):
+            wp.copy(getattr(steel.state_0, name), getattr(scene.state_0, name))
+        steel.solver.notify_state_changed(steel.state_0)
         scene.step()
         steel.step()
         test.assertGreater(_one_sided_spin_rows(scene.solver), 0)
         test.assertGreater(_two_sided_spin_rows(scene.solver), 0)
+        count = int(scene.contacts.rigid_contact_count.numpy()[0])
+        test.assertEqual(count, int(steel.contacts.rigid_contact_count.numpy()[0]))
+        reference = steel.solver._device_torsion
+        steel_stats = steel.solver._torsion_stats if reference is None else reference.read_stats()
+        test.assertEqual(
+            set(_groups_by_contacts(scene.solver, scene.solver._torsion_stats, count)),
+            set(_groups_by_contacts(steel.solver, steel_stats, count)),
+            f"step {step}",
+        )
     marks = scene.solver.constraint_row_watermarks()
     test.assertEqual(marks, steel.solver.constraint_row_watermarks())
     test.assertGreater(marks["articulation_high_water"], 0)
