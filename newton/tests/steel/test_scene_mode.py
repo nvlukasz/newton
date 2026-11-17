@@ -56,6 +56,7 @@ from newton.tests.steel._scene_fixtures import (
     default_solve_mode,
 )
 from newton.tests.steel.test_articulation import _build_square_loop, _build_world_hinged_swing
+from newton.tests.steel.test_capacity import _box_on_ground
 from newton.tests.steel.test_link_break import AXIS_Y, _four_bar, _rod_inertia
 from newton.tests.steel.test_parent_wrench import _revolute_wrench_torques
 from newton.tests.steel.test_scene_aliases import _carry
@@ -1297,6 +1298,69 @@ def test_scene_status_reports_through_steel_api(test, device):
     test.assertEqual((stats["compliant_contacts_dropped"], stats["compliance_error"]), (0, 0))
 
 
+def test_scene_status_snapshot_is_kept_by_reset(test, device):
+    """Report the status from ``snapshot_constraint_status`` under the scene as Steel does, across resets.
+
+    ``test_capacity``'s ``test_status_snapshot_reports_status_at_snapshot`` and
+    ``test_unchecked_status_snapshot_is_kept_by_reset`` under the scene. Their single free-body row per world is held by
+    the scene's pooled budget (the default articulation budget joins it), so the box on the ground runs here under
+    budgets the pool cannot hold (one row per world in each family, two in the pool, against the box's contact rows).
+    A check of a snapshot before any raises; a snapshot reports the status as it was when taken, the row loss and the
+    joint flags alike; a reset retakes a snapshot that was checked, and keeps one that was not, so a check after the
+    reset still reports the step before it.
+    """
+    model = _box_on_ground(device)
+    solver = SolverSteel(
+        model,
+        solve_mode="scene",
+        free_body_constraint_max=1,
+        articulation_constraint_max=1,
+        warn_constraint_overflow=False,
+    )
+    pipeline = newton.CollisionPipeline(model)
+    contacts = pipeline.contacts()
+    state_in, state_out = model.state(), model.state()
+    dropped = "dropped contacts or constraint rows"
+
+    def step():
+        pipeline.collide(state_in, contacts)
+        solver.step(state_in, state_out, model.control(), contacts, 1.0 / 240.0)
+
+    with test.assertRaisesRegex(RuntimeError, "snapshot_constraint_status"):
+        solver.check_constraint_capacity(snapshot=True)
+    # A snapshot reports the status at the snapshot, and a reset retakes one that was checked.
+    solver.snapshot_constraint_status()
+    step()
+    test.assertGreater(solver.scene_statistics()["dropped_rows"], 0)
+    solver.check_constraint_capacity(snapshot=True)
+    solver.snapshot_constraint_status()
+    with test.assertRaisesRegex(RuntimeError, dropped):
+        solver.check_constraint_capacity(snapshot=True)
+    solver.reset(state_out)
+    solver.check_constraint_capacity(snapshot=True)
+    solver.check_constraint_capacity()
+    # The joint flags too: a snapshot holds a flag that was set when it was taken.
+    for name, pattern in (
+        ("_disabled_tree_joint", "articulation tree joint"),
+        ("_joint_friction_invalid", "joint_friction was invalid"),
+    ):
+        getattr(solver, name).fill_(True)
+        solver.snapshot_constraint_status()
+        getattr(solver, name).fill_(False)
+        with test.assertRaisesRegex(RuntimeError, pattern):
+            solver.check_constraint_capacity(snapshot=True)
+        solver.check_constraint_capacity()
+    # A reset keeps a snapshot that was not checked.
+    step()
+    solver.snapshot_constraint_status()
+    solver.reset(state_out)
+    solver.check_constraint_capacity()
+    with test.assertRaisesRegex(RuntimeError, dropped):
+        solver.check_constraint_capacity(snapshot=True)
+    solver.reset(state_out)
+    solver.check_constraint_capacity(snapshot=True)
+
+
 def test_scene_step_runs_under_an_external_capture(test, device):
     """Replay a scene step captured through the CUDA driver alone bitwise like the same step captured by Warp.
 
@@ -1617,6 +1681,7 @@ for _fn in (
     test_propagation_options_are_accepted_and_ignored,
     test_parent_wrench_matches_steel_under_scene,
     test_parent_wrench_includes_closure_reactions,
+    test_scene_status_snapshot_is_kept_by_reset,
 ):
     add_function_test(TestSteelSceneMode, _fn.__name__, _fn, devices=get_test_devices())
 
