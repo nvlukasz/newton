@@ -5,9 +5,12 @@
 
 With ``NEWTON_STEEL_FORCE_SCENE=1`` the test package (``newton/tests/steel/__init__.py``) calls :func:`install` as it
 is imported. Every :class:`~newton.solvers.SolverSteel` a test then builds without an explicit ``solve_mode`` runs
-``solve_mode="scene"``, unless its options are ones the mode rejects at construction (:data:`KEPT_ON_STEEL`): such a
-solver keeps Steel's default, so that the test exercises what the mode does not cover rather than its rejection. An
-explicit ``solve_mode`` (the ``_colored`` twins, the tests that build a Steel reference) is left as given. A test listed
+``solve_mode="scene"``, and so does one built with an explicit ``solve_mode="serial"`` in a test of Steel's own modules,
+whose test functions pass ``"serial"`` on as their default (a parameter their ``_colored`` twins set to ``"colored"``).
+In the scene's own modules (:data:`SCENE_TEST_MODULES`) an explicit ``"serial"`` builds a Steel reference and is kept;
+an explicit ``"colored"`` is kept everywhere, and so is any other explicit mode. A construction whose options the mode
+rejects at construction (:data:`KEPT_ON_STEEL`) keeps its Steel mode, so that the test exercises what the mode does
+not cover rather than its rejection. A test listed
 in :data:`SKIPS` is skipped with ``"Steel path: "`` and its reason: it reads a Steel mechanism the mode does not have,
 so under the forced run it would test nothing of the mode, or the mode's own test covers it (a scene counterpart).
 
@@ -335,6 +338,16 @@ a behaviour the mode does not."""
 
 _DEVICE_SUFFIX = re.compile(r"_(cpu|cuda_\d+)$")
 
+SCENE_TEST_MODULES: frozenset[str] = frozenset(
+    name.removesuffix(".py")
+    for name in os.listdir(os.path.dirname(os.path.abspath(__file__)))
+    if name.startswith("test_scene_") and name.endswith(".py")
+) | {"test_coloring"}
+"""The scene's own test modules, by basename: every ``test_scene_*.py`` of this package and ``test_coloring.py`` (the
+scene units' coloring), the modules that test the mode alone. Their tests compare the mode with Steel by design, so
+their explicit ``solve_mode="serial"`` constructions are Steel references, which the forced run keeps; in every other
+module of the package (Steel's own tests) an explicit ``"serial"`` is forced to the mode."""
+
 
 def kept_on_steel(options: Mapping[str, object], overrides: Mapping[str, object]) -> str | None:
     """The :data:`KEPT_ON_STEEL` options that ``options`` and ``overrides`` set, comma-separated, or ``None``."""
@@ -366,12 +379,13 @@ def _state() -> dict:
     """The installed wrappers' shared state, installing both wrappers first if they are not.
 
     ``forced``: whether forced constructions and skips are on; ``directory``: the recorder's directory or ``None``;
-    ``test``: the running test's ``"<Class>::<method>"`` (``None`` outside a test).
+    ``test``: the running test's ``"<Class>::<method>"`` and ``module`` the basename of its class's module (both
+    ``None`` outside a test).
     """
     state = getattr(SolverSteel.__init__, "_scene_parity_state", None)
     if state is not None:
         return state
-    state = {"forced": False, "directory": None, "test": None}
+    state = {"forced": False, "directory": None, "test": None, "module": None}
     init = SolverSteel.__init__
     run = unittest.TestCase.run
 
@@ -379,11 +393,18 @@ def _state() -> dict:
     def init_under_parity(self, model, *args, **kwargs):
         options = dict(kwargs)
         overrides = current_kernel_overrides()
-        kept = None
-        if state["forced"] and "solve_mode" not in kwargs:
+        kept = forced_from = None
+        requested = kwargs.get("solve_mode")
+        module = state["module"]
+        # No mode, or an explicit "serial" in a test of Steel's own modules (see SCENE_TEST_MODULES).
+        forceable = "solve_mode" not in kwargs or (
+            requested == "serial" and module is not None and module not in SCENE_TEST_MODULES
+        )
+        if state["forced"] and forceable:
             kept = kept_on_steel(options, overrides)
             if kept is None:
                 kwargs["solve_mode"] = "scene"
+                forced_from = requested
         try:
             init(self, model, *args, **kwargs)
         finally:
@@ -395,6 +416,7 @@ def _state() -> dict:
                     "solve_mode": mode,
                     "effective": mode == "scene",
                     "kept": kept,
+                    "forced_from": forced_from,
                     "options": options,
                     "overrides": sorted(overrides),
                 }
@@ -406,8 +428,9 @@ def _state() -> dict:
 
     @functools.wraps(run)
     def run_under_parity(self, result=None):
-        previous = state["test"]
+        previous = state["test"], state["module"]
         state["test"] = f"{type(self).__name__}::{self._testMethodName}"
+        state["module"] = type(self).__module__.rsplit(".", 1)[-1]
         reason = skip_reason(type(self).__name__, self._testMethodName) if state["forced"] else None
         if reason is not None:
             # unittest skips a test whose method carries the skip attributes, before its setUp; an instance
@@ -423,7 +446,7 @@ def _state() -> dict:
         finally:
             if reason is not None:
                 delattr(self, self._testMethodName)
-            state["test"] = previous
+            state["test"], state["module"] = previous
 
     init_under_parity._scene_parity_state = state
     run_under_parity._scene_parity_state = state
@@ -433,8 +456,11 @@ def _state() -> dict:
 
 
 def install_forced_scene() -> None:
-    """Build every ``SolverSteel`` without an explicit ``solve_mode`` with ``solve_mode="scene"`` and skip the
-    :data:`SKIPS` tests, from now on in this process (see the module docstring)."""
+    """Force ``solve_mode="scene"`` and skip the :data:`SKIPS` tests, from now on in this process.
+
+    The mode is forced on every ``SolverSteel`` built without an explicit ``solve_mode``, and on every one built with
+    an explicit ``"serial"`` outside :data:`SCENE_TEST_MODULES` (see the module docstring).
+    """
     _state()["forced"] = True
 
 
@@ -444,7 +470,8 @@ def install_recorder(directory: str) -> None:
     A record holds ``test`` (the running test's ``"<Class>::<method>"``, ``None`` outside a test), ``requested`` (the
     ``solve_mode`` argument or ``None``), ``solve_mode`` (the mode the solver resolved, or the one it was given when
     its construction raised first), ``effective`` (whether that is ``"scene"``), ``kept`` (the :data:`KEPT_ON_STEEL`
-    options that kept a forced construction on Steel, or ``None``), ``options`` (the keyword arguments) and
+    options that kept a forced construction on Steel, or ``None``), ``forced_from`` (``"serial"`` for an explicit
+    ``"serial"`` the forced run built with the mode, else ``None``), ``options`` (the keyword arguments) and
     ``overrides`` (the active kernel override keys). A construction that raises is recorded too.
     """
     os.makedirs(directory, exist_ok=True)

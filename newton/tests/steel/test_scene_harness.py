@@ -189,11 +189,75 @@ class TestSteelSceneHarness(unittest.TestCase):
                 ("Probe::test_builds", None, "serial", False, "kernel override sparse_mass_matrix=False"),
             ],
         )
+        self.assertEqual([r["forced_from"] for r in records], [None] * 5)
         self.assertEqual(records[3]["options"], {"reuse_kinematics": True})
         self.assertEqual(records[4]["overrides"], ["sparse_mass_matrix"])
         self.assertEqual(
             _scene_parity.kept_on_steel({"nesterov_momentum": True, "reuse_kinematics": True}, {}),
             "nesterov_momentum=True, reuse_kinematics=True",
+        )
+
+    def test_forced_scene_forces_explicit_serial_in_upstream_modules(self):
+        """The forced run builds an explicit ``solve_mode="serial"`` with the mode in a test of Steel's own modules.
+
+        In a scene module (``_scene_parity.SCENE_TEST_MODULES``) an explicit ``"serial"`` is a reference and is kept;
+        an explicit ``"colored"`` is kept everywhere; a construction with a ``KEPT_ON_STEEL`` option keeps ``"serial"``.
+        A serial construction forced to the mode is recorded with ``forced_from="serial"``.
+        """
+        model = _chain_worlds([3], "cpu")
+        modes = {}
+
+        def build(self):
+            where = type(self).__module__.rsplit(".", 1)[-1]
+            modes[(where, "default")] = SolverSteel(model).solve_mode
+            modes[(where, "serial")] = SolverSteel(model, solve_mode="serial").solve_mode
+            with warnings.catch_warnings():
+                # The colored mode warns that it runs the serial propagation sweep on the CPU.
+                warnings.simplefilter("ignore", NewtonWarning)
+                colored = SolverSteel(model, solve_mode="colored", articulated_contact_response="propagation")
+            modes[(where, "colored")] = colored.solve_mode
+            kept = SolverSteel(model, solve_mode="serial", reuse_kinematics=True)
+            modes[(where, "serial reuse_kinematics")] = kept.solve_mode
+
+        # Test classes as Steel's own test_options and the scene's test_scene_rows would define them.
+        upstream = type("Probe", (unittest.TestCase,), {"test_builds": build, "__module__": "steel.test_options"})
+        scene = type("Probe", (unittest.TestCase,), {"test_builds": build, "__module__": "steel.test_scene_rows"})
+        with tempfile.TemporaryDirectory() as directory:
+            with _fresh_parity():
+                _scene_parity.install_forced_scene()
+                _scene_parity.install_recorder(directory)
+                result = unittest.TestResult()
+                upstream("test_builds").run(result)
+                scene("test_builds").run(result)
+            records = _records(directory)
+        self.assertEqual(result.errors + result.failures, [])
+        self.assertTrue({"test_coloring", "test_scene_rows", "test_scene_harness"} <= _scene_parity.SCENE_TEST_MODULES)
+        self.assertNotIn("test_options", _scene_parity.SCENE_TEST_MODULES)
+        self.assertEqual(
+            modes,
+            {
+                ("test_options", "default"): "scene",
+                ("test_options", "serial"): "scene",
+                ("test_options", "colored"): "colored",
+                ("test_options", "serial reuse_kinematics"): "serial",
+                ("test_scene_rows", "default"): "scene",
+                ("test_scene_rows", "serial"): "serial",
+                ("test_scene_rows", "colored"): "colored",
+                ("test_scene_rows", "serial reuse_kinematics"): "serial",
+            },
+        )
+        self.assertEqual(
+            [(r["requested"], r["solve_mode"], r["kept"], r["forced_from"]) for r in records],
+            [
+                (None, "scene", None, None),
+                ("serial", "scene", None, "serial"),
+                ("colored", "colored", None, None),
+                ("serial", "serial", "reuse_kinematics=True", None),
+                (None, "scene", None, None),
+                ("serial", "serial", None, None),
+                ("colored", "colored", None, None),
+                ("serial", "serial", None, None),
+            ],
         )
 
     def test_forced_scene_skips_listed_tests_with_their_reason(self):
