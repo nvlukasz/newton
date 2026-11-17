@@ -1542,8 +1542,8 @@ class SceneUnits:
 
         - ``units``: units of the step (``unit_count``); ``overflow``: units past the capacity,
           counted but not stored.
-        - ``two_sided``: units between two articulations; ``limit_units``: internal units (an
-          articulation's drive, joint-limit and joint-friction rows; the name is the limits unit's).
+        - ``two_sided``: units between two articulations; ``internal_units``: internal units (an
+          articulation's own rows: drives, mimic, loop closures, joint limits and joint friction).
         - ``rounds``: pair rounds run, at most :data:`COLOR_ROUND_MAX`; ``0`` when no unit is
           two-sided.
         - ``colors``: the highest color below ``color_cap`` that a two-sided unit has, plus one
@@ -1555,7 +1555,7 @@ class SceneUnits:
           (``uncolored``).
 
         Only two-sided units are colored, so the color keys describe them alone; one-sided units
-        count only in ``units`` and ``limit_units`` (a late unit only in ``units``). Reads the device, so call it
+        count only in ``units`` and ``internal_units`` (a late unit only in ``units``). Reads the device, so call it
         outside graph capture.
         """
         if not self.built:
@@ -1564,12 +1564,12 @@ class SceneUnits:
         units = int(self.unit_count.numpy()[0])
         counts = self.color_count_per.numpy()
         used = np.flatnonzero(counts[:cap])
-        limit_units = int(np.count_nonzero(self.unit_contact[:units].numpy() == UNIT_CONTACT_INTERNAL)) if units else 0
+        internal = int(np.count_nonzero(self.unit_contact[:units].numpy() == UNIT_CONTACT_INTERNAL)) if units else 0
         return {
             "units": units,
             "overflow": int(self.unit_overflow.numpy()[0]),
             "two_sided": int(self.incidence_start.numpy()[self.side_count]) // 2,
-            "limit_units": limit_units,
+            "internal_units": internal,
             "rounds": int(self.rounds.numpy()[0]),
             "colors": int(used[-1]) + 1 if used.size else 0,
             "per_color": [int(n) for n in counts[:cap]],

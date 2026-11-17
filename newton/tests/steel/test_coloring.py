@@ -37,7 +37,7 @@ STATISTICS_KEYS = {
     "rounds",
     "per_color",
     "two_sided",
-    "limit_units",
+    "internal_units",
 }
 
 
@@ -473,9 +473,9 @@ def test_color_statistics_reads_back(test, device):
             test.assertEqual(stats["colors"], int(used.max()) + 1 if used.size else 0)
             test.assertEqual(stats["rounds"], int(units.rounds.numpy()[0]))
             test.assertEqual(stats["tail_fallback"], int(units.uncolored.numpy()[0]))
-            test.assertEqual(stats["limit_units"], int(np.sum(view["contact"] == -1)))
+            test.assertEqual(stats["internal_units"], int(np.sum(view["contact"] == -1)))
             if name == "articulated":
-                test.assertGreater(stats["limit_units"], 0)
+                test.assertGreater(stats["internal_units"], 0)
             if overrides.get("scene_color_cap") == 2:
                 test.assertEqual(stats["colors"], 2)
                 test.assertGreater(stats["tail"], 0)

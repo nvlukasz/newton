@@ -370,7 +370,7 @@ def test_limits_unit_rows_follow_the_count_pass(test, device):
     # No bound is within a zero gap of the initial pose.
     solver, _state, _contacts = _rows(_humanoids(device), joint_limit_activation_gap=0.0)
     test.assertEqual(int(solver._scene_limit_rows.numpy()[0]), 0)
-    test.assertEqual(solver.color_statistics()["limit_units"], 0)
+    test.assertEqual(solver.color_statistics()["internal_units"], 0)
 
 
 def test_scene_row_build_replays_under_capture(test, device):

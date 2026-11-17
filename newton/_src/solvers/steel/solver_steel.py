@@ -8861,9 +8861,8 @@ class SolverSteel(SolverBase, CouplingInterface):
 
         - ``units``: units of the step; ``overflow``: units past ``scene_unit_max``, counted
           but not stored.
-        - ``two_sided``: units between two articulations; ``limit_units``: internal units (an
-          articulation's own rows: drives, mimic, loop closures, joint limits and joint friction; the name is the
-          limits unit's).
+        - ``two_sided``: units between two articulations; ``internal_units``: internal units (an
+          articulation's own rows: drives, mimic, loop closures, joint limits and joint friction).
         - ``rounds``: pair rounds the coloring ran.
         - ``colors``: the highest color below the color cap in use, plus one.
         - ``per_color``: two-sided units of each color below the color cap (a ``list[int]`` with one entry per
@@ -8875,14 +8874,14 @@ class SolverSteel(SolverBase, CouplingInterface):
 
         Only units between two articulations are colored: units with one articulation (internal
         units, ground or static contacts, self-contacts) stay uncolored and appear only in
-        ``units`` and ``limit_units``.
+        ``units`` and ``internal_units``.
 
         Reads the device on the host. Raises :class:`RuntimeError` without ``solve_mode="scene"``, during CUDA graph
         capture, or before the first step of a model with articulations.
         """
         units = self._scene_units
         if not self._scene_stepped("color_statistics"):
-            names = ("units", "overflow", "two_sided", "limit_units", "rounds", "colors")
+            names = ("units", "overflow", "two_sided", "internal_units", "rounds", "colors")
             zeros = dict.fromkeys(names, 0)
             return {**zeros, "per_color": [0] * units.color_cap, "tail": 0, "tail_fallback": 0, "scene_stepped": False}
         return {**units.statistics(), "scene_stepped": True}
