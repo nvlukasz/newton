@@ -102,6 +102,13 @@ FREE_TWIST = np.array((0.4, 0.1, -0.3, 1.5, -0.2, 0.9), dtype=np.float32)
 """The rows test's world twist: under :data:`ACTIVATION_FRACTION` of the free limits the world axes lin_x, lin_z
 and ang_x pass the gate (0.25 m/s, 1 rad/s) and the others do not."""
 
+EDITED_LIMIT = 0.5
+"""``joint_velocity_limit`` [rad/s] the edited-limit test's pendulum gets after construction: below the speed at which
+gravity swings it (past 1 rad/s), so a limit that acts holds it there."""
+
+EDITED_LIMIT_STEPS = 240
+"""Steps of the edited-limit test, one second at :data:`DT`."""
+
 
 def _limit_hinges(model, limits) -> np.ndarray:
     """Give the model's hinges the velocity limits ``limits`` (a scalar or one per hinge) and return the hinges."""
@@ -814,6 +821,65 @@ def test_late_rows_change_under_capture(test, device):
     test.assertFalse(np.any(eager.solver.constraint_overflow.numpy()))
 
 
+def _swinging_pendulum(device) -> newton.Model:
+    """A 0.5 m link hinged to the world about y at its end, starting horizontal, so that gravity swings it."""
+    builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
+    link = builder.add_link(xform=wp.transform(wp.vec3(0.25, 0.0, 1.0), wp.quat_identity()))
+    builder.add_shape_box(link, hx=0.25, hy=0.02, hz=0.02)
+    hinge = builder.add_joint_revolute(
+        parent=-1,
+        child=link,
+        axis=wp.vec3(0.0, 1.0, 0.0),
+        parent_xform=wp.transform(wp.vec3(0.0, 0.0, 1.0), wp.quat_identity()),
+        child_xform=wp.transform(wp.vec3(-0.25, 0.0, 0.0), wp.quat_identity()),
+    )
+    builder.add_articulation([hinge])
+    return builder.finalize(device=device)
+
+
+def test_velocity_limits_edited_after_construction_track_steel(test, device):
+    """Enforce a joint velocity limit edited after construction as Steel does, whatever it was at construction.
+
+    Steel reads :attr:`~newton.Model.joint_velocity_limit` at every step and treats a non-positive limit as none, so a
+    limit edited in place and notified (``notify_model_changed(ModelFlags.JOINT_DOF_PROPERTIES)``) acts from the
+    next step. A gravity pendulum (:func:`_swinging_pendulum`) with ``enable_joint_velocity_limits`` steps
+    :data:`EDITED_LIMIT_STEPS` steps under Steel's serial solve and the scene after its limit is edited:
+
+    - from 0 (none) to :data:`EDITED_LIMIT`: both hold the hinge at the limit (the scene builds a hinge's
+      velocity-limit rows by its joint type, so a limit that is off at construction can act later);
+    - from 100 rad/s to :data:`EDITED_LIMIT`: both hold it at the limit;
+    - from :data:`EDITED_LIMIT` to 0: neither limits it, and it swings past twice the limit.
+
+    The two modes' largest speeds agree within 1e-4 rad/s and their final angles within 1e-4 rad.
+    """
+    for before, after in ((0.0, EDITED_LIMIT), (100.0, EDITED_LIMIT), (EDITED_LIMIT, 0.0)):
+        runs = {}
+        for mode in ("serial", "scene"):
+            with test.subTest(limit=f"{before} -> {after}", solve_mode=mode):
+                model = _swinging_pendulum(device)
+                model.joint_velocity_limit.fill_(before)
+                solver = SolverSteel(model, **{**SCENE, "solve_mode": mode}, enable_joint_velocity_limits=True)
+                model.joint_velocity_limit.fill_(after)
+                solver.notify_model_changed(newton.ModelFlags.JOINT_DOF_PROPERTIES)
+                state_0, state_1, control = model.state(), model.state(), model.control()
+                newton.eval_fk(model, state_0.joint_q, state_0.joint_qd, state_0)
+                speed = 0.0
+                for _ in range(EDITED_LIMIT_STEPS):
+                    state_0.clear_forces()
+                    solver.step(state_0, state_1, control, None, DT)
+                    state_0, state_1 = state_1, state_0
+                    speed = max(speed, float(np.max(np.abs(state_0.joint_qd.numpy()))))
+                runs[mode] = (speed, float(state_0.joint_q.numpy()[0]))
+                if after > 0.0:
+                    test.assertLessEqual(speed, after * (1.0 + 1.0e-4), f"max |qd| {speed:.4f} rad/s")
+                    test.assertGreater(speed, 0.99 * after)
+                else:
+                    test.assertGreater(speed, 2.0 * EDITED_LIMIT, f"max |qd| {speed:.4f} rad/s")
+        with test.subTest(limit=f"{before} -> {after}", compare="scene with serial"):
+            test.assertAlmostEqual(runs["scene"][0], runs["serial"][0], delta=1.0e-4, msg=str(runs))
+            test.assertAlmostEqual(runs["scene"][1], runs["serial"][1], delta=1.0e-4, msg=str(runs))
+
+
 class TestSteelSceneVelocityLimits(unittest.TestCase):
     pass
 
@@ -826,6 +892,7 @@ for _fn in (
     test_free_body_velocity_limits_track_steel,
     test_free_body_late_units_overflow_in_row_order,
     test_free_body_velocity_limit_rows_match_steel_rows,
+    test_velocity_limits_edited_after_construction_track_steel,
 ):
     add_function_test(TestSteelSceneVelocityLimits, _fn.__name__, _fn, devices=get_test_devices())
 

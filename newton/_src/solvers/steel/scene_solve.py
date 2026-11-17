@@ -4065,9 +4065,10 @@ def scene_internal_bearing(solver, model) -> np.ndarray:
       (``SolverSteel._build_connect_plan``, a free body among them), whatever its enabled flags, which are read on
       the device at every step.
     - ``FAMILY_VELOCITY_LIMIT``, with ``enable_joint_velocity_limits``: a DOF of a PRISMATIC, REVOLUTE or
-      D6 joint whose :attr:`~newton.Model.joint_velocity_limit` is not non-positive (read once, here; an
-      infinite limit builds rows in Steel too, which never act), the static part of Steel's per-DOF test of
-      its velocity-limit rows (``allocate_joint_velocity_limit_slots``). Its rows are the late unit's. A free
+      D6 joint, the joint types of Steel's velocity-limit rows, whatever its
+      :attr:`~newton.Model.joint_velocity_limit`, which Steel's per-DOF test
+      (``allocate_joint_velocity_limit_slots``: no rows for a non-positive limit) reads on the device at every
+      step, so a limit that is off at construction may be edited on. Its rows are the late unit's. A free
       rigid body with a response bears it when both rigid-body velocity limits are registered and its
       ``rigid_body_max_linear_velocity`` or ``rigid_body_max_angular_velocity`` is finite and positive (read
       once, here), the static part of Steel's per-axis test (``allocate_rigid_velocity_limit_slots``, which
@@ -4101,8 +4102,8 @@ def scene_internal_bearing(solver, model) -> np.ndarray:
     if solver._enable_joint_friction:
         per_family[FAMILY_JOINT_FRICTION] = np.asarray(solver._friction_dof_supported_host, dtype=bool)
     if solver._enable_joint_velocity_limits:
-        # Steel skips a DOF whose limit is non-positive (``qdot_max <= 0``); any other limit builds its rows.
-        per_family[FAMILY_VELOCITY_LIMIT] = (q_index >= 0) & ~(model.joint_velocity_limit.numpy() <= 0.0)
+        # By joint type: Steel reads each DOF's limit at every step, and one off at construction may be edited on.
+        per_family[FAMILY_VELOCITY_LIMIT] = q_index >= 0
     for family, dofs in per_family.items():
         counts = np.concatenate(([0], np.cumsum(dofs, dtype=np.int64)))
         bearing |= (counts[end] > counts[start]).astype(np.int32) << family

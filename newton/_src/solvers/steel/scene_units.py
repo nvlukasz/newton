@@ -1174,11 +1174,10 @@ class SceneUnits:
 
         The velocity-limit bit of the solver's per-articulation flags ``_scene_family_bearing``
         (:func:`~newton._src.solvers.steel.scene_solve.scene_internal_bearing`): with
-        ``enable_joint_velocity_limits`` an articulation with a response DOF of a PRISMATIC, REVOLUTE or D6 joint
-        whose :attr:`~newton.Model.joint_velocity_limit` is not
-        non-positive (read once, at construction), Steel's per-DOF test of its velocity-limit rows; with both
-        rigid-body velocity limits registered a free rigid body whose linear or angular limit is finite and
-        positive, Steel's per-axis test of its free-body velocity-limit rows.
+        ``enable_joint_velocity_limits`` an articulation with a response DOF of a PRISMATIC, REVOLUTE or D6 joint,
+        whatever its :attr:`~newton.Model.joint_velocity_limit` (Steel's per-DOF test of its velocity-limit rows
+        reads the limit at every step); with both rigid-body velocity limits registered a free rigid body whose
+        linear or angular limit is finite and positive, Steel's per-axis test of its free-body velocity-limit rows.
         """
         return ((solver._scene_family_bearing >> FAMILY_VELOCITY_LIMIT) & 1).astype(np.int32)
 
