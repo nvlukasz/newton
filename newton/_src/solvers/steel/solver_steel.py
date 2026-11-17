@@ -1426,18 +1426,9 @@ class SolverSteel(SolverBase, CouplingInterface):
     - ``"colored"``: the contact rows of each world are colored so that no two rows of a
       color share a responding body, and each color is solved in parallel. It requires
       ``articulated_contact_response="propagation"``.
-    - ``"scene"``: every model world is folded into one solve world, whose rows are one scene-wide list in
-      the sparse factor coordinates of each articulation's joint topology. The rows form units (an
-      articulation's own rows, a contact); the units that join two articulations are colored so that units
-      sharing an articulation differ, and each iteration sweeps every articulation's own rows and the joining
-      units color by color (see ``scene_phase_order``). The row budgets stay per world: the scene sums them
-      into its row capacity and keeps or drops each unit whole. :meth:`scene_statistics`,
-      :meth:`color_statistics` and :meth:`time_scene_units` read its rows and units back. With contact torsion
-      a step never raises for torsion: it latches the cause, which :meth:`check_constraint_capacity` raises.
-      Steel's two refusals (an overflowing contact input, a hydroelastic contact) keep Steel's messages; the
-      scene adds two causes of its own, rows or units lost before the spin rows (it then builds none) and
-      spin rows dropped past the row capacity, where Steel records the loss in :attr:`constraint_overflow`
-      alone.
+    - ``"scene"``: every model world is folded into one solve world, whose rows form units (an articulation's
+      own rows, a contact); the units that join two articulations are colored scene-wide and solved color by
+      color. See *Scene mode* below.
 
     ``articulated_contact_response`` selects how contacts of articulated bodies are
     solved. The default ``"immediate"`` response uses the generalized rows above.
@@ -1449,7 +1440,8 @@ class SolverSteel(SolverBase, CouplingInterface):
         ``solve_mode="matrix_free"`` maps to ``"serial"``; ``solve_mode="split"``, whose
         dense Delassus solve was removed, runs ``"serial"``; and
         ``articulated_contact_response="propagation_colored"`` maps to
-        ``solve_mode="colored"`` with ``"propagation"``. Each emits a
+        ``solve_mode="colored"`` with ``"propagation"``, except under ``solve_mode="scene"``,
+        which it keeps with ``"propagation"``. Each emits a
         :class:`~newton.NewtonDeprecationWarning`.
 
     Like :class:`~newton.solvers.SolverFeatherstone`, the solver uses
@@ -1536,8 +1528,9 @@ class SolverSteel(SolverBase, CouplingInterface):
 
     Limitations:
 
-    - On a CPU device both solve modes run world-serial portable kernels (``"colored"``
-      sweeps in serial order). Features with only CUDA rows (contact compliance, a
+    - On a CPU device every solve mode runs portable kernels: ``"serial"`` and ``"colored"`` run
+      world-serial (``"colored"`` sweeps in serial order) and ``"scene"`` sweeps its one solve world in
+      serial order. Features with only CUDA rows (contact compliance, a
       ``friction_mode`` other than ``"fixed_normal"``, joint friction and ``nesterov_momentum``) raise
       :class:`NotImplementedError` there, as does sleeping with ``solve_mode="colored"``;
       contact torsion raises :class:`ValueError`.
@@ -1584,7 +1577,8 @@ class SolverSteel(SolverBase, CouplingInterface):
     (world ``-1``) articulations. It also records contact-buffer overflow and contacts
     dropped by global contact reduction. The flags persist until :meth:`reset`. Read them
     in a device kernel (for example an RL termination term) or call
-    :meth:`check_constraint_capacity` outside graph capture.
+    :meth:`check_constraint_capacity` outside graph capture. ``solve_mode="scene"`` pools these capacities
+    over the worlds, see *Scene mode*.
 
     Global articulations are solved together with world 0. A kinematic global free body
     (for example a moving platform) contacts the bodies of every world.
@@ -1596,6 +1590,73 @@ class SolverSteel(SolverBase, CouplingInterface):
     :attr:`constraint_overflow`. The constructor warns once if the model's shape flags and
     collision groups allow such contacts. Use world geometry or a kinematic free body for
     scenery shared by all worlds, or add the body to every world.
+
+    Scene mode:
+        ``solve_mode="scene"`` folds every model world, global entities included, into one solve world, so the
+        parallelism of the constraint solve comes from the units of the whole model instead of from its worlds.
+        Every articulated joint topology is factored sparsely in its own factor group, in the fill-free pattern
+        of its kinematic tree, without the per-world shared-memory gate and the 64-DOF bound of the sparse
+        factors described above; free bodies keep their six-DOF response. A topology whose factor or contact
+        response does not fit the static shared memory of one block raises :class:`NotImplementedError` at
+        construction. The model's worlds still label :attr:`constraint_overflow`, :meth:`reset` and the row
+        marks of ``row_watermark``. Which mode is faster depends on the model and the world count; measure the
+        full step before choosing it.
+
+        The rows of a step form units, the work items of the solve: an articulation's internal unit (its mimic
+        and loop-closure rows, joint limits, joint friction and, with ``drive_mode="rows"``, drive rows), its
+        late unit (its joint velocity-limit rows, or a free body's velocity-limit rows) and one unit per contact
+        (the normal row and its friction rows). A free body, a single body with a world-rooted free joint, is an
+        articulation of its own here. A unit of one articulation (an internal or late unit, a contact with the
+        ground, a static shape, a kinematic body or another link of the same articulation) is one-sided; a
+        contact between two articulations is a two-sided unit. Every step colors the two-sided units scene-wide
+        so that no two units of a color share an articulation. Each iteration then sweeps the one-sided rows of
+        every articulation, the articulations in parallel (phase A), and the two-sided units color by color,
+        every unit of a color at once (phase B), and ends with the late rows in Steel's order, the spin rows of
+        contact torsion before the velocity limits. ``scene_phase_order`` sets the order of the two phases on
+        the articulations that have a two-sided unit: ``"BA"`` (default), ``"AB"`` or ``"ABA"``; the other
+        articulations run all their iterations first. Two-sided units that the coloring cannot place below its
+        color cap, or within its round cap, take a tail color, which one thread sweeps after the colors, one
+        unit at a time; the first :meth:`scene_statistics` call that finds such units warns once.
+
+        The row budgets are pooled. The scene's row capacity is ``articulation_constraint_max``, plus
+        ``free_body_constraint_max`` when the model has free bodies, summed over the model's worlds (global
+        entities add no world); ``propagation_constraint_max`` is not used. Units take rows in row order, the
+        one-sided units by articulation, then the two-sided units by color and the tail, then the late units,
+        and are kept or dropped whole: the kept units are a prefix of that order, so a world can use rows that
+        another world leaves free, and a unit that does not fit loses all of its rows, an articulation's
+        internal unit included. A dropped unit flags the worlds of its articulations in
+        :attr:`constraint_overflow`. ``scene_unit_max`` bounds the units of one step; units past it get no rows
+        and flag every world. The spin rows of contact torsion follow every unit, and those that fit are kept.
+        :meth:`constraint_row_watermarks` keeps its marks per world, a world's excess being the rows its
+        dropped units asked for.
+
+        The constructor's checks of the options and the model, up to those of the sleeping state, run first, so a
+        combination they reject raises their error under this mode too; on the CPU, Steel's CUDA-only features
+        are refused as listed under the limitations, and the mode runs wherever Steel does. The mode itself
+        raises :class:`ValueError` for
+        ``nesterov_momentum=True`` and ``reuse_kinematics=True``, for a ``scene_unit_max`` below 1 and for a
+        ``scene_phase_order`` other than ``"BA"``, ``"AB"`` and ``"ABA"``, and its coupling hooks raise
+        :class:`ValueError` when a coupled simulation calls them. Some options are accepted with a
+        changed meaning and read back as requested: ``articulated_contact_response="propagation"`` solves with
+        the immediate response, which the scene's factor coordinates give exactly, and builds none of the
+        propagation response's rows, tree factors or caches, so the ``propagation_*`` options change nothing;
+        the row schedules run the scene's own sweep, ``row_schedule="phased"`` in the phase order ``"AB"``
+        whatever ``scene_phase_order`` says; and ``enable_bilateral_preelimination`` sweeps the plain mimic and
+        loop-closure rows. The deprecated ``articulated_contact_response="propagation_colored"`` keeps this
+        mode and maps to ``"propagation"`` with a :class:`~newton.NewtonDeprecationWarning`, where the other
+        modes map it to ``solve_mode="colored"``. The diagonal mass, sparse-diagonal, articulation-local and
+        paired solves of the other modes are not selected.
+
+        :meth:`scene_statistics` reads back the step's rows (kept, requested, the capacity and the dropped
+        rows), units, colors and tail, and the status of contact compliance and contact torsion;
+        :meth:`color_statistics` reads back the units and the coloring, and :meth:`time_scene_units` times one
+        build and one coloring of the units on the last step's contacts. Each reads the device on the host and
+        raises :class:`RuntimeError` without the mode, during CUDA graph capture, or before the first step of a
+        model with articulations. With contact torsion a step never raises for torsion: it latches the cause
+        (``scene_statistics()["torsion_status"]``), which :meth:`check_constraint_capacity` raises. Steel's two
+        refusals (an overflowing contact input, a hydroelastic contact) keep Steel's messages; the scene adds
+        two causes of its own, rows or units lost before the spin rows (it then builds none) and spin rows
+        dropped past the row capacity, where Steel records the loss in :attr:`constraint_overflow` alone.
 
     Solver observables:
         :attr:`~newton.solvers.SolverBase.Observables.body_parent_f` is populated when
@@ -2010,28 +2071,34 @@ class SolverSteel(SolverBase, CouplingInterface):
                 across all worlds; contacts left without a color run last, in the order set by
                 ``propagation_color_order``. ``"colored"`` covers free bodies as well as
                 articulations and requires ``articulated_contact_response="propagation"``; any
-                other response raises :class:`ValueError`. On CPU both modes run world-serial
-                portable kernels (``"colored"`` sweeps in serial order), and the CUDA-only features
-                listed in the class description raise :class:`NotImplementedError`.
+                other response raises :class:`ValueError`. On CPU ``"serial"`` and ``"colored"`` run
+                world-serial portable kernels (``"colored"`` sweeps in serial order), and the CUDA-only
+                features listed in the class description raise :class:`NotImplementedError`.
 
-                ``"scene"`` solves the whole model as one solve world (see the class description): every
-                articulated joint topology is factored sparsely in its own factor group, without the
-                per-world shared-memory gate of the sparse factors, and the model's worlds still label
-                :attr:`constraint_overflow` and :meth:`reset`. The constructor's checks of the options and the
-                model, up to those of the sleeping state, run first, so a combination they reject raises their
-                error under this mode too (the sleeping state's own checks, ``enable_sleeping``, run after the
-                mode's); the mode then raises :class:`ValueError` for what it does not implement yet:
-                ``nesterov_momentum``, ``reuse_kinematics`` and coupling. It solves every loop closure Steel accepts.
-                Meshes with surface velocity (``Mesh.enable_surface_velocity``) are supported: their contacts'
-                friction targets and persistent anchors follow the moving surface as in the other modes. With
-                ``articulated_contact_response="propagation"`` it
-                solves with the immediate response, which its factor coordinates give exactly, and builds none
-                of the propagation response's rows, tree factors or caches; the response reads back as
-                requested and the ``propagation_*`` options are accepted and change nothing. The row schedules
-                read back as requested and run the scene's own sweep (``"phased"`` in the phase order
-                ``"AB"``), and ``enable_bilateral_preelimination`` reads back as requested while the scene
-                sweeps the plain mimic and connect rows. The diagonal mass, sparse-diagonal, local and paired
-                solves of the other modes are not selected.
+                ``"scene"`` solves the whole model as one solve world, see *Scene mode* in the class
+                description: every articulated joint topology is factored sparsely in its own factor group,
+                without the per-world shared-memory gate of the sparse factors; the rows form units, of which
+                those joining two articulations are colored every step; and the row budgets are pooled over the
+                model's worlds, which still label :attr:`constraint_overflow` and :meth:`reset`. The
+                constructor's checks of the options and the model, up to those of the sleeping state, run
+                first, so a combination they reject raises their error under this mode too (the sleeping
+                state's own checks, ``enable_sleeping``, run after the mode's); the mode then raises
+                :class:`ValueError` for ``nesterov_momentum=True`` and ``reuse_kinematics=True``, and its
+                coupling hooks raise :class:`ValueError` when a coupled simulation calls them. It solves every
+                loop closure Steel accepts, and runs on the CPU wherever Steel does, sweeping in serial order
+                there. Meshes with surface velocity (``Mesh.enable_surface_velocity``) are supported: their
+                contacts' friction targets and persistent anchors follow the moving surface as in the other
+                modes. With ``articulated_contact_response="propagation"`` it solves with the immediate
+                response, which its factor coordinates give exactly, and builds none of the propagation
+                response's rows, tree factors or caches; the response reads back as requested and the
+                ``propagation_*`` options are accepted and change nothing. The deprecated
+                ``articulated_contact_response="propagation_colored"`` keeps this mode and maps to
+                ``"propagation"``. The row schedules read back as requested and run the scene's own sweep
+                (``"phased"`` in the phase order ``"AB"``), and ``enable_bilateral_preelimination`` reads back
+                as requested while the scene sweeps the plain mimic and connect rows. The diagonal mass,
+                sparse-diagonal, local and paired solves of the other modes are not selected. See
+                :meth:`scene_statistics`, :meth:`color_statistics` and :meth:`time_scene_units` for its
+                read-back.
 
                 .. deprecated:: 1.8
                     ``"matrix_free"`` maps to ``"serial"``, and ``"split"``, whose dense Delassus
@@ -2494,7 +2561,8 @@ class SolverSteel(SolverBase, CouplingInterface):
 
                 .. deprecated:: 1.8
                     ``"propagation_colored"`` maps to ``solve_mode="colored"`` with
-                    ``"propagation"`` and emits a :class:`~newton.NewtonDeprecationWarning`.
+                    ``"propagation"``, except under ``solve_mode="scene"``, which it keeps with
+                    ``"propagation"``; either emits a :class:`~newton.NewtonDeprecationWarning`.
             propagation_same_articulation_rows: Solve contacts between two links of the same
                 articulation as propagation rows, with the exact cross response of the two
                 links, instead of dense rows. Requires
@@ -2556,10 +2624,12 @@ class SolverSteel(SolverBase, CouplingInterface):
                 :class:`NotImplementedError`. Construction-only.
             scene_phase_order: The order of the two phases of each iteration of ``solve_mode="scene"``
                 on the articulations that share a unit with another one (the coupled sides): ``"A"`` is one
-                sweep of their one-sided rows (drives, joint limits and friction, ground, static and
-                self-contacts), ``"B"`` one sweep of the units joining two articulations, color by color.
-                ``"BA"`` (default) runs B then A, ``"AB"`` A then B, and ``"ABA"`` A, B and A again. The
-                articulations without such a unit run all their iterations first in every order. ``"BA"``
+                sweep of their one-sided rows (their internal rows: drives, mimic and loop-closure rows, joint
+                limits and joint friction; their contacts with the ground, static shapes, kinematic bodies and
+                themselves), ``"B"`` one sweep of the units joining two articulations, color by color.
+                ``"BA"`` (default) runs B then A, ``"AB"`` A then B, and ``"ABA"`` A, B and A again. In every
+                order the late rows (contact torsion's spin rows, then velocity limits) end the iteration, and
+                the articulations without such a unit run all their iterations first. ``"BA"``
                 ends each iteration with a body's ground contacts and limits corrected after the pushes it
                 received, which keeps bodies that lean on each other from creeping.
                 ``row_schedule="phased"`` runs ``"AB"`` whatever this option says, and the option still
@@ -2570,8 +2640,9 @@ class SolverSteel(SolverBase, CouplingInterface):
                 from the scene's row capacity: one contact unit per three rows (per row when a contact may
                 have a normal row alone, under friction patches or a finite ``contact_friction_gap_max``),
                 plus one internal and one velocity-limit unit per articulation that can have such rows. Units
-                past the capacity are counted, not stored. At least 1, else :class:`ValueError` under the
-                mode; the other modes ignore the option.
+                past the capacity are counted (``scene_statistics()["unit_overflow"]``), not stored: they get
+                no rows, and the step flags every world in :attr:`constraint_overflow`. At least 1, else
+                :class:`ValueError` under the mode; the other modes ignore the option.
         """
         solve_mode, articulated_contact_response = _normalize_solve_mode(solve_mode, articulated_contact_response)
         _validate_solve_mode(solve_mode, articulated_contact_response)

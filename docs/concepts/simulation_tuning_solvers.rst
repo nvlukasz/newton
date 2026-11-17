@@ -254,11 +254,25 @@ repository examples spend tuning effort, not a shared solver API.
        ``propagation_color_order``,
        ``contact_shared_anchor``, ``contact_friction_shared_anchor``,
        ``row_watermark``, ``row_schedule``, ``use_parallel_streams``,
-       ``double_buffer``, ``friction_mode``, ``nesterov_momentum``.
+       ``double_buffer``, ``friction_mode``, ``nesterov_momentum``,
+       ``scene_phase_order``, ``scene_unit_max``.
      - Experimental. The solve is matrix-free; ``solve_mode`` selects its
        Gauss-Seidel sweep order: ``"serial"`` (the default) sweeps each world's rows
        in order, ``"colored"`` solves the propagation contact rows in parallel
-       batches (see below). On CPU both modes run world-serial portable kernels;
+       batches (see below), and ``"scene"`` folds every world into one solve world
+       whose rows form units (an articulation's own rows, a contact), coloring the
+       units that join two articulations so that each color is solved in parallel.
+       The scene pools the row budgets over the worlds and keeps or drops each unit
+       whole; ``scene_phase_order`` orders the sweep of each articulation's one-sided
+       rows (its own rows and its contacts with the ground, static shapes and itself)
+       and of the joining units within an iteration, and ``scene_unit_max`` bounds
+       the units of a step. It rejects ``nesterov_momentum``, ``reuse_kinematics``
+       and coupling, solves ``articulated_contact_response="propagation"`` with the
+       immediate response and ignores the ``propagation_*`` options;
+       ``scene_statistics()`` and ``color_statistics()`` report its rows, units and
+       colors. Which mode is faster depends on the model and the world count, so
+       measure the full step. On CPU every mode runs portable kernels, ``"serial"``
+       and ``"colored"`` world-serial and ``"scene"`` its one solve world in serial order;
        contact torsion, contact compliance, joint friction, the non-default
        ``friction_mode`` values, ``nesterov_momentum`` and sleeping with
        ``solve_mode="colored"`` require CUDA. The spellings
