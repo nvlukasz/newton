@@ -61,6 +61,7 @@ import newton
 from newton._src.solvers.steel.kernels import (
     PGS_CONSTRAINT_TYPE_CONTACT,
     PGS_CONSTRAINT_TYPE_FRICTION,
+    PGS_CONSTRAINT_TYPE_JOINT_FRICTION,
     PGS_CONSTRAINT_TYPE_JOINT_LIMIT,
 )
 from newton._src.solvers.steel.scene_pgs import (
@@ -78,6 +79,7 @@ from newton._src.solvers.steel.scene_pgs import (
 )
 from newton._src.solvers.steel.scene_rows import _get_scene_contact_response_kernel
 from newton.solvers import SolverBase, SolverSteel
+from newton.tests.steel import test_contact_reduction
 from newton.tests.steel._fixtures import DT, _build_contact_scene, _friction_impulses, _set_box_velocities
 from newton.tests.steel._scene_fixtures import (
     DEFAULT_SNIPPET_SHA256,
@@ -90,6 +92,7 @@ from newton.tests.steel._scene_fixtures import (
 )
 from newton.tests.steel.test_capacity import _box_on_ground
 from newton.tests.steel.test_contacts import FILL, LOWER_MASS, _check_rows, _net_body_forces, _stacked_boxes
+from newton.tests.test_contact_reduction_body_pairs import _free_jointed_foot, _make_pipeline, _undamped
 from newton.tests.unittest_utils import StdOutCapture, add_function_test, get_cuda_test_devices, get_test_devices
 
 RESTITUTION_RHS_ATOL = 1.0e-6
@@ -1959,6 +1962,214 @@ add_function_test(
     TestSteelSceneFeatures,
     "test_default_features_compile_todays_source",
     test_default_features_compile_todays_source,
+    devices=get_test_devices(),
+)
+
+
+LOAD_COEFFICIENT = 0.1
+"""``steel:joint_friction_load_coefficient`` of the loaded chain's hinges: each bound grows by a tenth of the load."""
+
+CHAIN_FRICTION = 0.05
+"""Constant :attr:`~newton.Model.joint_friction` [N·m] of the loaded chain's hinges, below every load term."""
+
+CHAIN_EFFORTS = (1.0, 4.0, 0.5)
+"""Efforts [N·m] on the loaded chain's hinges, root to tip, about the bounds their loads give.
+
+Hanging still, the root carries about 29 N (bound about 3 N·m), the middle hinge about 20 N (about 2 N·m) and the tip
+about 10 N (about 1 N·m), so the root and the tip stick while the middle hinge slides against its bound."""
+
+LOAD_RMS = 1.0e-5
+"""RMS bound of the loaded chain's ``joint_qd`` against Steel's after :data:`TRACK_STEPS` steps."""
+
+LOAD_RTOL = 1.0e-5
+"""Relative tolerance of the scene's load-proportional totals against Steel's, every step. Both are Steel's
+``eval_joint_friction_load``, but on the stage-3 accelerations of each mode's own mass solve, which agree within
+float32 rounding (about 1e-6 relative at the first step), not bit for bit."""
+
+STICK_QD = 1.0e-6
+"""Speed [rad/s] below which a hinge counts as stuck."""
+
+PILE_TOL = 5.0e-4
+"""Settled-height tolerance [m] of the reduced-contact pile, reduced against unreduced and against Steel's serial
+solve: the default of Steel's reduction conformance, tighter than the 2 mm Steel's own two-foot pile is held to."""
+
+PILE_FORCE_ATOL = 1.0e-4
+"""Tolerance [N] of each foot's net contact force after one step from the resting pile, the scene against Steel's
+serial solve on the same reduced contacts. They agree within about 1e-6 N of the feet's 2.6 N weights; a scene that
+ignores every other reduced contact is 3e-3 N or more off."""
+
+PILE_LOAD = 0.9
+"""Fraction of each foot's weight its net contact force carries at least in the resting pile's step."""
+
+PILE_W_TOL = 0.15
+"""Floor [rad/s] of the reduced pile's tail angular residual, Steel's own bound for its two-foot pile: on reduced
+contacts Steel's serial solve rocks at about 0.075 rad/s there (0.016 unreduced), above the 0.05 default floor."""
+
+
+def _loaded_hinge_chain(device) -> newton.Model:
+    """Three 1 kg links hanging from hinges about y, each with constant friction and a load coefficient.
+
+    Each link's center of mass sits 0.1 m below its hinge and the next hinge 0.2 m below, so hanging still the
+    hinges transmit the weight below them without a torque about their axes.
+    """
+    builder = newton.ModelBuilder(gravity=(0.0, 0.0, -9.81))
+    SolverSteel.register_custom_attributes(builder)
+    joints = []
+    parent = -1
+    for i in range(len(CHAIN_EFFORTS)):
+        link = builder.add_link(mass=1.0, com=wp.vec3(0.0, 0.0, -0.1), inertia=wp.mat33(np.eye(3) * 0.01))
+        anchor = (0.0, 0.0, 1.0) if i == 0 else (0.0, 0.0, -0.2)
+        joints.append(
+            builder.add_joint_revolute(
+                parent,
+                link,
+                axis=(0.0, 1.0, 0.0),
+                parent_xform=wp.transform(anchor, wp.quat_identity()),
+                friction=CHAIN_FRICTION,
+                armature=0.0,
+            )
+        )
+        parent = link
+    builder.add_articulation(joints)
+    model = builder.finalize(device=device)
+    model.steel.joint_friction_load_coefficient.fill_(LOAD_COEFFICIENT)
+    return model
+
+
+def test_load_proportional_joint_friction_matches_steel(test, device):
+    """Bound the scene's joint-friction rows by Steel's load-proportional friction, as Steel's serial solve does.
+
+    The hinges of :func:`_loaded_hinge_chain` carry efforts about their bounds (:data:`CHAIN_EFFORTS`). Each step
+    Steel writes each DOF's bound ``f + c (|F| + |T|)`` from the transmitted load (``_joint_friction_total``) before
+    the rows are built, and the scene's friction rows read it in place of the constant
+    :attr:`~newton.Model.joint_friction`. Over :data:`TRACK_STEPS` steps the scene's ``joint_qd`` stays within
+    :data:`LOAD_RMS` of Steel's serial solve with the same options and both write the same totals within
+    :data:`LOAD_RTOL`. The root and the tip stick while the middle hinge slides, the totals exceed the constant
+    friction, and the scene's friction rows are bounded by the totals times ``dt``: with the constant friction
+    instead, every hinge would slide.
+    """
+    model = _loaded_hinge_chain(device)
+    runs = {
+        mode: _Run(model, TRACK_ROWS, {}, collide=False, solve_mode=mode, iterations=16, enable_joint_friction=True)
+        for mode in ("scene", "serial")
+    }
+    for run in runs.values():
+        test.assertTrue(run.solver._joint_friction_load_active)
+        run.control.joint_f.assign(np.asarray(CHAIN_EFFORTS, dtype=np.float32))
+    scene, steel = runs["scene"], runs["serial"]
+    test.assertEqual(scene.solver.solve_mode, "scene")
+    friction = model.joint_friction.numpy()
+    speeds = []
+    for _ in range(TRACK_STEPS):
+        for run in runs.values():
+            run.step()
+        np.testing.assert_allclose(
+            scene.solver._joint_friction_total.numpy(), steel.solver._joint_friction_total.numpy(), rtol=LOAD_RTOL
+        )
+        speeds.append(scene.state_0.joint_qd.numpy())
+    for name, run in runs.items():
+        test.assertFalse(np.any(run.solver.constraint_overflow.numpy()), f"{name} overflowed")
+    rms = _rms(scene.state_0.joint_qd.numpy(), steel.state_0.joint_qd.numpy())
+    test.assertLessEqual(rms, LOAD_RMS)
+
+    total = scene.solver._joint_friction_total.numpy()
+    test.assertTrue(np.all(total > friction), f"{total} carries no load over {friction}")
+    speeds = np.abs(np.asarray(speeds))
+    test.assertTrue(np.all(speeds.max(axis=0)[[0, 2]] < STICK_QD), f"the root or the tip slid: {speeds.max(axis=0)}")
+    test.assertGreater(speeds[-1, 1], 1.0, f"the middle hinge stuck: {speeds[-1]}")
+
+    solver = scene.solver
+    rows = int(solver._constraint_count.numpy()[0])
+    is_friction = solver._row_type.numpy()[0, :rows] == PGS_CONSTRAINT_TYPE_JOINT_FRICTION
+    bounds = solver._scene.row_bound.numpy()[0, :rows][is_friction]
+    test.assertTrue(np.array_equal(bounds, total * np.float32(DT)), f"{bounds} != {total} dt")
+    test.assertFalse(np.allclose(bounds, friction * np.float32(DT)))
+
+
+def _foot_pile(builder, *, resting=False):
+    """Two free-jointed feet of seven cylinders, the upper one 5 mm aside; return the upper foot's body.
+
+    Dropped, the lower foot starts 2.5 mm above the ground and the upper one 4.5 cm above the lower; resting, each
+    starts at its rest height.
+    """
+    lower, upper = (0.015, 0.045) if resting else (0.0175, 0.09)
+    _free_jointed_foot(builder, (0.0, 0.0, lower))
+    return _free_jointed_foot(builder, (0.0, 0.005, upper))
+
+
+def _pile_solver(mode):
+    """A factory of Steel solvers in ``mode`` with point friction and undamped free bodies."""
+    return lambda model: _undamped(SolverSteel(model, solve_mode=mode, friction_anchor_beta=0.0))
+
+
+def _resting_pile_forces(test, device) -> dict:
+    """Each foot's net contact force after one step of each mode from the resting pile, on one reduced buffer."""
+    builder = newton.ModelBuilder(gravity=(0.0, 0.0, -9.81))
+    _foot_pile(builder, resting=True)
+    builder.add_ground_plane()
+    model = builder.finalize(device=device)
+    pipeline = _make_pipeline(model, True)
+    contacts = pipeline.contacts()
+    state = model.state()
+    newton.eval_fk(model, state.joint_q, state.joint_qd, state)
+    pipeline.collide(state, contacts)
+    test.assertTrue(contacts.rigid_contact_body_pair_reduced)
+    test.assertGreater(int(contacts.rigid_contact_count.numpy()[0]), 0)
+    forces = {}
+    for mode in ("scene", "serial"):
+        solver = _pile_solver(mode)(model)
+        observables = solver.observables({SolverBase.ObservableKind.CONTACT_F}, contacts=contacts)
+        state_0 = model.state()
+        newton.eval_fk(model, state_0.joint_q, state_0.joint_qd, state_0)
+        solver.step(state_0, model.state(), model.control(), contacts, DT, observables=observables)
+        forces[mode] = _net_body_forces(model, contacts, observables.contact_f.numpy())
+    forces["weight"] = model.body_mass.numpy() * 9.81
+    return forces
+
+
+def test_reduced_contacts_match_steel_under_scene(test, device):
+    """Solve body-pair-reduced contacts under the scene as Steel does: per foot at rest, and settling a small pile.
+
+    A free-jointed foot of seven cylinders dropped onto another settles on the ground (:func:`_foot_pile`). With and
+    without body-pair reduction the scene meets Steel's reduction conformance (``test_contact_reduction``'s
+    ``_compare``): both runs fall and see contacts, reduction compacts them, the settled heights agree within
+    :data:`PILE_TOL` and the reduced pile rests within Steel's floor for this pile (:data:`PILE_W_TOL`). On reduced
+    contacts the scene's settled height agrees with Steel's serial solve within :data:`PILE_TOL`.
+
+    A resting pile's height does not tell whether every reduced contact acts: the redundant contacts of a manifold
+    carry the same weight. So from the resting pile both modes step once on the same reduced contacts, and each
+    foot's net contact force (``CONTACT_F``) agrees within :data:`PILE_FORCE_ATOL` and carries its weight.
+    """
+    conformance = test_contact_reduction.TestSteelBodyPairReductionConformance()
+    with wp.ScopedDevice(device):
+        z_off, fell_off, contacts_off, w_off, _ = conformance._settle(_foot_pile, _pile_solver("scene"), False)
+        z_on, fell_on, contacts_on, w_on, _ = conformance._settle(_foot_pile, _pile_solver("scene"), True)
+        z_steel = conformance._settle(_foot_pile, _pile_solver("serial"), True)[0]
+    test.assertTrue(fell_off and fell_on, "the pile did not fall: the scene is not simulating it")
+    test.assertGreater(contacts_off, 0)
+    test.assertGreater(contacts_on, 0)
+    test.assertLess(contacts_on, contacts_off, "the reduced run never compacted a contact manifold")
+    test.assertLess(abs(z_off - z_on), PILE_TOL)
+    test.assertLess(w_on, max(2.0 * w_off, PILE_W_TOL), f"reduced settle is rocking: |w| {w_on} vs {w_off}")
+    test.assertLess(abs(z_on - z_steel), PILE_TOL)
+
+    forces = _resting_pile_forces(test, device)
+    np.testing.assert_allclose(forces["scene"], forces["serial"], rtol=0.0, atol=PILE_FORCE_ATOL)
+    test.assertTrue(np.all(forces["serial"][:, 2] > PILE_LOAD * forces["weight"]), f"{forces}")
+
+
+# CUDA only: Steel refuses enable_joint_friction=True on the CPU (reject_cpu_unsupported_features).
+add_function_test(
+    TestSteelSceneFeatures,
+    "test_load_proportional_joint_friction_matches_steel",
+    test_load_proportional_joint_friction_matches_steel,
+    devices=get_cuda_test_devices(),
+)
+
+add_function_test(
+    TestSteelSceneFeatures,
+    "test_reduced_contacts_match_steel_under_scene",
+    test_reduced_contacts_match_steel_under_scene,
     devices=get_test_devices(),
 )
 

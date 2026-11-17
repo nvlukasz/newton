@@ -1549,7 +1549,8 @@ class SceneSolve:
     penetrating contact that does not rebound, 1 otherwise) and the sweeps read; it is ``None``
     otherwise, and the row build and the featured kernels take an empty ``[1, 0]`` array. With
     ``enable_joint_friction``, ``row_bound`` (``float32``, ``[1, row_max]``, allocated here) holds each
-    joint-friction row's bound ``f dt``, which the row's builder writes and the sweeps clamp to; it is
+    joint-friction row's bound ``f dt`` (``f`` with its load term under Steel's load-proportional friction,
+    ``SolverSteel._joint_friction_total``), which the row's builder writes and the sweeps clamp to; it is
     ``None`` otherwise, and the featured kernels take an empty ``[1, 0]`` array. With ``drive_mode="rows"``,
     ``drive_descriptors`` are Steel's four ``[1, row_max]`` drive descriptor arrays (``_drive_target_vel_bias``,
     ``_drive_vel_multiplier``, ``_drive_impulse_multiplier``, ``_drive_max_impulse``), which
@@ -2146,7 +2147,8 @@ class SceneSolve:
         step's ``control`` (its joint targets; required with the drive family), the mimic rows with Steel's
         mimic law on ``state_in``'s coordinates, the joint limits with
         Steel's sparse joint-limit builder of the group's mask words, exactly as before the internal
-        unit, and the joint friction with its law at the step's ``dt``. The connect family is one launch over
+        unit, and the joint friction with its law at the step's ``dt`` (on Steel's load-proportional totals when
+        they are active). The connect family is one launch over
         every closure owner (:meth:`_launch_connect_rows`), free bodies included, on ``state_in``'s poses and
         ``state_aug``'s motion subspaces (required with the connect family). Every builder works per
         articulation, so the order of the groups' launches does not change the rows.
@@ -2253,11 +2255,16 @@ class SceneSolve:
                         solver._joint_limit_activation_gap,
                     ]
                 elif family == FAMILY_JOINT_FRICTION:
+                    # Steel's rule: with load-proportional friction, each DOF's friction plus its load term, which
+                    # SolverSteel._stage3_joint_friction_load writes before the rows are built.
+                    joint_friction = (
+                        solver._joint_friction_total if solver._joint_friction_load_active else model.joint_friction
+                    )
                     law = [
                         solver._constraint_art_active,
                         solver._friction_dof_supported,
                         solver._kinematic_dof_mask,
-                        model.joint_friction,
+                        joint_friction,
                         dt,
                     ]
                     rows.append(self.row_bound)
