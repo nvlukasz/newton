@@ -2021,8 +2021,10 @@ class SolverSteel(SolverBase, CouplingInterface):
                 model, up to those of the sleeping state, run first, so a combination they reject raises their
                 error under this mode too (the sleeping state's own checks, ``enable_sleeping``, run after the
                 mode's); the mode then raises :class:`ValueError` for what it does not implement yet:
-                ``nesterov_momentum``, ``reuse_kinematics``, coupling, meshes with surface velocity and
-                loop-closing REVOLUTE and FIXED joints. With ``articulated_contact_response="propagation"`` it
+                ``nesterov_momentum``, ``reuse_kinematics``, coupling and loop-closing REVOLUTE and FIXED
+                joints. Meshes with surface velocity (``Mesh.enable_surface_velocity``) are supported: their
+                contacts' friction targets and persistent anchors follow the moving surface as in the other
+                modes. With ``articulated_contact_response="propagation"`` it
                 solves with the immediate response, which its factor coordinates give exactly, and builds none
                 of the propagation response's rows, tree factors or caches; the response reads back as
                 requested and the ``propagation_*`` options are accepted and change nothing. The row schedules
@@ -4576,12 +4578,11 @@ class SolverSteel(SolverBase, CouplingInterface):
         It runs after the option checks and the mimic and connect plans' model checks, and before the sleeping
         state's checks (``_SleepState``). The scene runs every option and model those checks accept but these, each
         named in one :class:`ValueError`: ``nesterov_momentum`` (the scene's sweeps carry no momentum),
-        ``reuse_kinematics`` (the scene's step does not take the carried kinematics), a mesh shape with surface
-        velocity (the scene's contact rows have no surface-velocity target) and loop-closing REVOLUTE and FIXED joints
-        (the scene's connect rows are the three anchor rows of a BALL closure, where the other modes add two hinge rows
-        or three rotation rows). Coupling is refused by the coupling hooks (:meth:`_require_coupling_support`). The
-        mode's own options raise :class:`ValueError` too: ``scene_unit_max`` below 1 and a ``scene_phase_order`` other
-        than ``"BA"``, ``"AB"`` and ``"ABA"``.
+        ``reuse_kinematics`` (the scene's step does not take the carried kinematics) and loop-closing REVOLUTE and
+        FIXED joints (the scene's connect rows are the three anchor rows of a BALL closure, where the other modes add
+        two hinge rows or three rotation rows). Coupling is refused by the coupling hooks
+        (:meth:`_require_coupling_support`). The mode's own options raise :class:`ValueError` too: ``scene_unit_max``
+        below 1 and a ``scene_phase_order`` other than ``"BA"``, ``"AB"`` and ``"ABA"``.
 
         The solver's other options pass, each with its effect under the mode documented with it:
         ``articulated_contact_response="propagation"`` solves with the immediate response
@@ -4606,8 +4607,6 @@ class SolverSteel(SolverBase, CouplingInterface):
             unsupported.append("nesterov_momentum=True")
         if reuse_kinematics:
             unsupported.append("reuse_kinematics=True")
-        if self._has_surface_velocity:
-            unsupported.append("mesh surface velocity (Mesh.enable_surface_velocity)")
         if self._connect_count:
             closure_type = self.model.joint_type.numpy()[self._connect_joint_np]
             for joint_type in (JointType.REVOLUTE, JointType.FIXED):

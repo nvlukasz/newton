@@ -11,7 +11,10 @@ Steel then installs the seeds into its velocities; the scene, whose velocity is 
 ``delta``, applies them to ``delta`` side by side (:func:`scene_seed_sides`) after zeroing it, so the sweeps start
 from the seeds as Steel's do and the velocity pass continues from them. Steel's end-of-step snapshot keeps the rows
 and each contact's first row; a reset discards a world's carry contact by contact
-(:func:`scene_reset_contact_warmstart`), the rows being one world.
+(:func:`scene_reset_contact_warmstart`), the rows being one world. Patch anchors on a moving mesh surface follow it as
+Steel's do: the solver runs Steel's patch build (its displacement carried over the step's ``dt``) and
+``finish_patch_impulses`` (the slip test relative to the surface) on the scene's route, so nothing here reads the
+surface velocity.
 
 The launchers :func:`seed`, :func:`keep_gather_mu`, :func:`finish_gather_mu` and :func:`clear_warmstart` take the
 scene's solve object ``scene`` and the solver ``solver``, and read these attributes:

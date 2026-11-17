@@ -93,6 +93,7 @@ from newton.tests.steel._scene_fixtures import (
 from newton.tests.steel.test_capacity import _box_on_ground
 from newton.tests.steel.test_contacts import FILL, LOWER_MASS, _check_rows, _net_body_forces, _stacked_boxes
 from newton.tests.test_contact_reduction_body_pairs import _free_jointed_foot, _make_pipeline, _undamped
+from newton.tests.steel.test_friction import _surface_belt
 from newton.tests.unittest_utils import StdOutCapture, add_function_test, get_cuda_test_devices, get_test_devices
 
 RESTITUTION_RHS_ATOL = 1.0e-6
@@ -2170,6 +2171,90 @@ add_function_test(
     TestSteelSceneFeatures,
     "test_reduced_contacts_match_steel_under_scene",
     test_reduced_contacts_match_steel_under_scene,
+    devices=get_test_devices(),
+)
+
+SURFACE_SPEED = 0.5
+"""Tangential speed [m/s] of the mesh belt's surface, along +x."""
+
+SURFACE_STEPS = 60
+"""Steps of the belt test: the box, resting on the belt, is dragged up to the surface speed within the first ten."""
+
+SURFACE_RMS = 1.0e-5
+"""RMS bound [m/s, rad/s] of the box's velocities over the belt test's steps against Steel's serial solve."""
+
+
+def _belt_velocities(device, articulated: bool, options: dict) -> np.ndarray:
+    """The box's ``body_qd`` after each of :data:`SURFACE_STEPS` steps on ``test_friction``'s belt, its surface moving
+    at :data:`SURFACE_SPEED` along +x, the shapes at their default contact gap, the solver given ``options``.
+
+    The steps are taken here rather than by the fixture's closure so that a warm-started solver
+    (``contact_warmstart``) gets the contact matching it needs (``contact_matching="latest"``).
+    """
+    belt, solver, box, _ = _surface_belt(device, articulated=articulated, gap=None, **options)
+    belt.mesh.velocities.fill_(wp.vec3(SURFACE_SPEED, 0.0, 0.0))
+    model = solver.model
+    matching = {"contact_matching": "latest"} if options.get("contact_warmstart") else {}
+    pipeline = newton.CollisionPipeline(model, rigid_contact_max=64, deterministic=True, **matching)
+    contacts = pipeline.contacts()
+    states = [model.state(), model.state()]
+    control = model.control()
+    box_qd = wp.empty(SURFACE_STEPS, dtype=wp.spatial_vector, device=device)
+    for i in range(SURFACE_STEPS):
+        states[0].clear_forces()
+        pipeline.collide(states[0], contacts)
+        solver.step(states[0], states[1], control, contacts, DT)
+        states.reverse()
+        wp.copy(box_qd, states[0].body_qd, dest_offset=i, src_offset=box, count=1)
+    return box_qd.numpy()
+
+
+def test_surface_velocity_belt_matches_steel(test, device):
+    """Drag a box resting on a mesh belt whose surface moves as Steel's serial solve does.
+
+    ``test_friction``'s belt: a static mesh with ``Mesh.enable_surface_velocity``, its surface moving at
+    :data:`SURFACE_SPEED` along +x, under a box resting on it. Steel's friction rows take the surface's tangential
+    velocity as their target velocity (``kernels.surface_contact_target``); the scene builds its contact rows with
+    Steel's ``prepare_world_contact_rows``, so its targets are Steel's, its row preparation and velocity-only
+    iterations read them as Steel's bias kernels do, and its persistent anchors follow the surface through Steel's
+    patch build, ``seed_patch_impulses`` and ``finish_patch_impulses``. The cases: a free box (Steel's free-body rows)
+    with point friction, with persistent anchors (``friction_anchor_beta``) and with velocity-only iterations, a
+    one-link articulation (Steel's dense rows) with persistent anchors, and the warm start (``contact_warmstart``) on
+    the free box and on the articulation, both with anchors. In each the box's velocities over :data:`SURFACE_STEPS`
+    steps agree with Steel's within :data:`SURFACE_RMS` RMS, and the box ends at the surface speed, which it would not
+    reach if the scene ignored the surface's motion.
+
+    The shapes keep their default contact gap (``gap=None``): with a zero gap the resting box loses a contact at a
+    step that depends on the last bits of its pose and tips, in either solve and with the belt still too, which no
+    tolerance on the trajectory survives.
+    """
+    # Left out: the articulation with point friction, the warm-started free box with point friction and the friction
+    # modes (CUDA only). When the box stops slipping and sticks to the belt, the two solves, which order their rows
+    # differently, resolve the switch differently for a few steps: a spike of up to 2e-4 rad/s for one step, decaying
+    # to 9e-6 by step 40 (point friction) and to 3e-5 by steps 90 to 120 (bisection_desaxce), with the final speeds
+    # equal to 1e-6. That is a transient past a 1e-5 trajectory bound, not a persistent offset.
+    for articulated, options in (
+        (False, {"friction_anchor_beta": 0.0}),
+        (False, {"friction_anchor_beta": 0.2}),
+        (False, {"friction_anchor_beta": 0.0, "velocity_iterations": 2}),
+        (True, {"friction_anchor_beta": 0.2}),
+        (False, {"friction_anchor_beta": 0.2, "contact_warmstart": True}),
+        (True, {"friction_anchor_beta": 0.2, "contact_warmstart": True}),
+    ):
+        with test.subTest(articulated=articulated, **options):
+            velocities = {
+                mode: _belt_velocities(device, articulated, {**options, "solve_mode": mode})
+                for mode in ("scene", "serial")
+            }
+            test.assertTrue(np.all(np.isfinite(velocities["scene"])))
+            test.assertLessEqual(_rms(velocities["scene"], velocities["serial"]), SURFACE_RMS)
+            test.assertAlmostEqual(float(velocities["scene"][-1, 0]), SURFACE_SPEED, delta=5.0e-3)
+
+
+add_function_test(
+    TestSteelSceneFeatures,
+    "test_surface_velocity_belt_matches_steel",
+    test_surface_velocity_belt_matches_steel,
     devices=get_test_devices(),
 )
 

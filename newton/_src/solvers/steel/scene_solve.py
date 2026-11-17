@@ -4236,7 +4236,9 @@ def build_scene_rows(solver, state_in, state_aug, contacts, dt: float, control=N
     5. Steel's builders write the rows at those places: the internal unit's WRITE passes from
        ``_scene_row_cursor``, family after family, the late unit's from ``_scene_late_cursor``, then
        ``prepare_world_contact_rows`` (by its arguments' names; it writes each contact row's rebound velocity,
-       ``_row_rebound_velocity``, from the step-start closing speed) and the sparse contact response kernel from
+       ``_row_rebound_velocity``, from the step-start closing speed, and each friction row's target velocity with a
+       moving mesh surface's tangential velocity, ``kernels.surface_contact_target``, which the row preparation and
+       the sweeps read as Steel's do) and the sparse contact response kernel from
        ``_contact_slot``, each contact's ``contact_slots_needed`` rows (three, or its normal row alone), an anchor's
        tangent rows at its anchor point (the kernel's ``patches`` variant). With friction patches
        ``link_patch_rows`` then rings each region's normal rows through their ``row_parent`` and divides the

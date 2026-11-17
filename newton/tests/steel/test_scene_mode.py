@@ -620,23 +620,12 @@ def test_scene_rejects_revolute_and_fixed_closures(test, device):
                 SolverSteel(model, **SCENE)
 
 
-def _surface_belt(device) -> newton.Model:
-    """A free box resting on a static mesh belt whose surface moves (:attr:`newton.Mesh.enable_surface_velocity`)."""
-    builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
-    belt = newton.Mesh.create_box(2.0, 2.0, 0.05, compute_inertia=False)
-    belt.enable_surface_velocity = True
-    builder.add_shape_mesh(-1, xform=wp.transform(wp.vec3(0.0, 0.0, -0.05), wp.quat_identity()), mesh=belt)
-    box = builder.add_body(xform=wp.transform(wp.vec3(0.0, 0.0, 0.05), wp.quat_identity()))
-    builder.add_shape_box(box, hx=0.1, hy=0.1, hz=0.05)
-    return builder.finalize(device=device)
-
-
 def test_scene_rejects_new_upstream_features(test, device):
     """Refuse the Steel features the scene does not implement yet with :class:`ValueError` naming the mode.
 
-    Nesterov momentum, ``reuse_kinematics``, a mesh whose surface moves and coupling (the coupling hooks a coupled
-    solver calls) each raise under the mode, where Steel's serial solve accepts them. Steel's own checks run first:
-    on the CPU, where Steel refuses Nesterov momentum, the mode raises Steel's error.
+    Nesterov momentum, ``reuse_kinematics`` and coupling (the coupling hooks a coupled solver calls) each raise under
+    the mode, where Steel's serial solve accepts them. Steel's own checks run first: on the CPU, where Steel refuses
+    Nesterov momentum, the mode raises Steel's error.
     """
     model = _humanoids(device)
     cuda = wp.get_device(device).is_cuda
@@ -657,11 +646,6 @@ def test_scene_rejects_new_upstream_features(test, device):
         SolverSteel(model, **STEEL, reuse_kinematics=True)
         with test.assertRaisesRegex(ValueError, re.escape("solve_mode='scene' does not support reuse_kinematics=True")):
             SolverSteel(model, **SCENE, reuse_kinematics=True)
-    with test.subTest(feature="surface velocity"):
-        belt = _surface_belt(device)
-        test.assertTrue(SolverSteel(belt, **STEEL)._has_surface_velocity)
-        with test.assertRaisesRegex(ValueError, re.escape("solve_mode='scene' does not support mesh surface velocity")):
-            SolverSteel(belt, **SCENE)
     with test.subTest(feature="coupling"):
         steel = SolverSteel(model, **STEEL)
         scene = SolverSteel(model, **SCENE)
