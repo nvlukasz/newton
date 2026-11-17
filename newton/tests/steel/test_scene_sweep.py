@@ -30,7 +30,7 @@ from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices
 
 DT = 1.0 / 200.0
 
-# The options mavrix passes, without the scene solve.
+# The crowd preset's options, without the scene solve.
 COMMON = {"iterations": 4, "enable_joint_limits": True, "joint_limit_activation_gap": 0.1, "friction_anchor_beta": 0.0}
 
 STEEL_ROWS = 128
@@ -72,10 +72,10 @@ PHASE_ORDERS = ("BA", "AB", "ABA")
 """The phase orders of each iteration of the coupled sides (``scene_phase_order``), the default first."""
 
 DRIFT_CONTROL_STEPS = 200
-"""Control steps of the drift test, of ``DRIFT_SUBSTEPS`` steps of ``DT`` each: 5 s, as mavrix's lean."""
+"""Control steps of the drift test, of ``DRIFT_SUBSTEPS`` steps of ``DT`` each: 5 s, the length of its lean."""
 
 DRIFT_SUBSTEPS = 5
-"""Steps of ``DT`` per control step: mavrix's 25 ms control step."""
+"""Steps of ``DT`` per control step: a 25 ms control step."""
 
 DRIFT_MAX = 2.0e-3
 """Physics bound on the loaded drum's horizontal displacement [m]: 5x Steel's 0.40 mm at 4 iterations."""
@@ -716,7 +716,7 @@ def _crowd(device):
 
 
 def _crowd_rows():
-    """The crowd's scene rows: 128 per humanoid and 64 for the prop, as mavrix sizes them."""
+    """The crowd's scene rows: 128 per humanoid and 64 for the prop, the preset's sizes."""
     return STEEL_ROWS * CROWD_HUMANOIDS + 64
 
 
@@ -1264,7 +1264,7 @@ def test_loaded_body_does_not_drift(test, device):
     In ``_leaning_humanoid`` a limp humanoid falls onto a free 51.2 kg drum and lies across it to
     the end, so the drum carries a sustained sideways load through two-sided units. Steel
     (``RUN_TO_RUN``) and the scene solve in each phase order run 200 control steps of 5 steps at 4
-    iterations (mavrix's preset), with deterministic contacts. The drum's horizontal displacement
+    iterations (the crowd preset), with deterministic contacts. The drum's horizontal displacement
     over the loaded interval (control steps 10 to 200 in every run) on an NVIDIA L40:
 
     - Steel 0.403 mm (0.32 mm as the humanoid lands, 0.09 mm after control step 50);
