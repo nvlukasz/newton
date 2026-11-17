@@ -29,6 +29,7 @@ from newton.tests.steel._fixtures import (
     _build_contact_scene,
     _build_four_bar,
     _heap,
+    _parent_wrench_scene,
     _set_box_velocities,
     set_torsion_radius,
 )
@@ -924,6 +925,60 @@ def _assert_refused_in_capture(test, device, reads: dict) -> None:
                 read()
 
 
+SLIDER_HEIGHT = 0.2
+"""Height [m] of :func:`_compliant_slider`'s sphere above its contact: no contact at the start."""
+
+
+def _compliant_slider(device):
+    """``run_fixture``'s 0.3 kg sphere on a vertical slider, above the ground, with a one-row budget per world.
+
+    Returns ``(solver, step)``: the scene solver with ``contact_compliance`` and both per-world budgets one row (two
+    rows pooled, short of a contact's three), and a step that collides, fills the contacts' material (stiffness
+    3000 N/m, damping 20 N s/m) and steps fixed state buffers, so that one captured step replays every later one.
+    ``step.state`` is the state the step reads.
+    """
+    builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
+    builder.rigid_gap = 0.005
+    builder.add_ground_plane(cfg=newton.ModelBuilder.ShapeConfig(mu=0.5))
+    pose = wp.transform(wp.vec3(0.0, 0.0, SLIDER_HEIGHT), wp.quat_identity())
+    body = builder.add_link(xform=pose)
+    builder.add_articulation(
+        [builder.add_joint_prismatic(parent=-1, child=body, axis=newton.Axis.Z, parent_xform=pose)]
+    )
+    density = 0.3 / (4.0 / 3.0 * np.pi * 0.05**3)
+    builder.add_shape_sphere(body, radius=0.05, cfg=newton.ModelBuilder.ShapeConfig(density=density, mu=0.5))
+    model = builder.finalize(device=device)
+    model.rigid_contact_max = 32
+    pipeline = newton.CollisionPipeline(model, rigid_contact_max=32)
+    contacts = pipeline.contacts()
+    for name in ("rigid_contact_stiffness", "rigid_contact_damping", "rigid_contact_friction"):
+        setattr(contacts, name, wp.zeros(32, dtype=float, device=device))
+    solver = SolverSteel(
+        model,
+        solve_mode="scene",
+        contact_compliance=True,
+        friction_anchor_beta=0.0,
+        velocity_iterations=0,
+        articulation_constraint_max=1,
+        free_body_constraint_max=1,
+        warn_constraint_overflow=False,
+    )
+    state, next_state, control = model.state(), model.state(), model.control()
+    newton.eval_fk(model, state.joint_q, state.joint_qd, state)
+
+    def step():
+        pipeline.collide(state, contacts)
+        contacts.rigid_contact_stiffness.fill_(3000.0)
+        contacts.rigid_contact_damping.fill_(20.0)
+        contacts.rigid_contact_friction.fill_(1.0)
+        solver.step(state, next_state, control, contacts, DT)
+        for name in ("joint_q", "joint_qd", "body_q", "body_qd"):
+            wp.copy(getattr(state, name), getattr(next_state, name))
+
+    step.state = state
+    return solver, step
+
+
 def test_scene_status_reports_through_steel_api(test, device):
     """Report the scene's torsion and compliance status through Steel's status API, and refuse every read in capture.
 
@@ -933,7 +988,10 @@ def test_scene_status_reports_through_steel_api(test, device):
     and passes once a reset cleared it. Compliance: the compliant contact scene's captured step, replayed after its
     contacts' stiffness turned NaN, latches into Steel's ``ComplianceBuffers.status``, which the check raises with
     Steel's message and ``scene_statistics()`` reports (``compliant_contacts_invalid`` and ``compliance_error``); a
-    reset clears both. Inside a capture the scene's read-back (``scene_statistics``, ``color_statistics``,
+    reset clears both. A captured replay whose compliant contact the pooled one-row budgets drop
+    (:func:`_compliant_slider`) reports ``compliant_contacts_dropped`` and ``compliance_error`` and raises Steel's row
+    overflow, which its eager step raises too (``test_scene_compliance.test_compliance_counts_match_steel``); a reset
+    clears both. Inside a capture the scene's read-back (``scene_statistics``, ``color_statistics``,
     ``time_scene_units``, ``_torsion_stats``) and Steel's status reads raise, as Steel's do.
     """
     model, state = _pad_model(device)
@@ -999,33 +1057,65 @@ def test_scene_status_reports_through_steel_api(test, device):
         },
     )
 
+    # A compliant contact that the pooled budget drops: the sphere above the ground steps eagerly without contacts,
+    # then the captured step replays with the sphere 1 mm into the ground, whose contact's three rows pass the two.
+    solver, step = _compliant_slider(device)
+    step()
+    with wp.ScopedCapture(device=device) as capture:
+        step()
+    wp.capture_launch(capture.graph)
+    solver.check_constraint_capacity()
+    state = step.state
+    state.joint_q.fill_(0.049 - SLIDER_HEIGHT)
+    state.joint_qd.zero_()
+    newton.eval_fk(solver.model, state.joint_q, state.joint_qd, state)
+    wp.capture_launch(capture.graph)
+    stats = solver.scene_statistics()
+    test.assertEqual((stats["rows"], stats["dropped_rows"]), (0, 3))
+    test.assertEqual(
+        (stats["compliant_contacts_dropped"], stats["compliant_contacts_invalid"], stats["compliance_error"]), (1, 0, 1)
+    )
+    solver.snapshot_constraint_status()
+    # Steel latches the row loss first (a global error), as its eager step raises it.
+    dropped = "Steel contact compliance rejected its input: contact_compliance rejects overflowing solver rows"
+    for snapshot in (True, False):
+        with test.subTest(snapshot=snapshot, case="dropped"), test.assertRaisesRegex(RuntimeError, dropped):
+            solver.check_constraint_capacity(snapshot=snapshot)
+    solver.reset(state)
+    solver.check_constraint_capacity()
+    stats = solver.scene_statistics()
+    test.assertEqual((stats["compliant_contacts_dropped"], stats["compliance_error"]), (0, 0))
+
 
 PARENT_WRENCH_STEPS = 60
-"""Steps of :func:`test_parent_wrench_matches_steel_under_scene`, enough for the stacked boxes to settle."""
+"""Steps of :func:`test_parent_wrench_matches_steel_under_scene`, enough for the boxes to settle."""
 
 PARENT_WRENCH_RMS = 1.0e-5
-"""Agreement [RMS, N and N m] of the scene's ``BODY_PARENT_F`` with Steel's serial solve on the stacked boxes."""
+"""Agreement [RMS, N and N m] of the scene's ``BODY_PARENT_F`` with Steel's serial solve on the welded boxes."""
 
 
 def test_parent_wrench_matches_steel_under_scene(test, device):
     """Report ``BODY_PARENT_F`` and ``CONTACT_F`` from the scene's one solve world as Steel's serial solve does.
 
-    Two free boxes stacked on the ground (``test_contacts``' stacked pair), 32 iterations, stepped
-    :data:`PARENT_WRENCH_STEPS` times under the scene solve and under Steel's serial solve with both observables
-    requested. Each box's free joint transmits no wrench, so its parent wrench is its momentum change less gravity
-    less the contact wrenches read from the step's rows: a contact read from the wrong row or world would leave a
-    box's weight in it. The scene's parent wrenches agree with Steel's within :data:`PARENT_WRENCH_RMS` RMS, and its
-    per-contact forces sum to each box's weight within 3 %, as Steel's do.
+    Two free boxes resting on the ground, each carrying a smaller box welded on top
+    (``_fixtures._parent_wrench_scene``), stepped :data:`PARENT_WRENCH_STEPS` times under the scene solve and under
+    Steel's serial solve with both observables requested. Each weld carries its top box's weight, so Steel's parent
+    wrenches are far from zero; each base box's free joint transmits nothing once the ground contacts are read from the
+    step's rows, so a contact read from the wrong row or world would leave the stack's weight in it. The scene's parent
+    wrenches agree with Steel's within :data:`PARENT_WRENCH_RMS` RMS, and its per-contact forces carry each stack's
+    weight within 3 %, as Steel's do.
     """
-    model, _ = test_contacts._stacked_boxes(device)
-    test.assertEqual(model.articulation_count, 2)
+    model, _ = _parent_wrench_scene(device)
     kinds = {SolverBase.ObservableKind.BODY_PARENT_F, SolverBase.ObservableKind.CONTACT_F}
-    weight = np.linalg.norm(model.gravity.numpy()[0])
+    weights = np.linalg.norm(model.gravity.numpy()[0]) * model.body_mass.numpy()
+    stacks = weights.reshape(-1, 2).sum(axis=1)
     results = {}
     for mode in ("scene", "serial"):
         pipeline = newton.CollisionPipeline(model, rigid_contact_max=64)
         contacts = pipeline.contacts()
-        solver = SolverSteel(model, solve_mode=mode, iterations=32, friction_anchor_beta=0.0)
+        solver = SolverSteel(
+            model, solve_mode=mode, iterations=32, friction_anchor_beta=0.0, articulation_constraint_max=128
+        )
         observables = solver.observables(kinds, contacts=contacts)
         states = [model.state(), model.state()]
         control = model.control()
@@ -1033,13 +1123,12 @@ def test_parent_wrench_matches_steel_under_scene(test, device):
             pipeline.collide(states[0], contacts)
             solver.step(states[0], states[1], control, contacts, DT, observables=observables)
             states.reverse()
-        contact_f = observables.contact_f.numpy()
-        net = test_contacts._net_body_forces(model, contacts, contact_f)
-        for body, mass in enumerate((test_contacts.LOWER_MASS, test_contacts.UPPER_MASS)):
-            np.testing.assert_allclose(
-                net[body], [0.0, 0.0, mass * weight], atol=0.03 * mass * weight, err_msg=f"{mode}: box {body}"
-            )
+        net = test_contacts._net_body_forces(model, contacts, observables.contact_f.numpy())
+        lifted = net[:, 2].reshape(-1, 2).sum(axis=1)
+        np.testing.assert_allclose(lifted, stacks, rtol=0.03, err_msg=f"{mode}: contact forces")
         results[mode] = observables.body_parent_f.numpy()
+    # The welds carry their top boxes: the reference is far from the bound.
+    test.assertGreater(float(np.max(np.abs(results["serial"]))), 0.5 * float(np.min(weights)))
     test.assertTrue(np.all(np.isfinite(results["scene"])))
     rms = float(np.sqrt(np.mean((results["scene"] - results["serial"]) ** 2)))
     test.assertLessEqual(rms, PARENT_WRENCH_RMS)

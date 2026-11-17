@@ -92,8 +92,6 @@ from newton.tests.steel.test_capacity import _box_on_ground
 from newton.tests.steel.test_contacts import FILL, LOWER_MASS, _check_rows, _net_body_forces, _stacked_boxes
 from newton.tests.unittest_utils import StdOutCapture, add_function_test, get_cuda_test_devices, get_test_devices
 
-"""The mark of the tests that step the scene mode: they run once the solver has the scene mode and its read-back."""
-
 RESTITUTION_RHS_ATOL = 1.0e-6
 """Absolute tolerance of a contact row's ``rhs`` against Steel's free-body row that does not fire: its Baumgarte or
 speculative bias ``phi / dt``, which Steel's ``compute_mf_effective_mass_and_rhs`` divides and the scene, as Steel's

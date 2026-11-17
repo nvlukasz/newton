@@ -8682,6 +8682,10 @@ class SolverSteel(SolverBase, CouplingInterface):
         and ``contact_high_water``, the largest contact count. With ``row_watermark``, reads the
         device on the host and raises :class:`RuntimeError` during CUDA graph capture. Every value
         is ``0`` when ``row_watermark`` is off.
+
+        Under ``solve_mode="scene"`` the marks stay per model world, but the budgets are pooled over the model's
+        worlds and units are kept or dropped whole: a world's excess is the rows its dropped units asked for, and a
+        world-step overflows when the world lost rows.
         """
         if self._row_watermarks is None:
             values = [0] * (ROW_WATERMARK_CONTACT_SLOT + 1)
@@ -8750,9 +8754,8 @@ class SolverSteel(SolverBase, CouplingInterface):
           limits unit's).
         - ``rounds``: pair rounds the coloring ran.
         - ``colors``: the highest color below the color cap in use, plus one.
-        - ``per_color``: two-sided units of each color below the color cap (a ``list[int]`` of
-          ``scene_color_cap`` entries, the kernel override's value, :data:`COLOR_CAP_MAX
-          <newton._src.solvers.steel.scene_units.COLOR_CAP_MAX>` by default).
+        - ``per_color``: two-sided units of each color below the color cap (a ``list[int]`` with one entry per
+          color, :data:`COLOR_CAP_MAX <newton._src.solvers.steel.scene_units.COLOR_CAP_MAX>` entries by default).
         - ``tail``: two-sided units of the tail color, the cap, so ``sum(per_color) + tail == two_sided``.
         - ``tail_fallback``: of those, the units the round cap left uncolored.
         - ``scene_stepped``: ``True`` once a step built the units; ``False`` with every count zero on a model
@@ -8824,10 +8827,13 @@ class SolverSteel(SolverBase, CouplingInterface):
             requested = int(scene.rows_requested.numpy()[0])
             if colors["tail"] > 0 and not scene.tail_warned:
                 scene.tail_warned = True
+                if units.color_cap < COLOR_CAP_MAX:
+                    advice = f"a larger color cap (now {units.color_cap}, at most {COLOR_CAP_MAX}) colors more of them"
+                else:
+                    advice = f"the color cap is at its maximum ({COLOR_CAP_MAX}), so such units stay in the tail"
                 warnings.warn(
                     f"SolverSteel(solve_mode='scene'): {colors['tail']} two-sided units took the tail color, which "
-                    f"one thread sweeps after the colors; raise the color cap (the scene_color_cap kernel override, "
-                    f"now {units.color_cap}, at most {COLOR_CAP_MAX}).",
+                    f"one thread sweeps after the colors, one unit at a time; {advice}.",
                     NewtonWarning,
                     stacklevel=2,
                 )

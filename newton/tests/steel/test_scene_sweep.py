@@ -886,12 +886,14 @@ def _free_bodies(model):
 def test_cap_two_matches_cap_sixty_four_at_rest(test, device):
     """Rest where cap 64 rests with two-sided units in the tail (cap 2), and warn once that the cap is too small.
 
-    The heap at cap 2 puts about 1,800 of its 1,900 two-sided units in the tail. Its boxes come to
+    The heap at cap 2 puts most of its about 2,000 two-sided units in the tail. Its boxes come to
     rest within 1 mm of cap 64's and carry the heap's weight within 3 %. Per box, 4 iterations
     leave Steel's own solve of the heap up to 14 % off a box's weight (48 of 108 boxes past 3 % at
     150 steps), so each box's own weight within 3 % is checked on the stacked boxes of the
     contact-force tests at 32 iterations, whose cap 2 puts two of the four box-box units in the
-    tail. At cap 64 a unit takes the tail only where the color masks of its two sides are full.
+    tail. At cap 64 the heap's busiest boxes rest with more than 64 two-sided units each (68 on the
+    CPU), so some of their units take the tail, but only where the color masks of their two sides are
+    full; the warning then says the cap is at its maximum.
     """
     model = _heap(device)
     rows = _scene_rows(model)
@@ -911,11 +913,15 @@ def test_cap_two_matches_cap_sixty_four_at_rest(test, device):
         runs[2].solver.scene_statistics()
     # Most two-sided units take the tail at cap 2; the solver warns once, on the first read.
     test.assertGreater(capped["tail"], capped["two_sided_units"] // 2)
-    tail_warnings = [w for w in caught if issubclass(w.category, NewtonWarning) and "color_cap" in str(w.message)]
+    tail_warnings = [w for w in caught if issubclass(w.category, NewtonWarning) and "color cap" in str(w.message)]
     test.assertEqual(len(tail_warnings), 1, msg=[str(w.message) for w in caught])
     # At cap 64 a unit takes the tail only where the masks of its two sides are full: the heap's busiest boxes rest
     # with more than 64 two-sided units each, so some of theirs take it.
     units = runs[64].solver._scene_units
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        test.assertGreater(runs[64].solver.scene_statistics()["tail"], 0)
+    test.assertEqual(sum("color cap is at its maximum" in str(w.message) for w in caught), 1)
     test.assertEqual(units.statistics()["tail_fallback"], 0)
     view = _colored_view(units)
     tail = view["color"] == units.color_cap
