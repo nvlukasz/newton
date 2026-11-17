@@ -3,7 +3,9 @@
 
 """Scene rows of SolverSteel (``solve_mode="scene"``): row templates, units before rows, rows by scans, status."""
 
+import inspect
 import json
+import re
 import unittest
 import warnings
 
@@ -16,7 +18,9 @@ from newton._src.solvers.steel.kernels import (
     PGS_CONSTRAINT_TYPE_CONTACT,
     PGS_CONSTRAINT_TYPE_FRICTION,
     PGS_CONSTRAINT_TYPE_JOINT_LIMIT,
+    _finish_connect_row,
     allocate_world_contact_slots,
+    populate_connect_J_for_size,
     prepare_world_contact_rows,
 )
 from newton.solvers import SolverSteel
@@ -462,22 +466,23 @@ class TestSteelSceneRows(unittest.TestCase):
         )
 
     def test_connect_rows_need_the_closure_row_count(self):
-        """Build the connect rows only for BALL closures: the closure row count is required and 5 or 6 rows raise.
+        """Build the connect rows for the closures' most rows, which is required: 3, 5 or 6.
 
-        ``max_closure_rows`` has no default, so a caller that omits it fails at build time instead of building three
-        rows for a REVOLUTE (5 rows) or FIXED (6 rows) closure; those raise ``NotImplementedError``, and a count that
-        is no closure's raises ``ValueError``.
+        ``max_closure_rows`` has no default, so a caller that omits it fails at build time instead of building a
+        kernel without the rotation rows for a REVOLUTE (5 rows) or FIXED (6 rows) closure. BALL closures alone (3)
+        leave the rotation rows out of the kernel; 5 and 6 share the kernel that builds them, and a count that is no
+        closure's raises ``ValueError``.
         """
+        self.assertEqual(scene_rows.CONNECT_ROWS_MAX, 6)
         with self.assertRaises(TypeError):
             scene_rows.get_scene_connect_rows_kernel(27)
-        for rows in (5, 6):
-            with self.subTest(max_closure_rows=rows):
-                with self.assertRaisesRegex(NotImplementedError, "REVOLUTE and FIXED loop closures"):
-                    scene_rows.get_scene_connect_rows_kernel(27, max_closure_rows=rows)
         with self.assertRaisesRegex(ValueError, "max_closure_rows must be 3, 5 or 6"):
             scene_rows.get_scene_connect_rows_kernel(27, max_closure_rows=4)
         kernel = scene_rows.get_scene_connect_rows_kernel(27, 2, max_closure_rows=3)
         self.assertEqual(kernel.key, "populate_scene_connect_rows_27_8_4_w2")
+        rotation = scene_rows.get_scene_connect_rows_kernel(27, 2, max_closure_rows=6)
+        self.assertEqual(rotation.key, "populate_scene_connect_rows_27_8_4_rotation_w2")
+        self.assertIs(scene_rows.get_scene_connect_rows_kernel(27, 2, max_closure_rows=5), rotation)
 
     def test_contact_builders_launch_by_name(self):
         """Give Steel's contact row builders every argument by its name, and refuse a missing or unknown one.
@@ -507,6 +512,35 @@ class TestSteelSceneRows(unittest.TestCase):
                     scene_solve._launch_by_name(kernel, 1, missing, None)
                 with self.assertRaisesRegex(TypeError, r"unknown arguments \['not_an_argument'\]"):
                     scene_solve._launch_by_name(kernel, 1, {**arguments, "not_an_argument": 0}, None)
+
+    def test_connect_rotation_rows_restate_steel_text(self):
+        """Keep the scene's rotation rows of a REVOLUTE or FIXED loop closure equal to Steel's text.
+
+        ``scene_rows.scene_connect_rotation_rows`` restates the lines of Steel's ``populate_connect_J_for_size`` that
+        read the rows' directions and errors (Steel's own ``_connect_rotation_rows``) and give each row its target under
+        a prescribed parent; ``scene_rows.connect_rotation_mirror`` extracts both, which must be equal. A changed line
+        inside Steel's ranges no longer matches, and a changed first or last line is no longer found. Steel builds each
+        row's Jacobian as ``e . omega_parent - e . omega_child``, the couple the scene gives the response's two sides.
+        """
+        scene, steel = scene_rows.connect_rotation_mirror()
+        self.assertGreaterEqual(len(steel), 8, steel)
+        self.assertEqual(scene, steel)
+        source = inspect.getsource(populate_connect_J_for_size.func)
+        inside, last = "if prescribed and body_p >= 0:", "target = -wp.dot(e, omega_a)"
+        self.assertEqual((source.count(inside), source.count(last)), (1, 1))
+        scene, steel = scene_rows.connect_rotation_mirror(steel=source.replace(inside, "if body_p >= 0:"))
+        self.assertNotEqual(scene, steel)
+        with self.assertRaisesRegex(LookupError, "populate_connect_J_for_size has no line"):
+            scene_rows.connect_rotation_mirror(steel=source.replace(last, "target = wp.dot(e, omega_a)"))
+        compact = "".join(source.split())
+        for call in scene_rows._SOURCE_CONNECT_ROTATION_JACOBIAN:
+            with self.subTest(call=call):
+                self.assertEqual(compact.count(call), 1)
+
+    def test_connect_norm_min_is_steels(self):
+        """Make a connect row inert below the squared norm Steel's ``_finish_connect_row`` tests, its literal."""
+        (literal,) = re.findall(r"if norm_sq > ([0-9.eE+-]+):", inspect.getsource(_finish_connect_row.func))
+        self.assertEqual(scene_rows.CONNECT_NORM_MIN, float(literal))
 
 
 # The rows build on every device; a Steel reference is Steel's split solve on the CPU (_steel_on).

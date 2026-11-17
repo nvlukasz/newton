@@ -34,7 +34,7 @@ from . import contact_torsion_device
 from .contact_torsion import _NORMAL_COSINE, _SUPPORTED_TYPES, _TORSION_SPIN_RETIRED, _TOUCH_TOLERANCE
 from .contact_torsion_device import _host_dot3, _host_transform_point, _lower_bound, _mark_supported_types
 from .kernels import _CONTACT_END_GAP_SLOP, PGS_CONSTRAINT_TYPE_TORSION, WARP_DETERMINISM_OFF, contact_base_rows
-from .scene_rows import _finish_scene_row, _scene_row_dot, scene_contact_response_snippet
+from .scene_rows import _finish_scene_row, _scene_row_dot, _source_ranges, scene_contact_response_snippet
 from .scene_units import _contact_unit_sides, _latch_side_world, _scene_contact_on_free_path, _unit_model_world
 
 # The rounding of Steel's device torsion preparation: its frames and thresholds, bit for bit.
@@ -181,21 +181,10 @@ def _mirrored_lines(name: str) -> tuple[list[str], list[str]]:
         body = body[1:]
     copy_lines = copy.splitlines()[body[0].lineno - 1 : body[-1].lineno - 1]
     scene = textwrap.dedent("\n".join(copy_lines)).splitlines()
-    source = inspect.getsource(getattr(contact_torsion_device, steel_name).func).splitlines()
-    steel = []
-    position = 0
-    for first, last in ranges:
-        start = next((i for i in range(position, len(source)) if source[i].strip().startswith(first)), None)
-        if start is None:
-            raise LookupError(f"{steel_name} has no line {first!r} for {name}")
-        end = next((i for i in range(start, len(source)) if source[i].strip().startswith(last)), None)
-        if end is None:
-            raise LookupError(f"{steel_name} has no line {last!r} after {first!r} for {name}")
-        block = textwrap.dedent("\n".join(source[start : end + 1])).splitlines()
-        for old, new in substitutions:
-            block = [line.replace(old, new) for line in block]
-        steel.extend(block)
-        position = end + 1
+    source = inspect.getsource(getattr(contact_torsion_device, steel_name).func)
+    steel = _source_ranges(source, ranges, f"{steel_name} (mirrored by {name})")
+    for old, new in substitutions:
+        steel = [line.replace(old, new) for line in steel]
     return scene, steel
 
 

@@ -15,7 +15,9 @@ mimic, loop closures, joint limits, joint friction, joint and free-body velocity
 expansions.
 """
 
+import inspect
 import re
+import textwrap
 from functools import cache
 
 import warp as wp
@@ -33,8 +35,10 @@ from .kernels import (
     ROW_SLOTS_COUNT,
     WARP_DETERMINISM_OFF,
     _anchor_to_world,
+    _connect_rotation_rows,
     _is_identity_rotation,
     _walk_has_free_dof,
+    populate_connect_J_for_size,
     reserve_world_rows,
 )
 from .sparse_contact import build_sparse_joint_limit_rows
@@ -2551,6 +2555,144 @@ def connect_row_norms(
     return norms
 
 
+CONNECT_ROWS_MAX = 6
+"""The most rows of one loop closure (Steel's ``SolverSteel._connect_rows``): the three anchor rows of every closure,
+then a REVOLUTE closure's two hinge rows or a FIXED closure's three weld rows (``kernels._connect_rotation_rows``)."""
+
+
+@wp.func
+def connect_rotation_row_norms(
+    joint_p: int,
+    joint_c: int,
+    directions: wp.mat33,
+    joint_ancestor: wp.array[int],
+    joint_qd_start: wp.array[int],
+    joint_S_s: wp.array[wp.spatial_vector],
+) -> wp.vec3:
+    """The squared norms in joint coordinates of a loop closure's rotation rows, component ``i`` for row ``i``.
+
+    Steel's rotation row ``i`` (``kernels.populate_connect_J_for_size``) is ``J = e_i . (omega_parent -
+    omega_child)``, ``e_i`` row ``i`` of ``directions`` (:func:`scene_connect_rotation_rows`), over the ancestor chains
+    of the parent's joint ``joint_p`` (``-1`` for a prescribed parent, which contributes none) and of the child's
+    ``joint_c``: DOF ``d`` of the parent's chain holds ``e_i . w``, of the child's ``-e_i . w``, with ``w`` the angular
+    part of its motion subspace ``joint_S_s[d]``, and of a shared ancestor their sum, zero. Steel normalizes each row by
+    its norm (:data:`CONNECT_NORM_MIN`).
+    """
+    norms = wp.vec3(0.0)
+    curr = int(joint_p)
+    while curr != -1:
+        if not _joint_in_chain(curr, joint_c, joint_ancestor):
+            for d in range(joint_qd_start[curr], joint_qd_start[curr + 1]):
+                motion = joint_S_s[d]
+                value = directions * wp.vec3(motion[3], motion[4], motion[5])
+                norms += wp.cw_mul(value, value)
+        curr = joint_ancestor[curr]
+    curr = int(joint_c)
+    while curr != -1:
+        if not _joint_in_chain(curr, joint_p, joint_ancestor):
+            for d in range(joint_qd_start[curr], joint_qd_start[curr + 1]):
+                motion = joint_S_s[d]
+                value = directions * wp.vec3(motion[3], motion[4], motion[5])
+                norms += wp.cw_mul(value, value)
+        curr = joint_ancestor[curr]
+    return norms
+
+
+@wp.func
+def scene_connect_rotation_rows(
+    rows: int,
+    prescribed: bool,
+    body_p: int,
+    body_c: int,
+    joint: int,
+    joint_axis: wp.array[wp.vec3],
+    joint_qd_start: wp.array[int],
+    joint_X_p: wp.array[wp.transform],
+    joint_X_c: wp.array[wp.transform],
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+):
+    """A loop closure's rotation rows before their normalization, as Steel's ``kernels.populate_connect_J_for_size``.
+
+    Returns ``(dirs, phis, targets)`` for the ``rows - 3`` rotation rows of a closure of ``rows`` rows (5 for a
+    REVOLUTE closure's two hinge rows, 6 for a FIXED closure's three weld rows): row ``i`` of ``dirs`` is row ``i``'s
+    direction ``e_i`` and ``phis[i]`` its position error, both from Steel's ``kernels._connect_rotation_rows``, and
+    ``targets[i]`` its target, ``-e_i . omega_A`` under a ``prescribed`` parent body of angular velocity ``omega_A``,
+    zero for the world and for a parent that responds. Its lines from the call to the target are Steel's
+    (:data:`_SOURCE_CONNECT_ROTATION`), which a guard test compares with Steel's text.
+    """
+    dirs, phis = _connect_rotation_rows(
+        rows, body_p, body_c, joint, joint_axis, joint_qd_start, joint_X_p, joint_X_c, body_q
+    )
+    omega_a = wp.vec3(0.0, 0.0, 0.0)
+    if prescribed and body_p >= 0:
+        omega_a = wp.spatial_bottom(body_qd[body_p])
+    targets = wp.vec3(0.0)
+    for i in range(rows - 3):
+        e = dirs[i]
+        target = float(0.0)
+        if prescribed:
+            target = -wp.dot(e, omega_a)
+        targets[i] = target
+    return dirs, phis, targets
+
+
+_SOURCE_CONNECT_ROTATION = (
+    ("dirs, phis = _connect_rotation_rows(", "omega_a = wp.spatial_bottom(body_qd[body_p])"),
+    ("e = dirs[i]", "target = -wp.dot(e, omega_a)"),
+)
+"""The ranges of Steel's ``kernels.populate_connect_J_for_size`` that :func:`scene_connect_rotation_rows` restates, each
+its first and last line (stripped, matched as prefixes, in order): the rotation rows' directions and errors with the
+prescribed parent's angular velocity, and each row's target."""
+
+_SOURCE_CONNECT_ROTATION_JACOBIAN = (
+    "_accumulate_angular_jacobian_row(body_p,1.0,e,",
+    "_accumulate_angular_jacobian_row(body_c,-1.0,e,",
+)
+"""The calls (whitespace removed) of Steel's ``kernels.populate_connect_J_for_size`` that build a rotation row's
+Jacobian, ``e . omega_parent - e . omega_child``: the scene's connect rows give the response the couple ``e`` on both
+sides, whose child side it subtracts."""
+
+
+def _source_ranges(source: str, ranges: tuple[tuple[str, str], ...], name: str) -> list[str]:
+    """The lines of ``source`` in ``ranges``, each range dedented on its own: the extractor of the guards that compare a
+    restated law's lines with Steel's text (:func:`connect_rotation_mirror`, ``scene_torsion_device._mirrored_lines``).
+
+    Each range is its first and last line, stripped and matched as prefixes, the ranges in order. Raises
+    :class:`LookupError` naming ``name`` when a range is not in ``source``.
+    """
+    lines = source.splitlines()
+    found = []
+    position = 0
+    for first, last in ranges:
+        start = next((i for i in range(position, len(lines)) if lines[i].strip().startswith(first)), None)
+        if start is None:
+            raise LookupError(f"{name} has no line {first!r}")
+        end = next((i for i in range(start, len(lines)) if lines[i].strip().startswith(last)), None)
+        if end is None:
+            raise LookupError(f"{name} has no line {last!r} after {first!r}")
+        found.extend(textwrap.dedent("\n".join(lines[start : end + 1])).splitlines())
+        position = end + 1
+    return found
+
+
+def connect_rotation_mirror(*, steel: str | None = None) -> tuple[list[str], list[str]]:
+    """The restated lines of the connect rows' rotation law: :func:`scene_connect_rotation_rows`'s, then Steel's.
+
+    Both are the lines of :data:`_SOURCE_CONNECT_ROTATION`'s ranges, in the scene's function and in Steel's
+    ``kernels.populate_connect_J_for_size`` (or the source ``steel`` given in its place); equal lists mean the scene
+    computes Steel's expressions, so a change of Steel's text fails the guard test that compares them. Raises
+    :class:`LookupError` when a range is missing.
+    """
+    if steel is None:
+        steel = inspect.getsource(populate_connect_J_for_size.func)
+    scene = inspect.getsource(scene_connect_rotation_rows.func)
+    return (
+        _source_ranges(scene, _SOURCE_CONNECT_ROTATION, "scene_connect_rotation_rows"),
+        _source_ranges(steel, _SOURCE_CONNECT_ROTATION, "populate_connect_J_for_size"),
+    )
+
+
 @cache
 def get_scene_connect_rows_kernel(
     dof_max: int,
@@ -2564,45 +2706,72 @@ def get_scene_connect_rows_kernel(
 
     One lane group per closure owner (``owner_art``, an articulation that owns a loop closure; its closures are
     ``owner_closures[owner_start[owner]:owner_start[owner + 1]]``, indices into the solver's connect table, in table
-    order). Each closure whose joint is enabled (:attr:`~newton.Model.joint_enabled`, read every step) has three
-    rows, one per world axis ``e``, Steel's (``kernels.py`` ``allocate_connect_slots`` and
-    ``populate_connect_J_for_size``): ``J = e . (J_point(parent, p_A) - J_point(child, p_B))``, ``phi = e . (p_A -
-    p_B)``, type ``PGS_CONSTRAINT_TYPE_CONNECT``, no parent and no friction, the anchors the translations of the
-    closure joint's ``joint_X_p`` and ``joint_X_c`` placed by the bodies' poses. Each row is normalized by its norm in
-    joint coordinates (:func:`connect_row_norms`), ``phi`` and the target with it, and one whose squared norm is at
-    most :data:`CONNECT_NORM_MIN` is inert (zero ``J``, ``phi`` and target), as Steel's. A prescribed parent
-    (``connect_parent_prescribed``: the world, or a kinematic body of another articulation) contributes no DOFs; its
-    anchor velocity enters the target, ``-e . v_A``, with ``v_A`` from its body twist.
+    order). Each closure whose joint is enabled (:attr:`~newton.Model.joint_enabled`, read every step) has its
+    ``connect_rows[k]`` rows, Steel's (``kernels.py`` ``allocate_connect_slots`` and ``populate_connect_J_for_size``),
+    type ``PGS_CONSTRAINT_TYPE_CONNECT``, no parent and no friction:
 
-    The rows act at Steel's shared anchor: when the parent is not prescribed and both bodies' ancestor walks have a
-    DOF that is not kinematic (``kernels._walk_has_free_dof`` on ``kinematic_dof_mask``), both Jacobian points (and the
-    row norms' lever arms) are the anchors' midpoint ``p_A - (p_A - p_B) / 2``, so the impulse pair adds no couple
-    across an open closure; otherwise each body keeps its own anchor. ``phi`` stays ``e . (p_A - p_B)``. A closure
-    records the choice in ``connect_at_midpoint[k]`` for the force report, as ``kernels.populate_connect_J_for_size``
-    does.
+    - three anchor rows, one per world axis ``e``: ``J = e . (J_point(parent, p_A) - J_point(child, p_B))`` and
+      ``phi = e . (p_A - p_B)``, the anchors the translations of the closure joint's ``joint_X_p`` and ``joint_X_c``
+      placed by the bodies' poses;
+    - then a REVOLUTE closure's two hinge rows or a FIXED closure's three weld rows: ``J = e_i . (omega_parent -
+      omega_child)``, with the directions ``e_i`` and errors ``phi_i`` of Steel's ``kernels._connect_rotation_rows``
+      (the normals of the live hinge axis, :func:`~newton._src.solvers.steel.kernels._connect_hinge_frame`, or the
+      world axes and the weld's rotation vector) read every step (:func:`scene_connect_rotation_rows`).
+
+    Each row is normalized by its norm in joint coordinates (:func:`connect_row_norms`,
+    :func:`connect_rotation_row_norms`), ``phi`` and the target with it, and one whose squared norm is at most
+    :data:`CONNECT_NORM_MIN` (or not a number) is inert (zero ``J``, ``phi`` and target), as Steel's. A prescribed
+    parent (``connect_parent_prescribed``: the world, or a kinematic body of another articulation) contributes no DOFs;
+    its anchor velocity enters the anchor rows' target, ``-e . v_A``, and its angular velocity the rotation rows',
+    ``-e_i . omega_A``, both from its body twist.
+
+    The anchor rows act at Steel's shared anchor: when the parent is not prescribed and both bodies' ancestor walks
+    have a DOF that is not kinematic (``kernels._walk_has_free_dof`` on ``kinematic_dof_mask``), both Jacobian points
+    (and the row norms' lever arms) are the anchors' midpoint ``p_A - (p_A - p_B) / 2``, so the impulse pair adds no
+    couple across an open closure; otherwise each body keeps its own anchor. ``phi`` stays ``e . (p_A - p_B)``. A
+    closure records the choice in ``connect_at_midpoint[k]`` for the force report, as
+    ``kernels.populate_connect_J_for_size`` does, and with it the force report's other two inputs, as Steel's
+    ``allocate_connect_slots`` and ``populate_connect_J_for_size`` do: its first row in ``connect_slot[k]`` (``-1`` for
+    a released closure and one past the row capacity) and each row's normalization factor in
+    ``connect_row_inv_norm[k, row]`` (zero for an inert row), which
+    ``kernels.accumulate_connect_wrenches_from_impulses`` reads for ``BODY_PARENT_F``.
 
     ``max_closure_rows`` (required, no default) is the most rows a closure of the caller's connect table has
-    (``max(connect_rows)``): 3 when every closure is a BALL joint, 5 or 6 when a REVOLUTE or FIXED closure (its hinge
-    or weld rotation rows) is present, which this builder does not build yet: it raises
-    :class:`NotImplementedError` for them, and :class:`ValueError` for any other count. A call that omits it raises
-    :class:`TypeError`, so no caller builds BALL rows for a REVOLUTE or FIXED closure by default.
+    (``max(connect_rows)``): 3 when every closure is a BALL joint, which leaves the rotation rows' code out of the
+    kernel, 5 or :data:`CONNECT_ROWS_MAX` when a REVOLUTE or FIXED closure is present (one kernel for both). Any other
+    count raises :class:`ValueError`, and a call that omits it raises :class:`TypeError`, so no caller builds a
+    kernel without the rotation rows for a REVOLUTE or FIXED closure by default.
 
     The rows are projected by the contact response's native body, :func:`scene_contact_response_snippet` unchanged
-    (the projection is the contacts' bit for bit): directions ``e / |J|``, ``point_a = p_A`` and ``point_b = p_B``,
-    and ``art_a == art_b`` the owner, the self-contact path that takes the OR of the two endpoints' support masks
-    (``art_a = body_a = -1`` for a prescribed parent). A free-body child takes the response's free-body branch.
+    (the projection is the contacts' bit for bit), three anchor rows and then the rotation rows in a second call:
+    directions ``e / |J|``, ``point_a = p_A`` and ``point_b = p_B`` for the anchor rows, and for the rotation rows no
+    direction and the couple ``e_i / |J|`` on both sides, the response subtracting the child's; ``art_a == art_b`` the
+    owner, the self-contact path that takes the OR of the two endpoints' support masks (``art_a = body_a = -1`` for a
+    prescribed parent). A free-body child takes the response's free-body branch.
 
     ``ROW_SLOTS_COUNT`` adds each owner's rows to ``element_row_cursor`` and writes none; ``ROW_SLOTS_WRITE`` writes
-    them from ``element_row_cursor[art]`` in closure order, three per closure, advancing it, and none past the row
-    capacity (a dropped unit's cursor stands at the capacity). The arguments after ``articulation_dof_start`` are
-    those of :func:`_get_scene_contact_response_kernel`'s group table and outputs, ``connect_at_midpoint`` after
-    them; launch ``owners * lanes_per_contact`` threads in blocks of ``32 * warps_per_block``.
+    them from ``element_row_cursor[art]`` in closure order, each closure's rows in Steel's order, advancing it, and
+    none of a closure whose rows would pass the row capacity (Steel drops such a closure whole; a dropped unit's cursor
+    stands at the capacity). The arguments after ``articulation_dof_start`` are those of
+    :func:`_get_scene_contact_response_kernel`'s group table and outputs, ``connect_at_midpoint``, ``connect_slot`` and
+    ``connect_row_inv_norm`` after them; launch ``owners * lanes_per_contact`` threads in blocks of
+    ``32 * warps_per_block``.
     """
-    closure_rows = int(max_closure_rows)
-    if closure_rows in (5, 6):
-        raise NotImplementedError("scene connect rows: REVOLUTE and FIXED loop closures")
-    if closure_rows != 3:
-        raise ValueError(f"max_closure_rows must be 3, 5 or 6, got {max_closure_rows}")
+    closure_rows_max = int(max_closure_rows)
+    if closure_rows_max not in (3, CONNECT_ROWS_MAX - 1, CONNECT_ROWS_MAX):
+        raise ValueError(
+            f"max_closure_rows must be 3, {CONNECT_ROWS_MAX - 1} or {CONNECT_ROWS_MAX}, got {max_closure_rows}"
+        )
+    if closure_rows_max == CONNECT_ROWS_MAX - 1:
+        # A REVOLUTE closure's rows are built by the kernel that builds a FIXED closure's.
+        return get_scene_connect_rows_kernel(
+            dof_max,
+            mask_words,
+            max_closure_rows=CONNECT_ROWS_MAX,
+            lanes_per_contact=lanes_per_contact,
+            warps_per_block=warps_per_block,
+        )
+    rotation = closure_rows_max > 3
     snippet = scene_contact_response_snippet(
         dof_max, mask_words, lanes_per_contact=lanes_per_contact, warps_per_block=warps_per_block
     )
@@ -2655,8 +2824,10 @@ def get_scene_connect_rows_kernel(
         connect_body_p: wp.array[int],
         connect_body_c: wp.array[int],
         connect_parent_prescribed: wp.array[int],
+        connect_rows: wp.array[int],
         kinematic_dof_mask: wp.array[int],
         joint_enabled: wp.array[bool],
+        joint_axis: wp.array[wp.vec3],
         joint_X_p: wp.array[wp.transform],
         joint_X_c: wp.array[wp.transform],
         body_q: wp.array[wp.transform],
@@ -2696,6 +2867,8 @@ def get_scene_connect_rows_kernel(
         row_incident: wp.array2d[float],
         diagonal: wp.array2d[float],
         connect_at_midpoint: wp.array[int],
+        connect_slot: wp.array[int],
+        connect_row_inv_norm: wp.array2d[float],
         row_slot_mode: int,
         element_row_cursor: wp.array[int],
     ):
@@ -2710,12 +2883,23 @@ def get_scene_connect_rows_kernel(
         for index in range(owner_start[owner], owner_start[owner + 1]):
             k = owner_closures[index]
             joint = connect_joint[k]
-            if not joint_enabled[joint]:
-                continue
+            enabled = joint_enabled[joint]
+            closure_rows = connect_rows[k]
             slot = row
-            row += 3
-            # A COUNT pass only advances the cursor; no row is written past the capacity.
-            if row_slot_mode == ROW_SLOTS_COUNT or slot + 3 > capacity:
+            if enabled:
+                row += closure_rows
+            # A COUNT pass only advances the cursor. A WRITE pass records each closure's first row for the force
+            # report, -1 for a released closure and for one whose rows would pass the capacity: as Steel's slot
+            # allocation, it is dropped whole.
+            if row_slot_mode == ROW_SLOTS_COUNT:
+                continue
+            written = enabled and slot + closure_rows <= capacity
+            if tid % lanes == 0:
+                if written:
+                    connect_slot[k] = slot
+                else:
+                    connect_slot[k] = -1
+            if not written:
                 continue
             body_p = connect_body_p[k]
             body_c = connect_body_c[k]
@@ -2771,6 +2955,7 @@ def get_scene_connect_rows_kernel(
                 )
                 for axis in range(3):
                     # Steel's normalized row; a degenerate one stays inert (zero J, phi and target).
+                    inv_norm = float(0.0)
                     if norms[axis] > CONNECT_NORM_MIN:
                         scale = 1.0 / wp.sqrt(norms[axis])
                         direction = wp.vec3(0.0)
@@ -2786,6 +2971,9 @@ def get_scene_connect_rows_kernel(
                             directions[axis, column] = direction[column]
                         row_phi[axis] = delta[axis] * scale
                         row_target[axis] = -velocity_a[axis] * scale
+                        inv_norm = scale
+                    # The factor maps the row's impulse back to a force (Steel's connect_row_inv_norm).
+                    connect_row_inv_norm[k, axis] = inv_norm
             project_native(
                 tid,
                 body_a,
@@ -2830,11 +3018,96 @@ def get_scene_connect_rows_kernel(
                     row_mu[0, slot + axis] = 0.0
                     phi[0, slot + axis] = row_phi[axis]
                     target_velocity[0, slot + axis] = row_target[axis]
+            if wp.static(rotation):
+                if closure_rows > 3:
+                    # The rotation rows are pure couples: no direction, the couple e_i / |J| on both sides.
+                    couple_a = wp.mat33(0.0)
+                    couple_b = wp.mat33(0.0)
+                    rotation_phi = wp.vec3(0.0)
+                    rotation_target = wp.vec3(0.0)
+                    if tid % lanes == 0:
+                        dirs, phis, targets = scene_connect_rotation_rows(
+                            closure_rows,
+                            prescribed != 0,
+                            body_p,
+                            body_c,
+                            joint,
+                            joint_axis,
+                            joint_qd_start,
+                            joint_X_p,
+                            joint_X_c,
+                            body_q,
+                            body_qd,
+                        )
+                        rotation_joint_p = int(-1)
+                        if prescribed == 0:
+                            rotation_joint_p = body_to_joint[body_p]
+                        rotation_norms = connect_rotation_row_norms(
+                            rotation_joint_p, body_to_joint[body_c], dirs, joint_ancestor, joint_qd_start, joint_S_s
+                        )
+                        for i in range(closure_rows - 3):
+                            # Steel's normalized row; a degenerate one (or a non-finite hinge axis) stays inert.
+                            inv_norm = float(0.0)
+                            if rotation_norms[i] > CONNECT_NORM_MIN:
+                                inv_norm = 1.0 / wp.sqrt(rotation_norms[i])
+                                for column in range(3):
+                                    couple_b[i, column] = dirs[i, column] * inv_norm
+                                    if art_a >= 0:
+                                        couple_a[i, column] = dirs[i, column] * inv_norm
+                                rotation_phi[i] = phis[i] * inv_norm
+                                rotation_target[i] = targets[i] * inv_norm
+                            connect_row_inv_norm[k, 3 + i] = inv_norm
+                    project_native(
+                        tid,
+                        body_a,
+                        body_c,
+                        art_a,
+                        art,
+                        0,
+                        slot + 3,
+                        closure_rows - 3,
+                        couple_a,
+                        couple_b,
+                        wp.mat33(0.0),
+                        art_group_idx,
+                        articulation_response_dof_count,
+                        is_free_rigid,
+                        articulation_world_dof_offset,
+                        articulation_dof_start,
+                        body_dof_mask,
+                        joint_S_s,
+                        art_group,
+                        art_slot,
+                        group_dof_count,
+                        group_nonzero_count,
+                        group_linv_offset,
+                        group_permutation_base,
+                        group_row_offset_base,
+                        permutation,
+                        row_offsets,
+                        Linv,
+                        free_inverse_factor,
+                        v_hat,
+                        row_dof,
+                        row_factor,
+                        row_free_response,
+                        row_incident,
+                        diagonal,
+                    )
+                    if tid % lanes == 0:
+                        for i in range(closure_rows - 3):
+                            row_type[0, slot + 3 + i] = PGS_CONSTRAINT_TYPE_CONNECT
+                            row_parent[0, slot + 3 + i] = -1
+                            row_mu[0, slot + 3 + i] = 0.0
+                            phi[0, slot + 3 + i] = rotation_phi[i]
+                            target_velocity[0, slot + 3 + i] = rotation_target[i]
         if tid % lanes == 0:
             element_row_cursor[art] = row
 
-    connect_rows_kernel.__name__ = f"populate_scene_connect_rows_{n}_{lanes}_{warps}" + (
-        f"_w{words}" if words > 1 else ""
+    connect_rows_kernel.__name__ = (
+        f"populate_scene_connect_rows_{n}_{lanes}_{warps}"
+        + ("_rotation" if rotation else "")
+        + (f"_w{words}" if words > 1 else "")
     )
     connect_rows_kernel.__qualname__ = connect_rows_kernel.__name__
     return wp.kernel(enable_backward=False, module="unique", module_options=WARP_DETERMINISM_OFF)(connect_rows_kernel)

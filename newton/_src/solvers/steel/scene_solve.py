@@ -81,10 +81,12 @@ write them one family after another from the unit's first row (:meth:`SceneSolve
 joint-limit family is Steel's sparse joint-limit builder, unchanged; the drive family (``drive_mode="rows"``) and the
 joint-friction family build Steel's drive and joint-friction rows in the factor's coordinates. The mimic family builds
 Steel's mimic rows, ``J = e_follower - c1 e_leader``, over the OR of their two DOFs' support masks, and the connect
-family Steel's CONNECT loop-closure rows, three per enabled closure, through the contact response's self-contact path
-(both anchors in the owner's articulation, or a prescribed parent's anchor velocity in the target; a free-body child
-takes its free-body branch), one launch for every closure owner, free bodies included
-(:func:`~newton._src.solvers.steel.scene_rows.get_scene_connect_rows_kernel`). Both are unclamped two-sided rows: the
+family Steel's CONNECT loop-closure rows, three anchor rows per enabled closure and a REVOLUTE closure's two hinge rows
+or a FIXED closure's three weld rows after them, through the contact response's self-contact path (both anchors in the
+owner's articulation, or a prescribed parent's anchor velocity in the target; a free-body child takes its free-body
+branch), one launch for every closure owner, free bodies included
+(:func:`~newton._src.solvers.steel.scene_rows.get_scene_connect_rows_kernel`), which records each closure's first row
+and row norms for ``BODY_PARENT_F`` as Steel's connect rows do. Both are unclamped two-sided rows: the
 sweeps' rigid update clamps contact and limit rows alone, and :func:`prepare_scene_rows` gives them the Baumgarte term
 for either sign of ``phi``, as Steel does. Steel's bilateral pre-elimination is not built in the scene mode:
 ``enable_bilateral_preelimination=True`` runs these rows.
@@ -1797,7 +1799,7 @@ class SceneSolve:
             )
             connect_dof_max = max(group.size for group in plan.groups)
             _check_response_shared_memory(connect_dof_max, solver._sparse_contact_lanes, device)
-            # The closures' most rows: 3 for CONNECT closures, which the builder supports alone.
+            # The closures' most rows: 3 when every closure is a BALL joint, 5 or 6 with a REVOLUTE or FIXED one.
             self.connect_kernel = get_scene_connect_rows_kernel(
                 connect_dof_max,
                 plan.mask_words,
@@ -2158,7 +2160,7 @@ class SceneSolve:
         to its own row. ``ROW_SLOTS_COUNT`` adds each articulation's rows to the cursor and writes no
         row; ``ROW_SLOTS_WRITE`` writes them from ``cursor[art]``, the unit's first row, family after
         family (a family's rows in Steel's ballot order: the drives' by DOF, the mimic rows and the closures'
-        three rows in their tables' order, a limit's lower then upper bound by DOF, the joint friction's by
+        rows in their tables' order, a limit's lower then upper bound by DOF, the joint friction's by
         DOF), and none at or past the row capacity. The mimic and connect families read their enabled flags
         (:attr:`~newton.Model.constraint_mimic_enabled`, :attr:`~newton.Model.joint_enabled`) in both modes, so a
         released closure has no rows from the step it is released on, under capture too.
@@ -2293,8 +2295,10 @@ class SceneSolve:
         and the contact response's group table (:attr:`art_group`, :attr:`art_slot`, :attr:`response_table`), with
         ``state_in``'s poses and twists and ``state_aug``'s motion subspaces; ``cursor`` (``[articulations]``) as in
         :meth:`launch_internal_rows`. As Steel's connect rows, a closure between two moving sides acts at the anchors'
-        midpoint, which the builder records in the solver's ``_connect_at_midpoint`` for the force report, and the
-        solver's ``_kinematic_dof_mask`` marks the DOFs of a kinematic chain.
+        midpoint, which the builder records in the solver's ``_connect_at_midpoint`` for the force report with each
+        closure's first row (``_connect_slot``) and its rows' norms (``_connect_row_inv_norm``), and the solver's
+        ``_kinematic_dof_mask`` marks the DOFs of a kinematic chain. A REVOLUTE or FIXED closure's rotation rows read
+        ``Model.joint_axis`` every step.
         """
         model = solver.model
         lanes = solver._sparse_contact_lanes
@@ -2311,8 +2315,10 @@ class SceneSolve:
                 solver._connect_body_p,
                 solver._connect_body_c,
                 solver._connect_parent_prescribed,
+                solver._connect_rows,
                 solver._kinematic_dof_mask,
                 model.joint_enabled,
+                model.joint_axis,
                 model.joint_X_p,
                 model.joint_X_c,
                 state_in.body_q,
@@ -2347,6 +2353,8 @@ class SceneSolve:
                 solver._sparse_row_incident,
                 solver._diag,
                 solver._connect_at_midpoint,
+                solver._connect_slot,
+                solver._connect_row_inv_norm,
                 mode,
                 cursor,
             ],
@@ -3762,10 +3770,11 @@ def scene_closure_support(
 ) -> int:
     """The most entries of a closure's row in factor coordinates: :func:`scene_support`'s closure rule.
 
-    A loop closure's connect rows (Steel's ``SolverSteel._build_connect_plan``) whose child is a link of a factor group
-    hold the OR of its parent's and its child's body masks, the child's alone under a prescribed parent (the world or a
-    kinematic body of another articulation); a free-body child's rows are its 6 physical entries, which the free bodies'
-    rule bounds. A mimic row (Steel's ``SolverSteel._build_mimic_plan``) holds the OR of its follower's and its leader's
+    A loop closure's connect rows (Steel's ``SolverSteel._build_connect_plan``: its anchor rows and a REVOLUTE or FIXED
+    closure's rotation rows, which share their endpoints) whose child is a link of a factor group hold the OR of its
+    parent's and its child's body masks, the child's alone under a prescribed parent (the world or a kinematic body of
+    another articulation); a free-body child's rows are its 6 physical entries, which the free bodies' rule bounds. A
+    mimic row (Steel's ``SolverSteel._build_mimic_plan``) holds the OR of its follower's and its leader's
     DOF masks (the plan's ``ancestor_mask`` of each DOF, the support of its factor column). ``0`` without closures.
     Reads Steel's connect and mimic tables: ``_connect_count``, ``_connect_body_p_np``, ``_connect_body_c``,
     ``_connect_parent_prescribed_np``, ``_mimic_count``, ``_mimic_dof0``, ``_mimic_dof1``, ``_mimic_art_list``,

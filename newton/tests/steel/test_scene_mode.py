@@ -11,6 +11,7 @@ import re
 import unittest
 import warnings
 from functools import partial
+from typing import NamedTuple
 
 import numpy as np
 import warp as wp
@@ -43,6 +44,10 @@ from newton.tests.steel._scene_fixtures import (
     _steel_on,
     assert_rebound_tracks_steel,
 )
+from newton.tests.steel.test_articulation import _build_square_loop, _build_world_hinged_swing
+from newton.tests.steel.test_link_break import AXIS_Y, _four_bar, _rod_inertia
+from newton.tests.steel.test_parent_wrench import _revolute_wrench_torques
+from newton.tests.steel.test_scene_aliases import _carry
 from newton.tests.steel.test_scene_compliance import _CompliantStepper
 from newton.tests.steel.test_scene_features import TRACK_ROWS
 from newton.tests.steel.test_scene_torsion import FIXTURE_DT, _pad_model, _PadRun
@@ -598,26 +603,236 @@ def _hinge_closed_by(device, closure: str) -> newton.Model:
     return builder.finalize(device=device)
 
 
-def test_scene_rejects_revolute_and_fixed_closures(test, device):
-    """Refuse REVOLUTE and FIXED loop-closing joints at construction with the mode's error, not a kernel failure.
+CLOSURE_STEPS = 60
+"""Steps of the loop-closure tests against Steel's serial solve."""
 
-    Steel closes a REVOLUTE loop with five rows and a FIXED one with six; the scene's connect rows are the three of a
-    BALL closure. A BALL closure builds the scene's connect family; a REVOLUTE or a FIXED closure raises
-    :class:`ValueError` naming the mode and the joint type before any scene kernel is built, where Steel's serial solve
-    builds all three.
+CLOSURE_RMS = 1.0e-4
+"""Agreement of the scene with Steel's serial solve on the loop-closure tests: RMS [m] of the bodies' center-of-mass
+positions over every step, and RMS [N m] of the undriven hinges' axis torques in ``BODY_PARENT_F`` over the sampled
+steps."""
+
+CLOSURE_OPTIONS = {"iterations": 32, "baumgarte": 0.1}
+"""Options of the loop-closure tests under both solves: Steel's closure tests' Baumgarte factor, at 32 iterations."""
+
+CLOSURE_WRENCH_EVERY = 20
+"""Steps between the samples of ``BODY_PARENT_F`` in :func:`test_parent_wrench_includes_closure_reactions`."""
+
+
+def _hinge_pair(device, closure: str = "fixed", *, at_hinge: bool = False, reverse: bool = False) -> newton.Model:
+    """Two 0.2 m links on hinges about y, with a ``closure`` loop joint between them beside the hinge that joins them.
+
+    The first link hangs from the world at its end and the second from the first's tip, both along x. ``closure`` is
+    ``"fixed"`` (a weld) or ``"revolute"`` (a hinge about x, across the tree hinges' axis). By default the loop joint's
+    anchors are at the second link's center, 0.1 m past the first link's tip: the welded model of ``test_link_break``'s
+    ``test_weld_loop_holds_a_hinge``, whose anchor rows with the tree hinge already lock the bend, so its rotation rows
+    are redundant. With ``at_hinge`` both anchors are on the hinge between the links, where the anchor rows are inert
+    and only the closure's rotation rows hold the bend and carry the second link's weight moment. ``reverse`` makes the
+    second link the loop joint's parent and the first its child.
+    """
+    builder = newton.ModelBuilder(up_axis=newton.Axis.Z, gravity=(0.0, 0.0, -9.81))
+    links = [
+        builder.add_link(
+            xform=wp.transform(wp.vec3(x, 0.0, 1.0), wp.quat_identity()),
+            mass=1.0,
+            inertia=_rod_inertia(1.0, 0.2, (1, 0, 0)),
+        )
+        for x in (0.1, 0.3)
+    ]
+    root = builder.add_joint_revolute(
+        parent=-1,
+        child=links[0],
+        axis=AXIS_Y,
+        parent_xform=wp.transform(wp.vec3(0.0, 0.0, 1.0), wp.quat_identity()),
+        child_xform=wp.transform(wp.vec3(-0.1, 0.0, 0.0), wp.quat_identity()),
+    )
+    hinge = builder.add_joint_revolute(
+        parent=links[0],
+        child=links[1],
+        axis=AXIS_Y,
+        parent_xform=wp.transform(wp.vec3(0.1, 0.0, 0.0), wp.quat_identity()),
+        child_xform=wp.transform(wp.vec3(-0.1, 0.0, 0.0), wp.quat_identity()),
+    )
+    builder.add_articulation([root, hinge])
+    # The loop joint's anchor in each link's frame: on the hinge, or at the second link's center.
+    anchors = [
+        wp.transform(wp.vec3(x, 0.0, 0.0), wp.quat_identity()) for x in ((0.1, -0.1) if at_hinge else (0.2, 0.0))
+    ]
+    ends = list(zip(links, anchors, strict=True))
+    (parent, parent_xform), (child, child_xform) = ends[::-1] if reverse else ends
+    add_closure = {
+        "fixed": builder.add_joint_fixed,
+        "revolute": partial(builder.add_joint_revolute, axis=wp.vec3(1.0, 0.0, 0.0)),
+    }[closure]
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", ".*another joint already connects these bodies", NewtonWarning)
+        add_closure(parent=parent, child=child, parent_xform=parent_xform, child_xform=child_xform)
+    return builder.finalize(device=device)
+
+
+def _welded_carried_load(device) -> tuple[newton.Model, int]:
+    """A kinematic carrier holding a free box by one FIXED loop joint 5 cm off the box's center; returns the carrier.
+
+    The carrier of ``_fixtures._build_carried_load``, 1 m up, with the box 0.2 m below it: the weld is a prescribed
+    parent whose angular velocity enters the weld rows' target. Prescribed by ``test_scene_aliases._carry`` it screws
+    about z, and the box, held by its weld's rotation rows, turns with it about the anchor.
+    """
+    builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
+    carrier = builder.add_body(xform=wp.transform(wp.vec3(0.0, 0.0, 1.0), wp.quat_identity()), is_kinematic=True)
+    builder.add_shape_box(carrier, hx=0.03, hy=0.03, hz=0.03)
+    load = builder.add_body(xform=wp.transform(wp.vec3(0.05, 0.0, 0.8), wp.quat_identity()))
+    builder.add_shape_box(load, hx=0.04, hy=0.04, hz=0.04, cfg=newton.ModelBuilder.ShapeConfig(density=500.0))
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", ".*another joint already connects these bodies", NewtonWarning)
+        builder.add_joint_fixed(
+            parent=carrier,
+            child=load,
+            parent_xform=wp.transform(wp.vec3(0.0, 0.0, -0.2), wp.quat_identity()),
+            child_xform=wp.transform(wp.vec3(-0.05, 0.0, 0.0), wp.quat_identity()),
+        )
+    return builder.finalize(device=device), carrier
+
+
+def _revolute_four_bar(device) -> newton.Model:
+    """``test_link_break``'s joint-break crank-rocker: three tree hinges, the loop closed by a REVOLUTE joint."""
+    builder, *_ = _four_bar("joint")
+    return builder.finalize(device=device)
+
+
+def _undriven_tree_hinges(model) -> list[int]:
+    """The REVOLUTE joints of ``model``'s articulation trees whose DOF has no drive stiffness."""
+    tree = (model.joint_type.numpy() == int(newton.JointType.REVOLUTE)) & (model.joint_articulation.numpy() >= 0)
+    stiffness, dof = model.joint_target_ke.numpy(), model.joint_qd_start.numpy()
+    return [int(joint) for joint in np.flatnonzero(tree) if stiffness[dof[joint]] == 0.0]
+
+
+def _com_positions(model, body_q: np.ndarray) -> np.ndarray:
+    """World positions [m] of ``model``'s body centers of mass at the poses ``body_q`` (``[bodies, 7]``)."""
+    com = model.body_com.numpy().astype(np.float64)
+    position, xyz, w = body_q[:, :3], body_q[:, 3:6], body_q[:, 6:7]
+    twice_cross = 2.0 * np.cross(xyz, com)
+    return position + com + w * twice_cross + np.cross(xyz, twice_cross)
+
+
+class _ClosureRun(NamedTuple):
+    """One run of :func:`_closure_run`."""
+
+    solver: SolverSteel
+    positions: np.ndarray
+    """The positions [m] of the bodies' centers of mass after every step, ``[steps, bodies, 3]``."""
+    torques: np.ndarray
+    """The undriven tree hinges' axis torques [N m] in each sampled ``BODY_PARENT_F``, ``[samples, hinges]``."""
+    wrenches: np.ndarray
+    """Each sampled ``BODY_PARENT_F``, ``[samples, bodies, 6]``."""
+
+
+def _closure_run(
+    model, solve_mode: str, *, crank_target: float | None = None, carrier: int | None = None, wrench_every: int = 0
+) -> _ClosureRun:
+    """Step ``model`` :data:`CLOSURE_STEPS` times from its forward kinematics, without contacts, under ``solve_mode``.
+
+    ``crank_target`` [rad] is DOF 0's drive target, and ``carrier`` a kinematic carrier body prescribed before each
+    step (``test_scene_aliases._carry``). ``BODY_PARENT_F`` is sampled every ``wrench_every`` steps (never for 0), with
+    the axis torques of the undriven tree hinges (:func:`_undriven_tree_hinges`) about each hinge's anchor at the
+    step's start.
+    """
+    solver = SolverSteel(model, solve_mode=solve_mode, **CLOSURE_OPTIONS)
+    observables = solver.observables({SolverBase.ObservableKind.BODY_PARENT_F}) if wrench_every else None
+    states = [model.state(), model.state()]
+    newton.eval_fk(model, model.joint_q, model.joint_qd, states[0])
+    control = model.control()
+    if crank_target is not None:
+        targets = model.joint_target_q.numpy().copy()
+        targets[0] = crank_target
+        control.joint_target_q.assign(targets)
+    hinges = _undriven_tree_hinges(model)
+    positions, torques, wrenches = [], [], []
+    for step in range(CLOSURE_STEPS):
+        if carrier is not None:
+            _carry(model, states[0], carrier, step)
+        states[0].clear_forces()
+        solver.step(states[0], states[1], control, None, DT, observables=observables)
+        if wrench_every and step % wrench_every == wrench_every - 1:
+            wrench = observables.body_parent_f.numpy().astype(np.float64)
+            hinge_torques = _revolute_wrench_torques(model, states[0], wrench)
+            torques.append([hinge_torques[joint] for joint in hinges])
+            wrenches.append(wrench)
+        states.reverse()
+        positions.append(_com_positions(model, states[0].body_q.numpy().astype(np.float64)))
+    return _ClosureRun(
+        solver,
+        np.asarray(positions, dtype=np.float64),
+        np.asarray(torques, dtype=np.float64).reshape(len(torques), len(hinges)),
+        np.asarray(wrenches, dtype=np.float64),
+    )
+
+
+def _connect_family_rows(solver) -> int:
+    """The scene's connect rows of its last step: the internal units' connect family, summed."""
+    return int(solver._scene_family_rows.numpy()[FAMILY_CONNECT].sum())
+
+
+def test_loop_closures_match_steel_under_scene(test, device):
+    """Solve REVOLUTE and FIXED loop closures under the mode as Steel's serial solve does.
+
+    Steel closes a BALL loop with three anchor rows, a REVOLUTE one with two more hinge rows and a FIXED one with
+    three more rotation rows; the scene's connect family builds the same rows. The hinge closed back to the world by
+    each closure type (a prescribed parent) builds its 3, 5 or 6 rows under the mode. Then each model below is stepped
+    :data:`CLOSURE_STEPS` times from rest under both solves:
+
+    - the joint-break crank-rocker of ``test_link_break``, a REVOLUTE closure between two links of one articulation,
+      whose planar tree leaves its hinge rows inert;
+    - the spatial square loop of ``test_articulation``, a REVOLUTE closure whose hinge rows act;
+    - the free body of ``test_articulation`` hung from the world by a REVOLUTE closure, the rows' free-body branch;
+    - :func:`_hinge_pair` braced across its hinge by a REVOLUTE closure from the second link to the first, and welded
+      at its hinge by a FIXED closure, where the closure's rotation rows alone hold the bend;
+    - :func:`_hinge_pair`'s welded model of ``test_link_break``, a FIXED closure whose rotation rows are redundant;
+    - :func:`_welded_carried_load`, a FIXED closure to a screwing kinematic carrier, whose angular velocity is the
+      rotation rows' target.
+
+    Every model moves, the scene's connect family holds the closure's rows after the last step, the closure's first
+    row and its rows' norms (``_connect_slot``, ``_connect_row_inv_norm``) are Steel's, and its bodies' centers of mass
+    agree with Steel's within :data:`CLOSURE_RMS` RMS over every step. So a closure the scene dropped, solved with
+    fewer rows or left its rotation rows inert fails: on the braced and the welded hinge pair, and on the carried load,
+    when the scene's rotation rows are inert.
     """
     for closure, rows in (("ball", 3), ("revolute", 5), ("fixed", 6)):
-        with test.subTest(closure=closure):
+        with test.subTest(closure=closure, model="hinge closed to the world"):
             model = _hinge_closed_by(device, closure)
             steel = SolverSteel(model, **STEEL)
             test.assertEqual(steel._connect_rows_np.tolist(), [rows])
-            if closure == "ball":
-                solver = SolverSteel(model, **SCENE)
-                test.assertIn(FAMILY_CONNECT, solver._scene.internal_families)
-                continue
-            message = f"solve_mode='scene' does not support loop-closing {closure.upper()} joints (joints [1])"
-            with test.assertRaisesRegex(ValueError, re.escape(message)):
-                SolverSteel(model, **SCENE)
+            solver = SolverSteel(model, **SCENE)
+            test.assertIn(FAMILY_CONNECT, solver._scene.internal_families)
+            state_0, state_1 = model.state(), model.state()
+            solver.step(state_0, state_1, model.control(), None, DT)
+            test.assertEqual(_connect_family_rows(solver), rows)
+    swing, _ = _build_world_hinged_swing(test, "revolute")
+    square, _ = _build_square_loop("revolute")
+    carried_load, carrier = _welded_carried_load(device)
+    models = {
+        "revolute four-bar": (_revolute_four_bar(device), 5, None),
+        "revolute square loop": (square.finalize(device=device), 5, None),
+        "revolute swing": (swing.finalize(device=device), 5, None),
+        "hinge braced across its axis": (_hinge_pair(device, "revolute", at_hinge=True, reverse=True), 5, None),
+        "hinge welded at its axis": (_hinge_pair(device, "fixed", at_hinge=True), 6, None),
+        "welded hinge": (_hinge_pair(device), 6, None),
+        "welded carried load": (carried_load, 6, carrier),
+    }
+    for name, (model, rows, carried_by) in models.items():
+        with test.subTest(model=name):
+            scene = _closure_run(model, "scene", carrier=carried_by)
+            steel = _closure_run(model, "serial", carrier=carried_by)
+            test.assertEqual(steel.solver._connect_rows_np.tolist(), [rows])
+            test.assertEqual(_connect_family_rows(scene.solver), rows)
+            test.assertEqual(scene.solver._connect_slot.numpy().tolist(), steel.solver._connect_slot.numpy().tolist())
+            np.testing.assert_allclose(
+                scene.solver._connect_row_inv_norm.numpy()[:, :rows],
+                steel.solver._connect_row_inv_norm.numpy()[:, :rows],
+                rtol=1.0e-4,
+            )
+            test.assertGreater(float(np.abs(steel.positions[-1] - steel.positions[0]).max()), 1.0e-3)
+            test.assertTrue(np.all(np.isfinite(scene.positions)))
+            rms = float(np.sqrt(np.mean((scene.positions - steel.positions) ** 2)))
+            test.assertLessEqual(rms, CLOSURE_RMS)
 
 
 def test_scene_rejects_new_upstream_features(test, device):
@@ -1135,7 +1350,7 @@ for _fn in (
     test_scene_mode_sums_the_per_world_row_budgets,
     test_scene_capacity_warning_reads_the_pooled_budget,
     test_articulation_constraint_max_reads_the_requested_budget,
-    test_scene_rejects_revolute_and_fixed_closures,
+    test_loop_closures_match_steel_under_scene,
     test_scene_rejects_new_upstream_features,
     test_scene_options_validate_their_values,
     test_propagation_options_are_accepted_and_ignored,
@@ -1152,6 +1367,56 @@ for _fn in (
     test_scene_status_reports_through_steel_api,  # graph capture
 ):
     add_function_test(TestSteelSceneMode, _fn.__name__, _fn, devices=get_cuda_test_devices())
+
+
+def test_parent_wrench_includes_closure_reactions(test, device):
+    """Report the loop closures' reactions in ``BODY_PARENT_F`` under the mode as Steel's serial solve does.
+
+    ``BODY_PARENT_F`` maps each closure row's impulse back to a force or couple through the closure's first row and the
+    norm its row builder applied (``SolverSteel._connect_slot`` and ``_connect_row_inv_norm``), which the scene's
+    connect rows record as Steel's do. Each linkage below is stepped :data:`CLOSURE_STEPS` times under both solves with
+    the observable requested:
+
+    - the four-bar of Steel's own closure test, a BALL closure, its crank driven to 0.6 rad;
+    - the joint-break crank-rocker, a REVOLUTE closure whose anchor forces carry the loop;
+    - :func:`_hinge_pair` braced across its hinge by a REVOLUTE closure and welded at its hinge by a FIXED one, whose
+      rotation rows' couples alone carry the second link's weight moment past the undriven hinge between the links;
+    - :func:`_hinge_pair`'s welded model of ``test_link_break``, a FIXED closure.
+
+    Steel's report carries a load (its largest entry is above half the lightest body's weight), and the axis torques of
+    the undriven tree hinges, sampled every :data:`CLOSURE_WRENCH_EVERY` steps, agree with Steel's within
+    :data:`CLOSURE_RMS` RMS. An undriven hinge transmits no axis torque, so they are close to zero, but only with every
+    closure reaction counted: without the anchor forces or the rotation rows' couples, the closure's load lands on
+    the hinges.
+    """
+    models = {
+        "ball four-bar": (_build_four_bar().finalize(device=device), 0.6),
+        "revolute four-bar": (_revolute_four_bar(device), None),
+        "hinge braced across its axis": (_hinge_pair(device, "revolute", at_hinge=True, reverse=True), None),
+        "hinge welded at its axis": (_hinge_pair(device, "fixed", at_hinge=True), None),
+        "welded hinge": (_hinge_pair(device), None),
+    }
+    for name, (model, crank_target) in models.items():
+        with test.subTest(model=name):
+            runs = {
+                mode: _closure_run(model, mode, crank_target=crank_target, wrench_every=CLOSURE_WRENCH_EVERY)
+                for mode in ("scene", "serial")
+            }
+            weights = np.linalg.norm(model.gravity.numpy()[0]) * model.body_mass.numpy()
+            test.assertGreater(float(np.abs(runs["serial"].wrenches).max()), 0.5 * float(weights.min()))
+            hinges = len(_undriven_tree_hinges(model))
+            test.assertEqual(runs["scene"].torques.shape, (CLOSURE_STEPS // CLOSURE_WRENCH_EVERY, hinges))
+            test.assertTrue(np.all(np.isfinite(runs["scene"].wrenches)))
+            rms = float(np.sqrt(np.mean((runs["scene"].torques - runs["serial"].torques) ** 2)))
+            test.assertLessEqual(rms, CLOSURE_RMS)
+
+
+add_function_test(
+    TestSteelSceneMode,
+    test_parent_wrench_includes_closure_reactions.__name__,
+    test_parent_wrench_includes_closure_reactions,
+    devices=get_test_devices(),
+)
 
 
 if __name__ == "__main__":
