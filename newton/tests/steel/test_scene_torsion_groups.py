@@ -297,6 +297,7 @@ def test_scene_torsion_groups_match_steel_grouping(test, device):
             options = PATCH_OPTIONS if patches else {"friction_anchor_beta": 0.0}
             solver = SolverSteel(
                 model,
+                solve_mode="serial",
                 contact_torsion_device=True,
                 iterations=16,
                 velocity_iterations=0,
@@ -584,7 +585,12 @@ def test_scene_torsion_shapes_follow_body_variants(test, device):
     steel = None
     if wp.get_device(device).is_cuda:
         steel = SolverSteel(
-            model, contact_torsion_device=True, contact_warmstart=False, velocity_iterations=0, friction_anchor_beta=0.0
+            model,
+            solve_mode="serial",
+            contact_torsion_device=True,
+            contact_warmstart=False,
+            velocity_iterations=0,
+            friction_anchor_beta=0.0,
         )
 
     def expected():

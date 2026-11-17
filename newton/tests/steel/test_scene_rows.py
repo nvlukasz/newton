@@ -8,6 +8,7 @@ import json
 import re
 import unittest
 import warnings
+from unittest import mock
 
 import numpy as np
 import warp as wp
@@ -24,8 +25,10 @@ from newton._src.solvers.steel.kernels import (
     prepare_world_contact_rows,
 )
 from newton.solvers import SolverSteel
+from newton.tests.steel import test_mass_matrix as steel_mass_matrix
+from newton.tests.steel import test_sparse as steel_sparse
 from newton.tests.steel._fixtures import CONTACT_MAX, DT, _build_contact_scene, _heap
-from newton.tests.steel._scene_fixtures import SCENE, _global_box_model, _humanoids, _steel_on
+from newton.tests.steel._scene_fixtures import SCENE, _global_box_model, _humanoids, _steel_on, default_solve_mode
 from newton.tests.steel.test_scene_tripwire import _native_snippet
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
@@ -561,6 +564,269 @@ for _fn in (
     test_scene_row_build_replays_under_capture,  # graph capture
 ):
     add_function_test(TestSteelSceneRows, _fn.__name__, _fn, devices=get_cuda_test_devices())
+
+
+# Steel's mass-matrix and sparse-factor tests whose comparisons ran the scene mode, carried here: each runs the Steel
+# test under the scene mode with its references on Steel's serial solve (solve_mode="serial"), on the same model.
+
+
+def test_sleeping_diagonal_dynamics_skip_is_exact_under_scene(test, device):
+    """Skip the dynamics of sleeping star articulations under the scene without changing any published state.
+
+    ``test_mass_matrix``'s fixed-base stars of three sibling branches on the ground, for which Steel's serial solve
+    selects its diagonal mass path; the scene factors them in its own groups, not on Steel's path. Two scene solvers
+    differ only in whether sleeping islands skip their dynamics; over a sleep, a force wake and a resettle, every
+    state array stays bit for bit equal, the stars sleep and the force wakes the first.
+    """
+    model = steel_mass_matrix._build_fixed_base_star_model(device, num_branches=3, ground=True)
+    steel = SolverSteel(
+        model, enable_sleeping=True, sleep_quiet_time=0.05, articulation_constraint_max=64, solve_mode="serial"
+    )
+    test.assertTrue(steel._execution_plan.use_diagonal_mass(3))
+    runs = []
+    for skip in (False, True):
+        model = steel_mass_matrix._build_fixed_base_star_model(device, num_branches=3, ground=True)
+        solver = SolverSteel(
+            model, enable_sleeping=True, sleep_quiet_time=0.05, articulation_constraint_max=64, solve_mode="scene"
+        )
+        test.assertFalse(solver._execution_plan.use_diagonal_mass(3))
+        solver._sleeping.skip_dynamics = skip
+        pipeline = newton.CollisionPipeline(model)
+        runs.append([solver, pipeline, pipeline.contacts(), model.state(), model.state(), model.control()])
+    slept = woke = False
+    for step in range(500):
+        for run in runs:
+            solver, pipeline, contacts, state, out, control = run
+            state.clear_forces()
+            if 300 <= step < 306:
+                forces = state.body_f.numpy()
+                forces[1, 2] = 50.0
+                state.body_f.assign(forces)
+            pipeline.collide(state, contacts)
+            solver.step(state, out, control, contacts, 1.0 / 120.0)
+            run[3], run[4] = out, state
+        for field in ("body_q", "body_qd", "joint_q", "joint_qd"):
+            np.testing.assert_array_equal(
+                getattr(runs[0][3], field).numpy(), getattr(runs[1][3], field).numpy(), err_msg=f"{step}: {field}"
+            )
+        awake = runs[1][0]._sleeping.art_awake.numpy()
+        slept |= step < 300 and not awake.any()
+        woke |= 300 <= step < 306 and bool(awake[0])
+    test.assertTrue(slept, "the star articulations never slept")
+    test.assertTrue(woke, "the external force did not wake the first articulation")
+    for run in runs:
+        run[0].check_constraint_capacity()
+
+
+_assert_armature_matches = steel_mass_matrix._assert_armature_matches
+
+
+def _assert_scene_armature_matches(test, solver, fresh):
+    """``test_mass_matrix._assert_armature_matches`` for a scene solver, against a fresh Steel solver.
+
+    The scene solver's effective armature and Steel's size-group copies equal the host rebuild and those of a fresh
+    Steel solver (``solve_mode="serial"``) of the model, whatever ``fresh`` is; the scene's factor groups keep their
+    own copies, the armature their factors read, which equal the host rebuild too. ``test_mass_matrix``'s notify model
+    has two articulated topologies (three and two DOFs, one articulation each per world), so the scene has two factor
+    groups, which hold every articulation outside its free group (the free roots).
+    """
+    test.assertEqual(solver.solve_mode, "scene")
+    steel = SolverSteel(solver.model, solve_mode="serial")
+    _assert_armature_matches(test, solver, steel)
+    armature = steel_mass_matrix._host_effective_armature(solver.model)
+    plan = solver._model_plan
+    group_arrays = solver._scene.group_arrays
+    test.assertEqual(len(group_arrays), 2)
+    grouped = sorted(art for arrays in group_arrays for art in arrays.group.arts)
+    free = set(solver._scene.free_group_to_art.numpy().tolist())
+    test.assertEqual(grouped, [art for art in range(solver.model.articulation_count) if art not in free])
+    for arrays in group_arrays:
+        starts = plan.articulation_dof_start[list(arrays.group.arts)]
+        expected = np.stack([armature[start : start + arrays.group.size] for start in starts])
+        np.testing.assert_array_equal(arrays.armature.numpy(), expected)
+
+
+def _run_notify_test(test, function, *args, **kwargs):
+    """Run ``test_mass_matrix``'s notify test ``function`` with its solver under the scene and each armature check
+    against a fresh Steel solver (:func:`_assert_scene_armature_matches`)."""
+    checks = []
+
+    def check(test, solver, fresh):
+        _assert_scene_armature_matches(test, solver, fresh)
+        checks.append(solver)
+
+    with mock.patch.object(steel_mass_matrix, "_assert_armature_matches", check), default_solve_mode("scene"):
+        function(*args, **kwargs)
+    test.assertTrue(checks, "the armature was never checked")
+
+
+def test_armature_notify_matches_host_reference_and_fresh_solver_under_scene(test, device):
+    """Refresh the scene's effective armature and factor groups like a host rebuild and a fresh Steel solver.
+
+    ``test_mass_matrix``'s articulations in three worlds, their armature edited in place and replaced, then notified
+    with ``JOINT_DOF_PROPERTIES`` and ``JOINT_DOF_INERTIAL_PROPERTIES``: :func:`_assert_scene_armature_matches`.
+    """
+    _run_notify_test(
+        test, steel_mass_matrix.test_armature_notify_matches_host_reference_and_fresh_solver, test, device, "scene"
+    )
+
+
+def test_kinematic_notify_matches_host_reference_and_fresh_solver_under_scene(test, device):
+    """Give newly kinematic joints the large armature and drop it when they become dynamic again, under the scene.
+
+    ``test_mass_matrix``'s chain link turned kinematic and dynamic again through ``BODY_PROPERTIES``:
+    :func:`_assert_scene_armature_matches`.
+    """
+    _run_notify_test(
+        test, steel_mass_matrix.test_kinematic_notify_matches_host_reference_and_fresh_solver, test, device, "scene"
+    )
+
+
+def _notify_device_test(name: str):
+    """``test_mass_matrix``'s captured-notify test ``name`` (a ``TestSteelNotifyDevice`` method) under the scene."""
+    method = getattr(steel_mass_matrix.TestSteelNotifyDevice, name)
+
+    def carried(test, device):
+        with wp.ScopedDevice(device):
+            _run_notify_test(test, method, test)
+
+    return carried
+
+
+def test_armature_and_shape_notify_capture_into_a_graph_under_scene(test, device):
+    """Replay a captured notify under the scene and pick up armature and geometry written in place after the capture.
+
+    ``test_mass_matrix``'s captured ``JOINT_PROPERTIES | JOINT_DOF_PROPERTIES | BODY_INERTIAL_PROPERTIES |
+    SHAPE_PROPERTIES`` notify, replayed after in-place edits: :func:`_assert_scene_armature_matches`, and the friction
+    patches' body radii and history validity as the host reference updates them.
+    """
+    _notify_device_test("test_armature_and_shape_notify_capture_into_a_graph")(test, device)
+
+
+def test_narrow_dof_flags_and_material_copies_capture_into_a_graph_under_scene(test, device):
+    """Replay a captured narrow-flag notify under the scene and pick up armature, damping and materials edited in place.
+
+    ``test_mass_matrix``'s captured ``JOINT_DOF_INERTIAL_PROPERTIES | JOINT_DOF_FORCE_PROPERTIES | SHAPE_PROPERTIES``
+    notify: :func:`_assert_scene_armature_matches`, the damping and the material copies as edited, and a mass refresh
+    requested.
+    """
+    _notify_device_test("test_narrow_dof_flags_and_material_copies_capture_into_a_graph")(test, device)
+
+
+def test_captured_notify_reads_its_captured_arrays_under_scene(test, device):
+    """Keep reading the captured armature array after a replacement until an eager notify, under the scene.
+
+    ``test_mass_matrix``'s captured ``JOINT_DOF_PROPERTIES`` notify: its replay reads the captured array, and an eager
+    notify the replacement (:func:`_assert_scene_armature_matches`).
+    """
+    _notify_device_test("test_captured_notify_reads_its_captured_arrays")(test, device)
+
+
+class _PooledRowBudget:
+    """A scene solver whose ``articulation_constraint_max`` reads its row capacity: the per-world budget pooled over
+    the model's worlds (``_articulation_constraint_max``), which bounds each of the scene's row counts."""
+
+    def __init__(self, solver):
+        self._solver = solver
+
+    @property
+    def articulation_constraint_max(self) -> int:
+        return self._solver._articulation_constraint_max
+
+    def __getattr__(self, name):
+        return getattr(self._solver, name)
+
+
+class _SceneSparseChecks:
+    """``test_sparse``'s ``TestSteelSparseSolver`` checks bound to a scene test, the row capacity read as the scene
+    pools it (:class:`_PooledRowBudget`)."""
+
+    assert_states_close = steel_sparse.TestSteelSparseSolver.assert_states_close
+    _sparse_rows_physical = steel_sparse.TestSteelSparseSolver._sparse_rows_physical
+
+    def __init__(self, test):
+        self._test = test
+
+    def __getattr__(self, name):
+        return getattr(self._test, name)
+
+    def assert_sparse_state(self, case):
+        model, solver, *rest = case
+        self._test.assertEqual(solver.solve_mode, "scene")
+        steel_sparse.TestSteelSparseSolver.assert_sparse_state(self, (model, _PooledRowBudget(solver), *rest))
+
+
+def _run_sparse_test(test, name: str):
+    """Run ``test_sparse``'s ``TestSteelSparseSolver`` test ``name`` with its sparse cases (``_case(True, ...)``) under
+    the scene and its dense references (``_case(False, ...)``) on Steel's serial solve."""
+    case = steel_sparse._case
+    built = []
+
+    def case_in_mode(sparse, **options):
+        result = case(sparse, solve_mode="scene" if sparse else "serial", **options)
+        built.append(result[1])
+        return result
+
+    with mock.patch.object(steel_sparse, "_case", case_in_mode):
+        getattr(steel_sparse.TestSteelSparseSolver, name)(_SceneSparseChecks(test))
+    test.assertIn("scene", {solver.solve_mode for solver in built})
+
+
+def test_graph_replay_preserves_sparse_problem_under_scene(test, device):
+    """Replay a complete four-step mass-refresh cadence of the scene without dense scratch.
+
+    ``test_sparse``'s branched robot: the scene's eager steps and its replays of a captured four-step cadence agree
+    within the Steel test's tolerance, and the scene's sparse problem passes its storage, row-support, impulse and
+    residual checks, each world's rows within the scene's pooled row capacity.
+    """
+    with wp.ScopedDevice(device):
+        _run_sparse_test(test, "test_graph_replay_preserves_sparse_problem")
+
+
+def test_mixed_graph_replay_after_masked_reset_under_scene(test, device):
+    """Refresh a reset robot and free bodies and replay the scene's complete solve graph.
+
+    ``test_sparse``'s robot and two free bodies, the robot nudged and reset by a world mask: the reset refreshes only
+    its factor group, and the scene's replays agree with its eager steps within the Steel test's tolerance, its sparse
+    problem passing its checks.
+    """
+    with wp.ScopedDevice(device):
+        _run_sparse_test(test, "test_mixed_graph_replay_after_masked_reset")
+
+
+def test_trajectory_masked_reset_and_inertial_notify_under_scene(test, device):
+    """Match Steel's dense factors over 32 contact steps and refresh only the requested cached factors, under the scene.
+
+    ``test_sparse``'s branched robot: the scene's sparse factors (``_case(True)``) against Steel's dense factors
+    (``_case(False)``, ``solve_mode="serial"``) within the Steel test's tolerance over 32 steps with contacts and joint
+    limits, through a masked reset (only the reset world's factor refreshed) and an inertial notify (every factor).
+    """
+    with wp.ScopedDevice(device):
+        _run_sparse_test(test, "test_trajectory_masked_reset_and_inertial_notify")
+
+
+class TestSteelSceneCarriedRows(unittest.TestCase):
+    """Steel's mass-matrix and sparse-factor tests carried to the scene mode."""
+
+
+for _fn in (
+    test_armature_notify_matches_host_reference_and_fresh_solver_under_scene,
+    test_kinematic_notify_matches_host_reference_and_fresh_solver_under_scene,
+):
+    add_function_test(TestSteelSceneCarriedRows, _fn.__name__, _fn, devices=get_test_devices())
+
+# CUDA only, as the Steel tests they carry.
+for _fn in (
+    test_sleeping_diagonal_dynamics_skip_is_exact_under_scene,
+    test_armature_and_shape_notify_capture_into_a_graph_under_scene,
+    test_narrow_dof_flags_and_material_copies_capture_into_a_graph_under_scene,
+    test_captured_notify_reads_its_captured_arrays_under_scene,
+    test_graph_replay_preserves_sparse_problem_under_scene,
+    test_mixed_graph_replay_after_masked_reset_under_scene,
+    test_trajectory_masked_reset_and_inertial_notify_under_scene,
+):
+    add_function_test(TestSteelSceneCarriedRows, _fn.__name__, _fn, devices=get_cuda_test_devices())
+
 
 if __name__ == "__main__":
     unittest.main()

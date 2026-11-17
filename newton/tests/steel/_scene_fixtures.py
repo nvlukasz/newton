@@ -3,6 +3,7 @@
 
 """Scenes, runs, row read-back and kernel-text pins shared by the scene-mode test modules of SolverSteel."""
 
+import contextlib
 import re
 from collections.abc import Sequence
 
@@ -652,3 +653,89 @@ def _scene_heap(
     # Sizes the solver's contact scratch, so it is set before the solver is built.
     model.rigid_contact_max = CONTACT_MAX
     return model
+
+
+# Steel's tests carried to the scene: their helpers in a chosen mode, and a contact's row on either route
+
+
+@contextlib.contextmanager
+def default_solve_mode(mode: str):
+    """Construct every :class:`~newton.solvers.SolverSteel` built without a ``solve_mode`` in the block with ``mode``.
+
+    Steel's test helpers build their solvers without a ``solve_mode``; a scene test runs such a helper once under
+    ``"scene"`` and once under ``"serial"``, so that both solvers see the same model and the same contacts. The mode is
+    passed on as an explicit argument, which the forced run of Steel's suite leaves as given. A construction that
+    names its own ``solve_mode`` keeps it. The block gets the list of the solvers built in it, in construction order.
+    """
+    init = SolverSteel.__init__
+    built = []
+
+    def init_in_mode(self, model, *args, **kwargs):
+        kwargs.setdefault("solve_mode", mode)
+        init(self, model, *args, **kwargs)
+        built.append(self)
+
+    SolverSteel.__init__ = init_in_mode
+    try:
+        yield built
+    finally:
+        SolverSteel.__init__ = init
+
+
+CARRIED_MODES = ("scene", "serial")
+"""The modes a scene counterpart of a Steel test runs: the scene mode and its reference, Steel's serial solve."""
+
+ROUTE_DENSE = 0
+"""``SolverSteel._contact_path`` of a contact on the dense rows, where the scene mode puts every contact."""
+
+ROUTE_FREE_BODY = 1
+"""``SolverSteel._contact_path`` of a contact on Steel's free-body rows (``_mf_*``)."""
+
+
+def contact_routes(solver, contacts) -> set[int]:
+    """The routes (``_contact_path``) of ``contacts``' active contacts in ``solver``'s last step (a dropped contact,
+    ``-1``, has none)."""
+    count = int(contacts.rigid_contact_count.numpy()[0])
+    return {int(path) for path in solver._contact_path.numpy()[:count] if path >= 0}
+
+
+def carried_routes(mode: str, articulated: bool) -> set[int]:
+    """The routes of a body's contacts with the ground under ``mode``: the dense rows under the scene mode; under
+    Steel's serial solve the dense rows for an articulated body and the free-body rows for a free one."""
+    return {ROUTE_DENSE} if mode == "scene" or articulated else {ROUTE_FREE_BODY}
+
+
+def _routed_slot(contact: int, path: int, slot: int | None, what: str) -> None:
+    """Fail unless ``contact`` is on the dense or the free-body route and has a ``what`` slot there."""
+    if path not in (ROUTE_DENSE, ROUTE_FREE_BODY) or slot is None or slot < 0:
+        raise AssertionError(
+            f"contact {contact} has no {what} row to read: path {path} (0 dense, 1 free-body), slot {slot}"
+        )
+
+
+def _contact_row(solver, contact: int) -> tuple[int, float]:
+    """The slot and impulse of ``contact``'s normal row in world 0's row family its route filled.
+
+    ``_contact_path`` 0 names the dense rows, where the scene mode puts every contact, 1 Steel's free-body rows; a
+    dropped (-1) or propagation (2) contact, or one without a slot, fails with an assertion naming it.
+    """
+    path = int(solver._contact_path.numpy()[contact])
+    slot = int(solver._contact_slot.numpy()[contact])
+    _routed_slot(contact, path, slot, "normal")
+    impulses = {ROUTE_DENSE: solver._impulses, ROUTE_FREE_BODY: solver._mf_impulses}[path]
+    return slot, float(impulses.numpy()[0, slot])
+
+
+def _carried_row(solver, contact: int) -> tuple[int, float]:
+    """The slot and impulse the last step saved for ``contact``'s normal row, in the history of its route's family.
+
+    A contact off the dense and free-body routes, or without a saved slot, fails with an assertion naming it.
+    """
+    path = int(solver._contact_path.numpy()[contact])
+    slots, impulses = {
+        ROUTE_DENSE: (solver._ws_prev_dense_slot, solver._ws_prev_impulses),
+        ROUTE_FREE_BODY: (solver._ws_prev_mf_slot, solver._ws_prev_mf_impulses),
+    }.get(path, (None, None))
+    slot = int(slots.numpy()[contact]) if slots is not None else None
+    _routed_slot(contact, path, slot, "carried")
+    return slot, float(impulses.numpy()[0, slot])

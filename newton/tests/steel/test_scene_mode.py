@@ -12,6 +12,7 @@ import unittest
 import warnings
 from functools import partial
 from typing import NamedTuple
+from unittest import mock
 
 import numpy as np
 import warp as wp
@@ -24,9 +25,13 @@ from newton._src.solvers.steel.scene_solve import SCENE_FREE_SUPPORT
 from newton._src.solvers.steel.scene_units import SceneUnits
 from newton.solvers import SolverBase, SolverSteel
 from newton.solvers.experimental.coupled import CouplingInterface
+from newton.tests.steel import test_articulation as articulation
 from newton.tests.steel import test_contacts
+from newton.tests.steel import test_determinism as determinism
+from newton.tests.steel import test_sleeping as sleeping
 from newton.tests.steel._fixtures import (
     DT,
+    _build_carried_load,
     _build_contact_scene,
     _build_four_bar,
     _heap,
@@ -35,6 +40,7 @@ from newton.tests.steel._fixtures import (
     set_torsion_radius,
 )
 from newton.tests.steel._scene_fixtures import (
+    CARRIED_MODES,
     REBOUND_APEX_ATOL,
     SCENE,
     _drop_sphere,
@@ -43,6 +49,7 @@ from newton.tests.steel._scene_fixtures import (
     _scene_heap,
     _steel_on,
     assert_rebound_tracks_steel,
+    default_solve_mode,
 )
 from newton.tests.steel.test_articulation import _build_square_loop, _build_world_hinged_swing
 from newton.tests.steel.test_link_break import AXIS_Y, _four_bar, _rod_inertia
@@ -1415,6 +1422,446 @@ add_function_test(
     TestSteelSceneMode,
     test_parent_wrench_includes_closure_reactions.__name__,
     test_parent_wrench_includes_closure_reactions,
+    devices=get_test_devices(),
+)
+
+
+# Steel's tests whose comparisons ran the scene mode, carried here: each runs the Steel test's steps under the scene
+# mode and under Steel's serial solve (solve_mode="serial") on the same model, and holds both to the Steel test's
+# checks, or compares the two within the Steel test's tolerance.
+
+
+def _assert_connect_rows(test, solver, mode: str, rows: list[int]) -> None:
+    """Assert each closure's rows in ``solver``'s last step, in the connect table's order.
+
+    ``rows`` are the scene's connect rows of each closure's owner (``_scene_family_rows[FAMILY_CONNECT]``: three per
+    enabled BALL closure of the owner, so ``0`` once its closures are released). Under both modes a released closure
+    has no connect slot (``_connect_slot`` ``-1``); an enabled one has one under the scene, which records its rows as
+    Steel's do, and under Steel without pre-elimination.
+    """
+    slots = solver._connect_slot.numpy()
+    released = np.asarray(rows) == 0
+    test.assertTrue(np.all(slots[released] == -1), f"{mode}: a released closure kept its slot")
+    if mode == "scene":
+        test.assertIsNotNone(solver._scene, "not the scene mode")
+        family_rows = solver._scene_family_rows.numpy()[FAMILY_CONNECT][solver._connect_art_np]
+        test.assertEqual(family_rows.tolist(), rows)
+        test.assertTrue(np.all(slots[~released] >= 0), f"{mode}: an enabled closure has no slot")
+    else:
+        test.assertIsNone(solver._scene)
+
+
+def test_disabled_loop_joint_starts_released_under_scene(test, device):
+    """Start a loop joint disabled in ``Model.joint_enabled`` released, and engage it by enabling it, as Steel does.
+
+    ``test_articulation``'s load hung by three BALL closures from world anchors, all disabled: after 48 steps the load
+    has fallen more than 15 cm under the scene and under Steel, with no connect rows; one step after the closures are
+    enabled each has its rows (the load's nine under the scene) and a slot.
+    """
+    for mode in CARRIED_MODES:
+        with test.subTest(solve_mode=mode):
+            b, _, load, joints = _build_carried_load(enabled=False, world_parent=True)
+            model = b.finalize(device=device)
+            solver = SolverSteel(model, iterations=16, baumgarte=0.2, solve_mode=mode)
+            state_0, state_1 = model.state(), model.state()
+            z0 = float(state_0.body_q.numpy()[load, 2])
+            for _ in range(48):
+                solver.step(state_0, state_1, model.control(), None, 1.0 / 240.0)
+                state_0, state_1 = state_1, state_0
+            test.assertGreater(z0 - float(state_0.body_q.numpy()[load, 2]), 0.15)
+            _assert_connect_rows(test, solver, mode, [0, 0, 0])
+
+            articulation._set_joint_enabled(model, joints, True)
+            solver.step(state_0, state_1, model.control(), None, 1.0 / 240.0)
+            _assert_connect_rows(test, solver, mode, [9, 9, 9])
+            test.assertTrue(np.all(solver._connect_slot.numpy() >= 0))
+
+
+def _check_in_place_release_under_scene(test, device, **solver_kwargs):
+    """``test_articulation.check_in_place_release`` under the scene and under Steel, each held to its checks."""
+    for mode in CARRIED_MODES:
+        with test.subTest(solve_mode=mode):
+            model, solver, state_0, state_1, control = articulation._four_bar_setup(
+                device, **solver_kwargs, solve_mode=mode
+            )
+            test.assertEqual(solver.solve_mode, mode)
+            step = articulation._step_four_bar
+            state_0, state_1 = step(solver, state_0, state_1, control, 240)
+            test.assertLess(articulation._four_bar_gaps(model, state_0, 1)[0], 2.0e-3)
+            articulation._set_joint_enabled(model, [articulation._LOOP_JOINT], False)
+            state_0, state_1 = step(solver, state_0, state_1, control, 120)
+            _assert_connect_rows(test, solver, mode, [0])
+            test.assertGreater(articulation._four_bar_gaps(model, state_0, 1)[0], 1.0e-2, "released closure enforced")
+            articulation._set_joint_enabled(model, [articulation._LOOP_JOINT], True)
+            state_0, state_1 = step(solver, state_0, state_1, control, 480)
+            if mode == "scene":
+                _assert_connect_rows(test, solver, mode, [3])
+            test.assertTrue(np.isfinite(state_0.body_q.numpy()).all())
+            test.assertLess(articulation._four_bar_gaps(model, state_0, 1)[0], 2.0e-3, "re-enabled closure open")
+
+
+def test_in_place_release_under_scene(test, device):
+    """Release and re-engage a four-bar closure by editing ``Model.joint_enabled`` in place, as Steel does.
+
+    ``test_articulation``'s driven four-bar closes within 2 mm in 240 steps, opens past 1 cm in 120 steps once its
+    closure is disabled in place (no connect rows, no slot) and closes within 2 mm again in 480 steps once it is
+    enabled (three connect rows under the scene), under the scene and under Steel.
+    """
+    _check_in_place_release_under_scene(test, device)
+
+
+def test_in_place_release_with_preelimination_under_scene(test, device):
+    """Release and re-engage a pre-eliminated four-bar closure through ``Model.joint_enabled``, as Steel does.
+
+    :func:`test_in_place_release_under_scene` with ``enable_bilateral_preelimination=True``, which the scene runs as
+    its plain connect rows.
+    """
+    _check_in_place_release_under_scene(test, device, enable_bilateral_preelimination=True)
+
+
+def test_captured_device_release_under_scene(test, device):
+    """Release half of 64 worlds' closures from a kernel between replays of one captured graph, as Steel does.
+
+    ``test_articulation``'s driven four-bar in 64 worlds, one graph of two steps captured: after 120 replays every
+    loop is closed within 2 mm; a kernel then disables the even worlds' closures, and after 60 more replays those
+    loops are open past 1 cm while the others stay within 2 mm, under the scene (whose one solve world holds all 64
+    closures: three connect rows in each odd world, none in each even one) and under Steel.
+    """
+    world_count = 64
+    for mode in CARRIED_MODES:
+        with test.subTest(solve_mode=mode):
+            model, solver, state_0, state_1, control = articulation._four_bar_setup(
+                device, world_count=world_count, solve_mode=mode
+            )
+            step = articulation._step_four_bar
+            state_0, state_1 = step(solver, state_0, state_1, control, 2)
+            with wp.ScopedCapture(device=device) as capture:
+                step(solver, state_0, state_1, control, 2)
+            for _ in range(120):
+                wp.capture_launch(capture.graph)
+            test.assertLess(float(articulation._four_bar_gaps(model, state_0, world_count).max()), 2.0e-3)
+            wp.launch(
+                articulation._release_even_worlds,
+                dim=world_count,
+                inputs=[articulation._LOOP_JOINT, model.joint_count // world_count],
+                outputs=[model.joint_enabled],
+                device=device,
+            )
+            for _ in range(60):
+                wp.capture_launch(capture.graph)
+            gaps = articulation._four_bar_gaps(model, state_0, world_count)
+            test.assertGreater(float(gaps[0::2].min()), 1.0e-2, "released worlds stayed closed")
+            test.assertLess(float(gaps[1::2].max()), 2.0e-3, "enforced worlds opened")
+            _assert_connect_rows(test, solver, mode, [0, 3] * (world_count // 2))
+            test.assertTrue(np.all(solver._connect_slot.numpy()[1::2] >= 0))
+
+
+def test_mixed_world_stack_rests_under_scene(test, device):
+    """Rest a box stack on an articulated platform as Steel does, the scene with one row family.
+
+    ``test_articulation``'s two free boxes stacked on a position-driven platform slider, in two worlds, 240 steps:
+    under the scene and under Steel the boxes rest on the platform and on each other within 2 mm and everything moves
+    below 2 cm/s, and every body pose of the scene agrees with Steel's within 2e-3 (the resting-state comparison of
+    the split solve's alias with Steel, which upstream removed with the split solve). Steel solves the platform's
+    contacts on its dense rows and the boxes' on its free-body rows; the scene solves them all on its one row family,
+    and its free-body row count stays zero.
+    """
+    poses = {}
+    for mode in CARRIED_MODES:
+        with test.subTest(solve_mode=mode):
+            model = articulation._stack_on_platform(device)
+            solver = SolverSteel(model, iterations=16, solve_mode=mode)
+            state = articulation._run_stack(model, solver, 240)
+            solver.check_constraint_capacity()
+            test.assertGreater(int(solver._constraint_count.numpy()[0]), 0)
+            free_body_rows = int(solver._mf_constraint_count.numpy().sum())
+            if mode == "scene":
+                test.assertEqual(free_body_rows, 0)
+            else:
+                test.assertGreater(free_body_rows, 0)
+            body_q = state.body_q.numpy().reshape(model.world_count, 3, 7)
+            platform_top = body_q[:, 0, 2] + 0.05
+            for level in range(2):
+                expected = platform_top + articulation.BOX_HALF * (2 * level + 1)
+                np.testing.assert_allclose(body_q[:, level + 1, 2], expected, atol=2.0e-3, err_msg=f"box {level}")
+            test.assertLess(float(np.abs(state.body_qd.numpy()).max()), 2.0e-2)
+            poses[mode] = state.body_q.numpy()
+    np.testing.assert_allclose(poses["scene"], poses["serial"], rtol=0.0, atol=2.0e-3)
+
+
+CANONICALIZED_LAUNCHES = frozenset({"bucket_fill"})
+"""The scene's launches whose outputs may differ between reruns, because a later launch canonicalizes them.
+
+``scene_units.bucket_fill`` drops each unit into its bucket's range in arrival order, from an atomic cursor, and
+``bucket_rank``, which reads the buckets, places each unit by its rank by key, whatever that order: the units' order and
+everything after it replay identically."""
+
+
+def _check_launches_replay_under_scene(test, configurations):
+    """``test_determinism``'s launch replay under the scene: every launch of 12 steps rerun three times from a snapshot.
+
+    The scene's launches give identical outputs, except those of :data:`CANONICALIZED_LAUNCHES`. Each configuration's
+    Steel solver (``solve_mode="serial"``) selects sparse mass factors for the ants alone; the scene factors every
+    articulation sparsely.
+    """
+    for name, scene, options in configurations:
+        with test.subTest(name):
+            steel = SolverSteel(scene, deterministic=determinism.RUN_TO_RUN, **{**options, "solve_mode": "serial"})
+            test.assertEqual(steel._sparse_mass_matrix_size is not None, name == "sparse")
+            solver = SolverSteel(scene, deterministic=determinism.RUN_TO_RUN, **{**options, "solve_mode": "scene"})
+            test.assertIsNotNone(solver._sparse_mass_matrix_size)
+            pipeline = determinism._make_pipeline(scene, options)
+            contacts = pipeline.contacts()
+            state_0, state_1, control = scene.state(), scene.state(), scene.control()
+            newton.eval_fk(scene, scene.joint_q, scene.joint_qd, state_0)
+            determinism._actuate(scene, control)
+            varied = set()
+            for _ in range(12):
+                state_0.clear_forces()
+                pipeline.collide(state_0, contacts)
+                with (
+                    mock.patch.object(wp, "launch", determinism._replaying(wp.launch, 3, varied)),
+                    mock.patch.object(wp, "launch_tiled", determinism._replaying(wp.launch_tiled, 3, varied)),
+                ):
+                    solver.step(state_0, state_1, control, contacts, 0.005)
+                state_0, state_1 = state_1, state_0
+            test.assertGreater(int(contacts.rigid_contact_count.numpy()[0]), 0)
+            test.assertEqual(varied - CANONICALIZED_LAUNCHES, set())
+
+
+def test_deterministic_launches_replay_identically_under_scene(test, device):
+    """Reproduce the outputs of every scene launch bitwise when it is rerun from the same inputs.
+
+    ``test_determinism``'s configurations (the contact scene of eight worlds with drive, joint-limit and velocity-limit
+    rows, with device torsion, with the warm start, with ants alone, and with joint friction) under the scene: see
+    :func:`_check_launches_replay_under_scene`.
+    """
+    model = determinism._build_contact_scene(device, worlds=8)
+    _check_launches_replay_under_scene(
+        test,
+        (
+            ("serial", model, determinism.MATRIX_FREE_OPTIONS),
+            (
+                "torsion",
+                determinism._build_contact_scene(device, worlds=8, torsion_radius=0.02),
+                determinism.TORSION_OPTIONS,
+            ),
+            ("warmstart", model, determinism.WARMSTART_OPTIONS),
+            ("sparse", determinism._build_contact_scene(device, worlds=8, boxes=0), determinism.SPARSE_OPTIONS),
+            (
+                "joint_friction",
+                determinism._build_contact_scene(device, worlds=8, joint_friction=0.4),
+                determinism.FRICTION_OPTIONS,
+            ),
+        ),
+    )
+
+
+def test_deterministic_propagation_launches_replay_identically_under_scene(test, device):
+    """Reproduce every scene launch bitwise with the propagation response requested, cached and uncached (warm start).
+
+    ``test_determinism``'s propagation configurations on the contact scene with a kinematic tray, which the scene
+    accepts and solves as its immediate response: see :func:`_check_launches_replay_under_scene`.
+    """
+    model = determinism._build_contact_scene(device, worlds=8, kinematic_tray=True)
+    response = determinism.PROPAGATION_RESPONSES["propagation"]
+    _check_launches_replay_under_scene(
+        test,
+        [
+            (f"propagation_{name}", model, {**options, **response, "propagation_cached_response": cached})
+            for name, options, cached in (
+                ("cached", determinism.MATRIX_FREE_OPTIONS, True),
+                ("uncached_warmstart", determinism.WARMSTART_OPTIONS, False),
+            )
+        ],
+    )
+
+
+def test_default_and_explicit_disabled_match_under_scene(test, device):
+    """Step with sleeping explicitly disabled as with it omitted, bit for bit, and as Steel's default solver does.
+
+    ``test_sleeping``'s two boxes on the ground, 30 steps: the scene with ``enable_sleeping=False`` steps bit for bit
+    as the scene with sleeping omitted (``test_sleeping``'s own claim, under the mode), and within 1e-6 of Steel's
+    serial solve with sleeping omitted: the scene sweeps the boxes' contact rows in its free group where Steel solves
+    them in its free-body kernel, so the two agree to rounding, not bit for bit.
+    """
+    model, pipeline, _, states, control = sleeping._scene(device, enabled=False)
+    options = {"iterations": 16, "friction_anchor_beta": 0.0}
+    explicit = SolverSteel(model, enable_sleeping=False, sleep_quiet_time=0.05, solve_mode="scene", **options)
+    omitted = SolverSteel(model, solve_mode="scene", **options)
+    default = SolverSteel(model, solve_mode="serial", **options)
+    test.assertEqual([solver.solve_mode for solver in (explicit, omitted, default)], ["scene", "scene", "serial"])
+    runs = {"omitted": [model.state(), model.state()], "steel": [model.state(), model.state()]}
+    sleeping._advance_boxes(pipeline, explicit, states, control, 30)
+    sleeping._advance_boxes(pipeline, omitted, runs["omitted"], control, 30)
+    sleeping._advance_boxes(pipeline, default, runs["steel"], control, 30)
+    for field in ("joint_q", "joint_qd", "body_q", "body_qd"):
+        actual = getattr(states[0], field).numpy()
+        np.testing.assert_array_equal(actual, getattr(runs["omitted"][0], field).numpy(), err_msg=field)
+        expected = getattr(runs["steel"][0], field).numpy()
+        test.assertGreater(float(np.abs(expected).max()), 0.0, field)
+        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=1.0e-6, err_msg=field)
+
+
+_COMPARE_ARGUMENTS = ("interval", "velocity_limits", "graph", "settle_steps", "resettle_steps")
+"""The keyword arguments of ``test_sleeping._compare`` that are not solver options."""
+
+
+def _sleeping_runs_under_scene(test, device, cases, **common):
+    """``test_sleeping._compare`` under the scene for each case (its keyword arguments), with the scene's factors.
+
+    The scene factors every articulation sparsely, where Steel's serial solve of the same options selects sparse
+    factors only where ``test_sleeping`` expects them (``expect_sparse``).
+    """
+    for case in cases:
+        with test.subTest(**case, **common):
+            options = {**common, **case}
+            expect_sparse = options.pop("expect_sparse", False)
+            arm = options.pop("arm", True)
+            solver_options = {name: value for name, value in options.items() if name not in _COMPARE_ARGUMENTS}
+            steel = sleeping._Run(
+                device,
+                False,
+                options["interval"],
+                options["velocity_limits"],
+                False,
+                arm,
+                {**solver_options, "solve_mode": "serial"},
+            )
+            test.assertEqual(steel.solver._sparse_mass_matrix_size is not None, expect_sparse)
+            sleeping._compare(test, device, **options, arm=arm, expect_sparse=True, solve_mode="scene")
+
+
+def test_eager_trajectories_match_under_scene(test, device):
+    """Settle, sleep, force-wake and resettle identically with and without skipped dynamics under the scene.
+
+    ``test_sleeping._compare``'s articulations and boxes under the scene, eager, at mass-matrix update intervals 1 and
+    3, with and without joint velocity limits (one configuration over a long sleeping horizon): every published state
+    array equal at every step with and without skipped dynamics, the islands asleep and woken.
+    """
+    cases = []
+    for interval in (1, 3):
+        for velocity_limits in (False, True):
+            horizon = {"settle_steps": 400, "resettle_steps": 600} if interval == 1 and not velocity_limits else {}
+            cases.append({"interval": interval, "velocity_limits": velocity_limits, **horizon})
+    _sleeping_runs_under_scene(test, device, cases, graph=False)
+
+
+def test_alternate_kernel_paths_match_under_scene(test, device):
+    """Skip sleeping dynamics exactly with the tiled triangular solves, the cooperative tree traversal and Steel's
+    sparse-factor profile requested under the scene (``test_sleeping``'s alternate paths)."""
+    cases = [
+        {"kernel_overrides": {"trisolve_kernel": "tiled"}},
+        {"parallel_tree": True},
+        {"arm": False, "expect_sparse": True, **sleeping._SPARSE_PROFILE},
+        {"arm": False, "expect_sparse": True, "parallel_tree": True, **sleeping._SPARSE_PROFILE},
+    ]
+    _sleeping_runs_under_scene(test, device, cases, interval=3, velocity_limits=False, graph=False)
+
+
+def test_graph_trajectories_match_under_scene(test, device):
+    """Replay captured steps identically with and without skipped dynamics under the scene (``test_sleeping``)."""
+    cases = [{"interval": interval} for interval in (1, 2)]
+    _sleeping_runs_under_scene(test, device, cases, velocity_limits=True, graph=True)
+
+
+def test_transient_divergence_is_reported_under_scene(test, device):
+    """Report the step of a published mismatch that is gone again one step later, under the scene.
+
+    ``test_sleeping``'s comparison of runs with and without skipped dynamics, with one ``joint_q`` entry of the skipping
+    run nudged by 1 mm after its eighth step and restored before the next: the comparison reports settle step 7.
+    """
+    advance = sleeping._Run.advance
+    glitch = {"calls": 0, "saved": None}
+
+    def advance_with_glitch(run, force):
+        if not run.solver._sleeping.skip_dynamics:
+            advance(run, force)
+            return
+        if glitch["saved"] is not None:
+            wp.copy(run.states[0].joint_q, glitch["saved"])
+            glitch["saved"] = None
+        advance(run, force)
+        if glitch["calls"] == 7:
+            joint_q = run.states[0].joint_q
+            glitch["saved"] = wp.clone(joint_q)
+            values = joint_q.numpy()
+            values[0] += 1.0e-3
+            joint_q.assign(values)
+        glitch["calls"] += 1
+
+    with mock.patch.object(sleeping._Run, "advance", advance_with_glitch):
+        with test.assertRaisesRegex(AssertionError, "settle step 7 joint_q differs"):
+            sleeping._compare(
+                test, device, interval=1, velocity_limits=False, graph=False, expect_sparse=True, solve_mode="scene"
+            )
+
+
+def test_graph_replay_restores_rows_on_force_under_scene(test, device):
+    """Restore the free bodies' contact rows on a captured sleeping-to-awake transition, as Steel does.
+
+    ``test_sleeping``'s two boxes settle into sleep under replays of one captured pair of steps, with no rows left
+    while they sleep, and a force on the first box wakes it in the next replay and restores its rows: under the
+    scene on its one row family, under Steel on its free-body rows.
+    """
+    for mode in CARRIED_MODES:
+        with test.subTest(solve_mode=mode):
+            with default_solve_mode(mode):
+                scene = sleeping._Scene(device)
+            test.assertEqual(scene.solver.solve_mode, mode)
+            family = 0 if mode == "scene" else 1
+            scene.step()
+            test.assertGreater(int(scene.row_counts()[family]), 0)
+            test.assertEqual(int(scene.row_counts()[1 - family]), 0)
+            scene.step()
+            with wp.ScopedCapture(device=scene.model.device) as capture:
+                for _ in range(2):
+                    scene.step(clear=False)
+            for _ in range(100):
+                wp.capture_launch(capture.graph)
+            np.testing.assert_array_equal(scene.solver._sleeping.body_awake.numpy(), [0, 0])
+            np.testing.assert_array_equal(scene.row_counts(), [0, 0])
+            test.assertGreater(int(scene.contacts.rigid_contact_count.numpy()[0]), 0)
+            force = np.zeros((2, 6), dtype=np.float32)
+            force[0, 0] = 100.0
+            for state in scene.states:
+                state.body_f.assign(force)
+
+            wp.capture_launch(capture.graph)
+
+            np.testing.assert_array_equal(scene.solver._sleeping.body_awake.numpy(), [1, 0])
+            test.assertGreater(int(scene.row_counts()[family]), 0)
+            test.assertGreater(float(scene.states[0].body_qd.numpy()[0, 0]), 0.0)
+            test.assertTrue(np.isfinite(scene.states[0].body_q.numpy()).all())
+            test.assertTrue(np.isfinite(scene.states[0].body_qd.numpy()).all())
+            test.assertFalse(scene.solver.constraint_overflow.numpy().any())
+
+
+class TestSteelSceneCarriedMode(unittest.TestCase):
+    """Steel's articulation, determinism and sleeping tests carried to the scene mode."""
+
+
+# CUDA only, as the Steel tests they carry.
+for _fn in (
+    test_disabled_loop_joint_starts_released_under_scene,
+    test_in_place_release_under_scene,
+    test_in_place_release_with_preelimination_under_scene,
+    test_captured_device_release_under_scene,
+    test_deterministic_launches_replay_identically_under_scene,
+    test_deterministic_propagation_launches_replay_identically_under_scene,
+    test_default_and_explicit_disabled_match_under_scene,
+    test_eager_trajectories_match_under_scene,
+    test_alternate_kernel_paths_match_under_scene,
+    test_graph_trajectories_match_under_scene,
+    test_transient_divergence_is_reported_under_scene,
+    test_graph_replay_restores_rows_on_force_under_scene,
+):
+    add_function_test(TestSteelSceneCarriedMode, _fn.__name__, _fn, devices=get_cuda_test_devices())
+
+add_function_test(
+    TestSteelSceneCarriedMode,
+    test_mixed_world_stack_rests_under_scene.__name__,
+    test_mixed_world_stack_rests_under_scene,
     devices=get_test_devices(),
 )
 

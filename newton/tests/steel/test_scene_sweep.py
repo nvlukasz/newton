@@ -16,7 +16,16 @@ from newton._src.solvers.steel._testing import kernel_overrides
 from newton._src.solvers.steel.scene_pgs import RANGE_ALL, SCENE_BLOCK_COLOR_MAX, get_sweep_rows_serial_kernel
 from newton._src.solvers.steel.sparse_pgs import _get_pgs_solve_sparse_kernel
 from newton.solvers import SolverBase, SolverSteel
-from newton.tests.steel._fixtures import CONTACT_MAX, _build_contact_scene, _build_scissor_model, _heap, _tree
+from newton.tests.steel import test_kernels as steel_kernels
+from newton.tests.steel._fixtures import (
+    CONTACT_MAX,
+    _build_contact_scene,
+    _build_scissor_model,
+    _heap,
+    _run,
+    _set_box_velocities,
+    _tree,
+)
 from newton.tests.steel._scene_fixtures import _humanoid, _humanoids, _leaning_humanoid, _steel_on
 from newton.tests.steel.test_coloring import (
     _assert_color_order,
@@ -1357,6 +1366,96 @@ for _fn in (
     test_phase_orders_match_their_oracles,  # the phases
 ):
     add_function_test(TestSteelSceneSweep, _fn.__name__, _fn, devices=get_cuda_test_devices())
+
+
+# Steel's kernel-choice tests whose comparisons ran the scene mode, carried here: each compares the scene with Steel's
+# serial solve (solve_mode="serial") on the same model and contacts within the Steel test's tolerance, or the scene
+# with itself where the Steel test compares a kernel choice with the default bit for bit.
+
+
+def test_serial_block_dim_is_bitwise_under_scene(test, device):
+    """Leave the scene's results unchanged by Steel's serial block size, and track Steel on the contact scene.
+
+    ``test_kernels``' contact scene with the boxes sliding, 8 steps: the scene with ``serial_kernel_block_dim`` 64 or
+    512 (a kernel the scene does not launch) steps bit for bit as the scene without it, and every scene run tracks
+    Steel's serial solve to rounding, not bit for bit (Steel factors the three-DOF articulation densely and solves the
+    free boxes' rows in its free-body kernel, where the scene uses its sparse factor and its free group): ``joint_q``
+    within 1e-6 and ``joint_qd`` within 1e-5 of Steel's.
+    """
+    run = {"init": _set_box_velocities, "steps": 8}
+    steel = _run(_build_contact_scene(device), solve_mode="serial", **run)
+    scene = _run(_build_contact_scene(device), solve_mode="scene", **run)
+    test.assertEqual(scene[0].solve_mode, "scene")
+    for overrides in ({}, {"serial_kernel_block_dim": 64}, {"serial_kernel_block_dim": 512}):
+        with test.subTest(overrides=overrides):
+            result = _run(_build_contact_scene(device), overrides=overrides, solve_mode="scene", **run)
+            np.testing.assert_array_equal(result[1], scene[1], err_msg=f"{overrides}: joint_q")
+            np.testing.assert_array_equal(result[2], scene[2], err_msg=f"{overrides}: joint_qd")
+            np.testing.assert_allclose(result[1], steel[1], rtol=0.0, atol=1.0e-6, err_msg=f"{overrides}: joint_q")
+            np.testing.assert_allclose(result[2], steel[2], rtol=0.0, atol=1.0e-5, err_msg=f"{overrides}: joint_qd")
+
+
+def test_tiled_and_loop_kernels_step_identically_under_scene(test, device):
+    """Step a chain that selects Steel's tiled kernels with the scene, with the loop kernels requested, as Steel's
+    tiled factorization does.
+
+    ``test_kernels``' 14-link chains in two worlds, 10 steps without contacts: Steel's serial solve selects its tiled
+    Cholesky and ``H^-1 J^T`` kernels; the scene, with the loop kernels requested (its own sparse factor replaces
+    them), ends within 1e-4 of Steel's ``joint_q``.
+    """
+    trajectories = {}
+    for mode, overrides in (
+        ("serial", {}),
+        ("scene", {"cholesky_kernel": "loop", "trisolve_kernel": "loop", "hinv_jt_kernel": "par_row"}),
+    ):
+        model = steel_kernels._build_chain_model(device, num_links=14, num_worlds=2)
+        with kernel_overrides(overrides):
+            solver = SolverSteel(model, solve_mode=mode, articulation_constraint_max=64)
+        if mode == "serial":
+            test.assertTrue(solver._execution_plan.use_tiled_cholesky(14))
+            test.assertTrue(solver._execution_plan.use_tiled_hinv_jt(14))
+        else:
+            test.assertIsNotNone(solver._scene)
+        state_0, state_1 = model.state(), model.state()
+        control = model.control()
+        for _ in range(10):
+            solver.step(state_0, state_1, control, None, 1.0 / 120.0)
+            state_0, state_1 = state_1, state_0
+        trajectories[mode] = state_0.joint_q.numpy().copy()
+    test.assertGreater(float(np.abs(trajectories["serial"]).max()), 0.0)
+    np.testing.assert_allclose(trajectories["scene"], trajectories["serial"], rtol=0.0, atol=1.0e-4)
+
+
+def test_parallel_streams_step_identically_under_scene(test, device):
+    """Step the scene bit for bit with a stream per Steel size group (``use_parallel_streams``).
+
+    ``test_kernels``' two chain sizes and a box falling onto the ground, 60 steps: the scene with streams (and no
+    double buffering) steps bit for bit as the scene without them. Its rows read the free bodies' factor, so it maps no
+    fused CRBA-Cholesky schedule; Steel's serial solve of the same model has more than one size group.
+    """
+    model = steel_kernels._scene(device)
+    steel, _ = steel_kernels._stream_trajectory(model, solve_mode="serial")
+    test.assertGreater(len(steel._size_groups), 1)
+    reference_solver, reference = steel_kernels._stream_trajectory(model, solve_mode="scene")
+    test.assertEqual(reference_solver._size_streams, {})
+    solver, joint_q = steel_kernels._stream_trajectory(model, solve_mode="scene", use_parallel_streams=True)
+    test.assertTrue(solver._size_streams)
+    test.assertFalse(solver._double_buffered)
+    test.assertFalse(solver._crba_source_dof_by_size)
+    np.testing.assert_array_equal(joint_q, reference)
+
+
+class TestSteelSceneCarriedKernels(unittest.TestCase):
+    """Steel's kernel-choice tests carried to the scene mode."""
+
+
+# CUDA only, as the Steel tests they carry.
+for _fn in (
+    test_serial_block_dim_is_bitwise_under_scene,
+    test_tiled_and_loop_kernels_step_identically_under_scene,
+    test_parallel_streams_step_identically_under_scene,
+):
+    add_function_test(TestSteelSceneCarriedKernels, _fn.__name__, _fn, devices=get_cuda_test_devices())
 
 
 if __name__ == "__main__":

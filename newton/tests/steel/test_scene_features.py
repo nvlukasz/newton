@@ -50,9 +50,11 @@ forces of the dropped rows, and the watermarks' excess of the worlds that lost r
 
 import dataclasses
 import hashlib
+import itertools
 import re
 import unittest
 from functools import partial
+from unittest import mock
 
 import numpy as np
 import warp as wp
@@ -63,6 +65,7 @@ from newton._src.solvers.steel.kernels import (
     PGS_CONSTRAINT_TYPE_FRICTION,
     PGS_CONSTRAINT_TYPE_JOINT_FRICTION,
     PGS_CONSTRAINT_TYPE_JOINT_LIMIT,
+    PGS_CONSTRAINT_TYPE_JOINT_TARGET,
 )
 from newton._src.solvers.steel.scene_pgs import (
     _HOST_ROUNDING_SHIM_CPP,
@@ -80,20 +83,37 @@ from newton._src.solvers.steel.scene_pgs import (
 from newton._src.solvers.steel.scene_rows import _get_scene_contact_response_kernel
 from newton.solvers import SolverBase, SolverSteel
 from newton.tests.steel import test_contact_reduction
-from newton.tests.steel._fixtures import DT, _build_contact_scene, _friction_impulses, _set_box_velocities
+from newton.tests.steel import test_contacts as steel_contacts
+from newton.tests.steel import test_friction as steel_friction
+from newton.tests.steel import test_limits_drives as steel_limits
+from newton.tests.steel._fixtures import (
+    DT,
+    RADIUS,
+    _build_contact_scene,
+    _build_plane_model,
+    _friction_impulses,
+    _reset_state,
+    _set_box_velocities,
+)
 from newton.tests.steel._scene_fixtures import (
+    CARRIED_MODES,
     DEFAULT_SNIPPET_SHA256,
+    ROUTE_DENSE,
+    ROUTE_FREE_BODY,
     SCENE,
     _drop_sphere,
     _humanoids,
     _rms,
     _Run,
     assert_rebound_tracks_steel,
+    carried_routes,
+    default_solve_mode,
+    row_families,
 )
 from newton.tests.steel.test_capacity import _box_on_ground
 from newton.tests.steel.test_contacts import FILL, LOWER_MASS, _check_rows, _net_body_forces, _stacked_boxes
-from newton.tests.test_contact_reduction_body_pairs import _free_jointed_foot, _make_pipeline, _undamped
 from newton.tests.steel.test_friction import _surface_belt
+from newton.tests.test_contact_reduction_body_pairs import _free_jointed_foot, _make_pipeline, _undamped
 from newton.tests.unittest_utils import StdOutCapture, add_function_test, get_cuda_test_devices, get_test_devices
 
 RESTITUTION_RHS_ATOL = 1.0e-6
@@ -2257,6 +2277,748 @@ add_function_test(
     test_surface_velocity_belt_matches_steel,
     devices=get_test_devices(),
 )
+
+
+# Steel's contact, friction and drive tests whose comparisons ran the scene mode, carried here: each runs the Steel
+# test's steps under the scene mode and under Steel's serial solve (solve_mode="serial") on the same model and the
+# same contacts, through Steel's own helpers where they build the solver (default_solve_mode), and holds both to the
+# Steel test's checks, or compares the two within the Steel test's tolerance. The scene puts every contact on the
+# dense rows (route 0), where Steel puts a free body's on its free-body rows (route 1).
+
+
+def _carried_routes(scene: str, mode: str) -> set[int]:
+    """The contact routes of ``test_contacts``' sphere ``scene`` (``"free"`` or ``"articulated"``) under ``mode``."""
+    return carried_routes(mode, scene == "articulated")
+
+
+def _step_plane_runs(device, **options) -> dict[str, dict]:
+    """``test_contacts._step_plane`` under each of :data:`CARRIED_MODES`, by mode."""
+    runs = {}
+    for mode in CARRIED_MODES:
+        with default_solve_mode(mode):
+            runs[mode] = steel_contacts._step_plane(device, **options)
+    return runs
+
+
+def test_contact_f_reports_each_box_weight_under_scene(test, device):
+    """Report linear-only per-contact forces that sum to each box's weight at rest, under the scene as under Steel.
+
+    ``test_contacts``' two stacked boxes, 150 steps with ``CONTACT_F`` requested: under each mode the contact rows
+    carry linear forces only, and each box's net contact force is its weight within 3 %.
+    """
+    for mode in CARRIED_MODES:
+        with test.subTest(solve_mode=mode):
+            steel_contacts.test_contact_f_reports_each_box_weight(test, device, solve_mode=mode)
+
+
+def _captured_contact_f(test, device, mode: str) -> tuple[np.ndarray, float]:
+    """``test_contacts``' captured ``CONTACT_F`` run under ``mode``: its checks, then each body's net contact force and
+    the upper box's weight."""
+    model, pipeline = steel_contacts._stacked_boxes(device)
+    solver = SolverSteel(model, iterations=32, solve_mode=mode)
+    contacts = pipeline.contacts()
+    observables = solver.observables({SolverBase.ObservableKind.CONTACT_F}, contacts=contacts)
+    states = [model.state(), model.state()]
+    control = model.control()
+
+    def step():
+        pipeline.collide(states[0], contacts)
+        solver.step(states[0], states[1], control, contacts, steel_contacts.DT, observables=observables)
+        pipeline.collide(states[1], contacts)
+        solver.step(states[1], states[0], control, contacts, steel_contacts.DT, observables=observables)
+
+    step()
+    with wp.ScopedCapture(device) as recorded:
+        step()
+    fill = steel_contacts.FILL
+    observables.contact_f.fill_(wp.spatial_vector(fill, fill, fill, fill, fill, fill))
+    for _ in range(60):
+        wp.capture_launch(recorded.graph)
+    contact_f = observables.contact_f.numpy()
+    steel_contacts._check_rows(test, contacts, contact_f)
+    weight = steel_contacts.UPPER_MASS * float(np.linalg.norm(model.gravity.numpy()[0]))
+    net = steel_contacts._net_body_forces(model, contacts, contact_f)
+    np.testing.assert_allclose(net[1, 2], weight, rtol=0.03, err_msg=mode)
+    return net, weight
+
+
+def test_contact_f_in_a_captured_graph_under_scene(test, device):
+    """Write the observable from the replayed step's impulses in a captured graph, under the scene as under Steel.
+
+    ``test_contacts``' two stacked boxes, a captured pair of steps replayed 60 times after ``CONTACT_F`` was filled
+    with a sentinel: under each mode the contact rows are written and carry linear forces only, the upper box's net
+    vertical force is its weight within 3 %, and the scene's per-body net forces agree with Steel's within 3 % of
+    the upper box's weight.
+    """
+    (scene, weight), (steel, _) = (_captured_contact_f(test, device, mode) for mode in CARRIED_MODES)
+    np.testing.assert_allclose(scene, steel, rtol=0.0, atol=0.03 * weight)
+
+
+def test_penetrating_impact_replaces_baumgarte_with_restitution_under_scene(test, device):
+    """Keep penetration correction out of the qualifying restitution target, under the scene as under Steel.
+
+    ``test_contacts``' free sphere 1e-5 to 1e-2 m deep in the plane, closing at 2 m/s with restitution 0.5, one step
+    of 8 iterations: under each mode one contact leaves at half the incident speed (``_assert_velocity``), and the
+    scene's exit velocity is Steel's within the same tolerance.
+    """
+    restitution, speed = 0.5, 2.0
+    for penetration in (1.0e-5, 1.0e-4, 1.0e-3, 1.0e-2):
+        label = f"penetration={penetration:g}"
+        with test.subTest(penetration=penetration):
+            runs = _step_plane_runs(
+                device,
+                separation=-penetration,
+                speed=speed,
+                restitution=restitution,
+                velocity_iterations=0,
+                iterations=8,
+            )
+            for mode, result in runs.items():
+                test.assertEqual(result["contact_count"], 1, f"{label}, {mode}: expected exactly one contact")
+                test.assertEqual(result["paths"], _carried_routes("free", mode), f"{label}, {mode}: wrong route")
+                steel_contacts._assert_velocity(test, result["before"], -speed, speed, f"{label}, {mode}, incident")
+                steel_contacts._assert_velocity(test, result["after"], restitution * speed, speed, f"{label}, {mode}")
+            steel_contacts._assert_velocity(
+                test, runs["scene"]["after"], runs["serial"]["after"], speed, f"{label}: scene against Steel"
+            )
+
+
+def test_two_body_impact_conserves_momentum_and_reverses_relative_speed_under_scene(test, device):
+    """Match the exact two-body impact solution over mass ratio and frame shift, under the scene as under Steel.
+
+    ``test_contacts``' two free spheres closing along their line of centres, restitution 0.6, for four mass ratios
+    and frame speeds: under each mode one contact, the end separation within 2e-4 m, each body's exit velocity the
+    exact solution's (``_assert_velocity``), momentum within 2e-3, the relative-speed law within 5e-3 and the energy
+    loss within 5e-3 of the exact ones; and the scene's exit velocities are Steel's within ``_assert_velocity``'s
+    tolerance.
+    """
+    restitution = 0.6
+    for mass_a, mass_b, frame_speed in ((1.0, 1.0, 0.0), (1.0, 4.0, 0.0), (4.0, 1.0, 0.0), (1.0, 4.0, 3.0)):
+        velocity_a, velocity_b = 2.0 + frame_speed, -1.0 + frame_speed
+        closing_speed = velocity_a - velocity_b
+        label = f"m=({mass_a},{mass_b}), frame={frame_speed}"
+        with test.subTest(mass_a=mass_a, mass_b=mass_b, frame_speed=frame_speed):
+            exits = {}
+            for mode in CARRIED_MODES:
+                with default_solve_mode(mode):
+                    out_a, out_b, distance, count, paths = steel_contacts._step_two_spheres(
+                        device,
+                        mass_a=mass_a,
+                        mass_b=mass_b,
+                        velocity_a=velocity_a,
+                        velocity_b=velocity_b,
+                        restitution=restitution,
+                    )
+                exits[mode] = (out_a, out_b)
+                total_mass = mass_a + mass_b
+                expected_a = (
+                    (mass_a - restitution * mass_b) * velocity_a + (1.0 + restitution) * mass_b * velocity_b
+                ) / total_mass
+                expected_b = (
+                    (1.0 + restitution) * mass_a * velocity_a + (mass_b - restitution * mass_a) * velocity_b
+                ) / total_mass
+                test.assertEqual(count, 1, f"{label}, {mode}: expected exactly one sphere-sphere contact")
+                test.assertEqual(paths, _carried_routes("free", mode), f"{label}, {mode}: wrong route")
+                separation = steel_contacts.IMPACT_FRACTION * closing_speed * steel_contacts.DEFAULT_DT
+                expected_distance = 2.0 * RADIUS + separation + restitution * closing_speed * steel_contacts.DEFAULT_DT
+                test.assertAlmostEqual(distance, expected_distance, delta=2.0e-4, msg=f"{label}, {mode}: separation")
+                steel_contacts._assert_velocity(test, out_a, expected_a, closing_speed, f"{label}, {mode}, body A")
+                steel_contacts._assert_velocity(test, out_b, expected_b, closing_speed, f"{label}, {mode}, body B")
+                momentum_before = mass_a * velocity_a + mass_b * velocity_b
+                momentum_after = mass_a * out_a + mass_b * out_b
+                test.assertAlmostEqual(momentum_after, momentum_before, delta=2.0e-3 * max(1.0, abs(momentum_before)))
+                test.assertAlmostEqual(out_b - out_a, restitution * closing_speed, delta=5.0e-3)
+                reduced_mass = mass_a * mass_b / total_mass
+                expected_loss = 0.5 * reduced_mass * (1.0 - restitution**2) * closing_speed**2
+                energy_before = 0.5 * mass_a * velocity_a**2 + 0.5 * mass_b * velocity_b**2
+                energy_after = 0.5 * mass_a * out_a**2 + 0.5 * mass_b * out_b**2
+                test.assertAlmostEqual(
+                    energy_before - energy_after, expected_loss, delta=5.0e-3 * max(1.0, energy_before)
+                )
+            for body, scene_exit, steel_exit in zip("AB", exits["scene"], exits["serial"], strict=True):
+                steel_contacts._assert_velocity(
+                    test, scene_exit, steel_exit, closing_speed, f"{label}, body {body}: scene against Steel"
+                )
+
+
+def test_restitution_is_relative_to_a_moving_kinematic_surface_under_scene(test, device):
+    """Measure rebound relative to prescribed motion, under the scene as under Steel.
+
+    ``test_contacts``' free sphere striking a kinematic sphere that moves at the frame speed (0 and 7 m/s), closing at
+    3 m/s with restitution 0.6: under each mode the free sphere leaves at the surface's velocity minus 0.6 times the
+    closing speed (``_assert_velocity`` with ``rtol`` 5e-3, the relative speed within 1.5e-2), and the scene's exit
+    velocity is Steel's within the same tolerance.
+    """
+    restitution, closing_speed = 0.6, 3.0
+    separation = steel_contacts.IMPACT_FRACTION * closing_speed * steel_contacts.DEFAULT_DT
+    for frame_speed in (0.0, 7.0):
+        label = f"frame={frame_speed}"
+        with test.subTest(frame_speed=frame_speed):
+            exits = {}
+            for mode in CARRIED_MODES:
+                builder = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
+                cfg = steel_contacts._shape_cfg(restitution)
+                inertia = steel_contacts._sphere_inertia(1.0)
+                dynamic_body = builder.add_body(
+                    xform=wp.transform(wp.vec3(0.0, 0.0, 0.0), wp.quat_identity()),
+                    mass=1.0,
+                    inertia=inertia,
+                    lock_inertia=True,
+                )
+                kinematic_body = builder.add_body(
+                    xform=wp.transform(wp.vec3(0.0, 0.0, 2.0 * RADIUS + separation), wp.quat_identity()),
+                    mass=1.0,
+                    inertia=inertia,
+                    lock_inertia=True,
+                    is_kinematic=True,
+                )
+                builder.add_shape_sphere(dynamic_body, radius=RADIUS, cfg=cfg)
+                builder.add_shape_sphere(kinematic_body, radius=RADIUS, cfg=cfg)
+                model = builder.finalize(device=device)
+                with default_solve_mode(mode):
+                    solver = steel_contacts._make_solver(model)
+                state_in, state_out = model.state(), model.state()
+                velocity_dynamic, velocity_surface = frame_speed + 2.0, frame_speed - 1.0
+                joint_qd = np.zeros(model.joint_dof_count, dtype=np.float32)
+                joint_qd[2] = velocity_dynamic
+                joint_qd[8] = velocity_surface
+                state_in.joint_qd.assign(joint_qd)
+                newton.eval_fk(model, state_in.joint_q, state_in.joint_qd, state_in)
+                pipeline = newton.CollisionPipeline(model, broad_phase="nxn")
+                contacts = pipeline.contacts()
+                pipeline.collide(state_in, contacts)
+                solver.step(state_in, state_out, model.control(), contacts, steel_contacts.DEFAULT_DT)
+                count = int(contacts.rigid_contact_count.numpy()[0])
+                paths = {int(v) for v in solver._contact_path.numpy()[:count] if v >= 0}
+                exits[mode] = after = float(state_out.body_qd.numpy()[dynamic_body][2])
+                test.assertEqual(count, 1, f"{label}, {mode}: expected one sphere contact")
+                test.assertEqual(paths, _carried_routes("free", mode), f"{label}, {mode}: wrong route")
+                expected_after = velocity_surface - restitution * closing_speed
+                steel_contacts._assert_velocity(test, after, expected_after, closing_speed, label, rtol=5.0e-3)
+                test.assertAlmostEqual(velocity_surface - after, restitution * closing_speed, delta=1.5e-2)
+            steel_contacts._assert_velocity(
+                test, exits["scene"], exits["serial"], closing_speed, f"{label}: scene against Steel", rtol=5.0e-3
+            )
+
+
+def test_every_contact_response_route_enforces_restitution_under_scene(test, device):
+    """Enforce the same impact law on a free sphere and an articulated root, under the scene as under Steel.
+
+    ``test_contacts``' sphere crossing into the plane at 3 m/s with restitution 0.65, free and as the root of a
+    two-link articulation: under each mode it leaves at 0.65 times the incident speed (``_assert_velocity`` with
+    ``rtol`` 5e-3) on its route, the scene's dense rows for both, and the scene's exit velocity is Steel's within the
+    same tolerance.
+    """
+    restitution, speed = 0.65, 3.0
+    separation = steel_contacts.IMPACT_FRACTION * speed * steel_contacts.DEFAULT_DT
+    for scene in ("free", "articulated"):
+        with test.subTest(scene=scene):
+            runs = _step_plane_runs(
+                device,
+                separation=separation,
+                speed=speed,
+                restitution=restitution,
+                scene=scene,
+                velocity_iterations=0,
+                iterations=16,
+            )
+            for mode, result in runs.items():
+                steel_contacts._assert_crossing_setup(test, result, separation, speed, steel_contacts.DEFAULT_DT, scene)
+                test.assertEqual(result["paths"], _carried_routes(scene, mode), f"{scene}, {mode}: wrong route")
+                steel_contacts._assert_velocity(test, result["after"], restitution * speed, speed, scene, rtol=5.0e-3)
+            steel_contacts._assert_velocity(
+                test,
+                runs["scene"]["after"],
+                runs["serial"]["after"],
+                speed,
+                f"{scene}: scene against Steel",
+                rtol=5.0e-3,
+            )
+
+
+def test_multiworld_restitution_keeps_case_data_isolated_under_scene(test, device):
+    """Apply each world's coefficient and crossing state without cross-world leakage, under the scene as under Steel.
+
+    ``test_contacts``' four worlds of a free sphere over the plane, each with its own restitution, speed, mass and
+    impact fraction (one not crossing): under each mode each world's exit velocity and end gap are its own case's
+    (``_assert_velocity``, 2e-4 m), the scene folding the four worlds into its one solve world; and each world's exit
+    velocity under the scene is Steel's within ``_assert_velocity``'s tolerance.
+    """
+    cases = ((0.25, 2.0, 1.0, 0.4), (0.75, 4.0, 10.0, 0.7), (1.0, 3.0, 0.5, 1.25), (0.0, 5.0, 2.0, 0.2))
+    exits = {}
+    for mode in CARRIED_MODES:
+        with test.subTest(solve_mode=mode):
+            scene = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
+            for restitution, speed, mass, impact_fraction in cases:
+                world = newton.ModelBuilder(gravity=(0.0, 0.0, 0.0))
+                separation = speed * steel_contacts.DEFAULT_DT * impact_fraction
+                body = world.add_body(
+                    xform=wp.transform(wp.vec3(0.0, 0.0, RADIUS + separation), wp.quat_identity()),
+                    mass=mass,
+                    inertia=steel_contacts._sphere_inertia(mass),
+                    lock_inertia=True,
+                )
+                cfg = steel_contacts._shape_cfg(restitution)
+                world.add_shape_sphere(body, radius=RADIUS, cfg=cfg)
+                world.add_ground_plane(cfg=cfg)
+                scene.add_world(world)
+            model = scene.finalize(device=device)
+            with default_solve_mode(mode):
+                solver = steel_contacts._make_solver(model)
+            state_in, state_out = model.state(), model.state()
+            joint_qd = np.zeros((len(cases), 6), dtype=np.float32)
+            joint_qd[:, 2] = [-case[1] for case in cases]
+            state_in.joint_qd.assign(joint_qd.reshape(-1))
+            newton.eval_fk(model, state_in.joint_q, state_in.joint_qd, state_in)
+            pipeline = newton.CollisionPipeline(model, broad_phase="nxn")
+            contacts = pipeline.contacts()
+            pipeline.collide(state_in, contacts)
+            solver.step(state_in, state_out, model.control(), contacts, steel_contacts.DEFAULT_DT)
+
+            count = int(contacts.rigid_contact_count.numpy()[0])
+            exits[mode] = after = state_out.body_qd.numpy()[:, 2]
+            end_gap = state_out.body_q.numpy()[:, 2] - RADIUS
+            paths = solver._contact_path.numpy()[:count]
+            test.assertEqual(count, len(cases), "expected exactly one contact in every world")
+            test.assertEqual(set(paths.tolist()), _carried_routes("free", mode), f"{mode}: contact paths {paths}")
+            for world, (restitution, speed, _mass, impact_fraction) in enumerate(cases):
+                crossing = impact_fraction < 1.0
+                if crossing and restitution > 0.0:
+                    expected = restitution * speed
+                elif crossing:
+                    expected = -impact_fraction * speed
+                else:
+                    expected = -speed
+                steel_contacts._assert_velocity(test, float(after[world]), expected, speed, f"{mode}, world {world}")
+                if crossing and restitution > 0.0:
+                    expected_gap = (impact_fraction + restitution) * speed * steel_contacts.DEFAULT_DT
+                    test.assertAlmostEqual(float(end_gap[world]), expected_gap, delta=2.0e-4)
+                elif crossing:
+                    test.assertLess(abs(float(end_gap[world])), 2.0e-4, f"{mode}, world {world} missed the surface")
+                else:
+                    test.assertGreater(float(end_gap[world]), 0.0, f"{mode}, world {world} reached the surface")
+    for world, case in enumerate(cases):
+        steel_contacts._assert_velocity(
+            test, float(exits["scene"][world]), float(exits["serial"][world]), case[1], f"world {world}: scene"
+        )
+
+
+def test_warm_start_history_does_not_change_or_repeat_restitution_under_scene(test, device):
+    """Use the current incident velocity once under the contact warm start, under the scene as under Steel.
+
+    ``test_contacts``' sphere, free and articulated, with the contact warm start: two impacts at 2 and 5 m/s from the
+    same pose each leave at 0.6 times their incident speed (``_assert_velocity``, ``rtol`` 5e-3), and the matched
+    contact of the next step does not apply restitution again (``rtol`` 1e-2), under each mode on its route; the
+    scene's velocities are Steel's within the same tolerances.
+    """
+    restitution = 0.6
+    separation = steel_contacts.IMPACT_FRACTION * 2.0 * steel_contacts.DEFAULT_DT
+    for scene in ("free", "articulated"):
+        with test.subTest(scene=scene):
+            velocities = {}
+            for mode in CARRIED_MODES:
+                model, body = _build_plane_model(device, separation=separation, restitution=restitution, scene=scene)
+                with default_solve_mode(mode):
+                    solver = steel_contacts._make_solver(model, velocity_iterations=0, contact_warmstart=True)
+                pipeline = newton.CollisionPipeline(model, broad_phase="nxn", contact_matching="latest")
+                contacts = pipeline.contacts()
+                state_in, state_out = model.state(), model.state()
+                velocities[mode] = []
+                for speed in (2.0, 5.0):
+                    _reset_state(model, state_in, -speed)
+                    contacts.clear()
+                    pipeline.collide(state_in, contacts)
+                    solver.step(state_in, state_out, model.control(), contacts, steel_contacts.DEFAULT_DT)
+                    count = int(contacts.rigid_contact_count.numpy()[0])
+                    test.assertEqual(count, 1, f"{scene}, {mode}: reset impact generated {count} contacts")
+                    paths = {int(v) for v in solver._contact_path.numpy()[:count] if v >= 0}
+                    test.assertEqual(paths, _carried_routes(scene, mode), f"{scene}, {mode}: wrong route")
+                    after = float(state_out.body_qd.numpy()[body][2])
+                    velocities[mode].append(after)
+                    steel_contacts._assert_velocity(test, after, restitution * speed, speed, f"{mode}", rtol=5.0e-3)
+                contacts.clear()
+                pipeline.collide(state_out, contacts)
+                test.assertGreater(int(contacts.rigid_contact_count.numpy()[0]), 0, f"{mode}: contact not kept")
+                solver.step(state_out, state_in, model.control(), contacts, steel_contacts.DEFAULT_DT)
+                separating = float(state_in.body_qd.numpy()[body][2])
+                velocities[mode].append(separating)
+                steel_contacts._assert_velocity(test, separating, restitution * 5.0, 5.0, f"{mode}", rtol=1.0e-2)
+            for index, (scene_v, steel_v, speed, rtol) in enumerate(
+                zip(velocities["scene"], velocities["serial"], (2.0, 5.0, 5.0), (5.0e-3, 5.0e-3, 1.0e-2), strict=True)
+            ):
+                steel_contacts._assert_velocity(test, scene_v, steel_v, speed, f"step {index}: scene", rtol=rtol)
+
+
+def test_notify_reads_replaced_and_in_place_restitution_under_scene(test, device):
+    """Match a fresh Steel solver after a ``SHAPE_PROPERTIES`` notify, eagerly and in a captured graph.
+
+    ``test_contacts``' sphere, free and articulated, closing at 3 m/s: the scene steps once with restitution 0 (or 1),
+    the coefficients change in place or by replacement and are notified, and the next step, eager or replayed from a
+    graph captured before the change, leaves within 2e-5 of the velocity a fresh Steel solver (``solve_mode="serial"``)
+    gives the same state and contacts, on the scene's dense rows.
+    """
+    speed = 3.0
+    separation = steel_contacts.IMPACT_FRACTION * speed * steel_contacts.DEFAULT_DT
+    for scene, old, replace, capture in itertools.product(
+        ("free", "articulated"), (0.0, 1.0), (False, True), (False, True)
+    ):
+        new = 1.0 - old
+        label = f"{scene} e={old}->{new} {'replaced' if replace else 'in place'} {'captured' if capture else 'eager'}"
+        with test.subTest(label):
+            model, body = _build_plane_model(device, separation=separation, restitution=old, scene=scene)
+            with default_solve_mode("scene"):
+                solver = steel_contacts._make_solver(model)
+            state_in, state_out = model.state(), model.state()
+            _reset_state(model, state_in, -speed)
+            pipeline = newton.CollisionPipeline(model, broad_phase="nxn")
+            contacts = pipeline.contacts()
+            control = model.control()
+            pipeline.collide(state_in, contacts)
+            solver.step(state_in, state_out, control, contacts, steel_contacts.DEFAULT_DT)
+            if capture:
+                with wp.ScopedCapture(device) as graph:
+                    pipeline.collide(state_in, contacts)
+                    solver.step(state_in, state_out, control, contacts, steel_contacts.DEFAULT_DT)
+            if replace:
+                model.shape_material_restitution = wp.full(model.shape_count, new, dtype=float, device=device)
+            else:
+                model.shape_material_restitution.fill_(new)
+            solver.notify_model_changed(newton.ModelFlags.SHAPE_PROPERTIES)
+            if capture:
+                wp.capture_launch(graph.graph)
+            else:
+                pipeline.collide(state_in, contacts)
+                solver.step(state_in, state_out, control, contacts, steel_contacts.DEFAULT_DT)
+
+            reference = model.state()
+            with default_solve_mode("serial"):
+                steel = steel_contacts._make_solver(model)
+            steel.step(state_in, reference, control, contacts, steel_contacts.DEFAULT_DT)
+            count = int(contacts.rigid_contact_count.numpy()[0])
+            test.assertEqual(count, 1, f"{label}: expected one contact")
+            test.assertEqual({int(v) for v in solver._contact_path.numpy()[:count] if v >= 0}, {ROUTE_DENSE})
+            test.assertEqual(
+                {int(v) for v in steel._contact_path.numpy()[:count] if v >= 0}, _carried_routes(scene, "serial")
+            )
+            expected = float(reference.body_qd.numpy()[body][2])
+            steel_contacts._assert_velocity(
+                test, expected, new * speed if new else -separation / steel_contacts.DEFAULT_DT, speed, label
+            )
+            test.assertAlmostEqual(float(state_out.body_qd.numpy()[body][2]), expected, delta=2.0e-5, msg=label)
+
+
+def test_warm_start_with_velocity_iterations_is_supported_under_scene(test, device):
+    """Combine the contact warm start with end-gap classification, under the scene as under Steel.
+
+    ``test_contacts``' sphere dropped onto the plane with the warm start and four velocity iterations, as the root of a
+    two-link articulation and free, 620 steps: under each mode it lands and rests on the surface (``_assert_landed``)
+    on its route, and the scene's resting height is Steel's within 5 mm.
+    """
+    for scene, label in (("articulated", "dense warm start"), ("free", "free-body warm start")):
+        with test.subTest(scene=scene):
+            heights = {}
+            for mode in CARRIED_MODES:
+                with default_solve_mode(mode):
+                    h, v, n, routes = steel_contacts._drop(device, 4, scene=scene, contact_warmstart=True)
+                steel_contacts._assert_landed(test, h, v, n, f"{label}, {mode}")
+                test.assertEqual(routes, _carried_routes(scene, mode), f"{label}, {mode}: wrong route")
+                heights[mode] = float(h[-1])
+            test.assertAlmostEqual(heights["scene"], heights["serial"], delta=0.005)
+
+
+def _single_step_runs(device, gap, approach_speed, **options) -> dict[str, tuple]:
+    """``test_contacts._single_step`` with its velocity-pass solver under each mode, its position-pass twin Steel's.
+
+    The position-pass twin exposes Steel's free-body rows (the row under test's gap, impulse and end gap), which the
+    scene does not build; so the velocity-pass solver alone takes the mode. Each run is the helper's tuple and the
+    velocity-pass solver's routes.
+    """
+    runs = {}
+    for mode in CARRIED_MODES:
+        built = []
+
+        def make(model, original=steel_contacts._make_solver_velocity_pass_speculative, built=built, mode=mode, **kw):
+            solver = original(model, solve_mode=mode if kw.get("velocity_iterations") else "serial", **kw)
+            built.append(solver)
+            return solver
+
+        with mock.patch.object(steel_contacts, "_make_solver_velocity_pass_speculative", make):
+            result = steel_contacts._single_step(device, gap, approach_speed, **options)
+        # The helper builds the velocity-pass solver first, then its position-pass twin.
+        velocity_solver, position_solver = built
+        if (velocity_solver.solve_mode, position_solver.solve_mode) != (mode, "serial"):
+            raise AssertionError(f"built {velocity_solver.solve_mode!r} and {position_solver.solve_mode!r}")
+        count = result[2]
+        routes = {int(v) for v in velocity_solver._contact_path.numpy()[:count] if v >= 0}
+        runs[mode] = (*result, routes)
+    return runs
+
+
+def _assert_single_step_routes(test, runs):
+    """The velocity-pass solver's contact: on the scene's dense rows, on Steel's free-body rows."""
+    test.assertEqual(runs["scene"][-1], {ROUTE_DENSE})
+    test.assertEqual(runs["serial"][-1], {ROUTE_FREE_BODY})
+
+
+def test_non_crossing_row_keeps_its_speculative_allowance_under_scene(test, device):
+    """Leave the velocity untouched when the body cannot reach the surface, under the scene as under Steel.
+
+    ``test_contacts``' free sphere 2 cm above the plane closing at half the gap per step, one step with four velocity
+    iterations: the position pass (Steel's) leaves its speculative row without impulse and a positive end gap, and
+    under each mode the velocity pass keeps the approach velocity within 2 %, the scene's within 2 % of Steel's.
+    """
+    gap = 0.02
+    runs = _single_step_runs(device, gap, 0.5 * gap / steel_contacts.SIM_DT)
+    _assert_single_step_routes(test, runs)
+    for mode, (before, after, n, impulse, phi, end_gap, _) in runs.items():
+        with test.subTest(solve_mode=mode):
+            test.assertLess(before, -1.0, "setup failed to give the body an approach velocity")
+            test.assertGreater(n, 0, "no speculative contact was generated")
+            test.assertGreater(phi, 0.0, "the row under test was not a positive-gap speculative contact")
+            test.assertEqual(impulse, 0.0, f"a non-crossing row took a position impulse of {impulse:.3e}")
+            test.assertGreater(end_gap, 0.0, f"non-crossing row ended at gap {end_gap:+.3e} m")
+            test.assertAlmostEqual(after, before, delta=0.02 * abs(before), msg=f"free approach braked: {after:.3f}")
+    test.assertAlmostEqual(runs["scene"][1], runs["serial"][1], delta=0.02 * abs(runs["serial"][0]))
+
+
+def _assert_crossing_arrested(test, runs, label):
+    """Both modes arrest the crossing body within 5 % of its approach speed, and agree within that bound."""
+    for mode, (before, after, *_rest) in runs.items():
+        with test.subTest(solve_mode=mode):
+            test.assertLess(abs(after), 0.05 * abs(before), f"{label} kept approaching: {before:.3f} -> {after:.3f}")
+    test.assertAlmostEqual(runs["scene"][1], runs["serial"][1], delta=0.05 * abs(runs["serial"][0]))
+
+
+def test_crossing_row_loses_its_speculative_allowance_under_scene(test, device):
+    """Arrest a body that would cross the surface within the step, under the scene as under Steel.
+
+    ``test_contacts``' free sphere 2 mm above the plane closing at five gaps per step: the position pass (Steel's)
+    gives its speculative row an impulse and an end gap at the surface, and under each mode the velocity pass leaves
+    less than 5 % of the approach speed, the scene within that bound of Steel's.
+    """
+    gap = 0.002
+    runs = _single_step_runs(device, gap, 5.0 * gap / steel_contacts.SIM_DT)
+    _assert_single_step_routes(test, runs)
+    before, _, n, impulse, phi, end_gap, _ = runs["serial"]
+    test.assertLess(before, -1.0, "setup failed to give the body an approach velocity")
+    test.assertGreater(n, 0, "no contact was generated")
+    test.assertGreater(phi, 0.0, "the row under test was not a positive-gap speculative contact")
+    test.assertGreater(impulse, 0.0, "a crossing row took no position impulse")
+    test.assertLessEqual(end_gap, 1.0e-6, f"crossing row still ended at gap {end_gap:+.3e} m")
+    _assert_crossing_arrested(test, runs, "crossing contact")
+
+
+def test_light_body_crossing_uses_end_gap_not_impulse_scale_under_scene(test, device):
+    """Arrest a very light crossing body independently of impulse scale, under the scene as under Steel.
+
+    :func:`test_crossing_row_loses_its_speculative_allowance_under_scene` with a 1e-12 kg sphere, whose position
+    impulse (about 2e-11) is below an absolute impulse threshold: under each mode the velocity pass still arrests it.
+    """
+    gap = 0.002
+    runs = _single_step_runs(device, gap, 5.0 * gap / steel_contacts.SIM_DT, mass=1.0e-12)
+    _assert_single_step_routes(test, runs)
+    _, _, n, impulse, phi, end_gap, _ = runs["serial"]
+    test.assertGreater(n, 0, "no contact was generated")
+    test.assertGreater(phi, 0.0, "the row under test was not a positive-gap speculative contact")
+    test.assertGreater(impulse, 0.0, "light crossing row took no position impulse")
+    test.assertLess(impulse, 1.0e-9, f"position impulse {impulse:.3e} does not straddle the old 1e-9 cutoff")
+    test.assertLessEqual(end_gap, 1.0e-6, f"light crossing row still ended at gap {end_gap:+.3e} m")
+    _assert_crossing_arrested(test, runs, "light crossing body")
+
+
+def test_faceted_rolling_across_tessellation_direction_and_timestep_under_scene(test, device):
+    """Bound the scene's patch friction error against Steel's point friction on coarse and fine faceted wheels.
+
+    ``test_friction``'s faceted rolling test, with its point-friction references (``friction_anchor_beta=0.0``) built on
+    Steel's serial solve and its patch-friction wheels on the scene: mesh and convex-hull wheels of 32, 64 and 128
+    facets at 120 and 240 Hz, both directions, four starting phases each; the scene's mean one-second travel within
+    3 cm of Steel's, its mean speed within 6 %, its lateral speed below 5 cm/s, its spin within 6 %, and frictionless
+    controls that fail the travel bound.
+    """
+    run_rolling = steel_friction._run_rolling
+    built = {"scene": [], "serial": []}
+
+    def rolling_in_mode(*args, friction_anchor_beta=None, **kwargs):
+        mode = "serial" if friction_anchor_beta == 0.0 else "scene"
+        with default_solve_mode(mode) as solvers:
+            result = run_rolling(*args, friction_anchor_beta=friction_anchor_beta, **kwargs)
+        built[mode].extend(solvers)
+        return result
+
+    with mock.patch.object(steel_friction, "_run_rolling", rolling_in_mode), wp.ScopedDevice(device):
+        steel_friction.TestSteelFrictionRolling.test_faceted_rolling_across_tessellation_direction_and_timestep(test)
+    for mode, solvers in built.items():
+        test.assertTrue(solvers, f"no {mode} run")
+        test.assertEqual({solver.solve_mode for solver in solvers}, {mode})
+
+
+def test_anchor_selection_respects_contact_gap_filters_under_scene(test, device):
+    """Keep filtered extreme points from removing friction from a loaded middle contact, as Steel does.
+
+    ``test_friction``'s box with three given contacts, the outer two 2 mm open, with ``contact_friction_gap_max`` or
+    ``contact_gap_gate`` 1 mm: under each mode the loaded middle contact is the patch's one anchor (weights 0, 1, 0)
+    with the box's only two friction rows, in the scene's one row family, in Steel's free-body rows.
+    """
+    for gate in ("contact_friction_gap_max", "contact_gap_gate"):
+        for mode in CARRIED_MODES:
+            with test.subTest(gate=gate, solve_mode=mode), wp.ScopedDevice(device):
+                builder = newton.ModelBuilder()
+                ground = builder.add_ground_plane()
+                body = builder.add_body()
+                box = builder.add_shape_box(body, hx=0.1, hy=0.1, hz=0.1)
+                model = builder.finalize()
+                solver = SolverSteel(model, friction_anchor_beta=0.2, solve_mode=mode, **{gate: 0.001})
+                contacts = newton.CollisionPipeline(model, rigid_contact_max=3).contacts()
+                contacts.rigid_contact_count.assign([3])
+                contacts.rigid_contact_shape0.assign([box] * 3)
+                contacts.rigid_contact_shape1.assign([ground] * 3)
+                contacts.rigid_contact_point0.assign([[-0.08, 0, 0.002], [0, 0, 0], [0.08, 0, 0.002]])
+                contacts.rigid_contact_point1.assign([[-0.08, 0, 0], [0, 0, 0], [0.08, 0, 0]])
+                contacts.rigid_contact_normal.assign([[0, 0, -1]] * 3)
+                solver.step(model.state(), model.state(), model.control(), contacts, 0.005)
+                families = row_families(solver)
+                rows = np.concatenate([row_type for row_type, _ in families])
+                test.assertEqual(np.count_nonzero(rows == PGS_CONSTRAINT_TYPE_FRICTION), 2)
+                family = 0 if mode == "scene" else 1
+                test.assertEqual(len(families[1 - family][0]), 0, f"{mode}: rows in the other family")
+                np.testing.assert_allclose(solver._friction_patches.view.weight.numpy()[:3], [0, 1, 0])
+
+
+def test_cuda_planar_patch_reduces_friction_rows_under_scene(test, device):
+    """Retain a box face's four normals while using only two friction anchors, under the scene as under Steel.
+
+    ``test_friction``'s box resting on its face with persistent anchors: under each mode four normal rows and four
+    friction rows (two anchors), the scene's in its one row family and Steel's in its free-body rows.
+    """
+    for mode in CARRIED_MODES:
+        with test.subTest(solve_mode=mode), wp.ScopedDevice(device), default_solve_mode(mode) as built:
+            steel_friction.TestSteelFrictionAnchorSelection.test_cuda_planar_patch_reduces_friction_rows(test)
+            (solver,) = built
+            test.assertEqual(solver.solve_mode, mode)
+            family = 0 if mode == "scene" else 1
+            test.assertEqual(len(row_families(solver)[family][0]), 8, f"{mode}: the face's rows are elsewhere")
+
+
+def _driven_lever_step(device, mode: str, **options) -> tuple[float, float]:
+    """One step of ``test_limits_drives``' driven lever under ``mode``: its drive row's impulse and its contact rows'
+    summed impulse. The drive row is the one joint-target row, wherever the row layout puts it; Steel's is at its
+    ``_drive_slot``."""
+    model = steel_limits._driven_lever_on_ground(device)
+    solver = SolverSteel(model, drive_mode="rows", iterations=4, solve_mode=mode, **options)
+    if solver.solve_mode != mode or (solver._scene is not None) != (mode == "scene"):
+        raise AssertionError(f"built solve_mode={solver.solve_mode!r} for {mode!r}")
+    state_0, state_1 = model.state(), model.state()
+    newton.eval_fk(model, state_0.joint_q, state_0.joint_qd, state_0)
+    pipeline = newton.CollisionPipeline(model)
+    contacts = pipeline.contacts()
+    pipeline.collide(state_0, contacts)
+    solver.step(state_0, state_1, model.control(), contacts, steel_limits._DT)
+    count = int(solver._constraint_count.numpy()[0])
+    row_type = solver._row_type.numpy()[0, :count]
+    impulses = solver._impulses.numpy()[0, :count]
+    (drive_row,) = np.flatnonzero(row_type == PGS_CONSTRAINT_TYPE_JOINT_TARGET).tolist()
+    if mode == "serial" and int(solver._drive_slot.numpy()[0]) != drive_row:
+        raise AssertionError(
+            f"Steel's drive slot {int(solver._drive_slot.numpy()[0])} is not its drive row {drive_row}"
+        )
+    contact_impulse = float(impulses[row_type == PGS_CONSTRAINT_TYPE_CONTACT].sum())
+    return float(impulses[drive_row]), contact_impulse
+
+
+def test_frozen_drive_rows_keep_the_position_solve_impulse_under_scene(test, device):
+    """Keep the position solve's drive impulse under ``"freeze"`` and solve the drive row under ``"active"``, as Steel.
+
+    ``test_limits_drives``' lever held by a stiff drive row whose foot rests 1 mm deep in the ground, one step: under
+    each mode eight velocity-only iterations move the contact's impulse (by more than 1e-4 of it), a frozen drive row
+    keeps its position-solve impulse bit for bit and an active one moves (by more than 1e-4 of it). Steel's drive
+    row is at its ``_drive_slot``.
+    """
+    for mode in CARRIED_MODES:
+        with test.subTest(solve_mode=mode):
+            position_drive, position_contact = _driven_lever_step(device, mode, velocity_iterations=0)
+            frozen_drive, frozen_contact = _driven_lever_step(
+                device, mode, velocity_iterations=8, velocity_drive_mode="freeze"
+            )
+            active_drive, _ = _driven_lever_step(device, mode, velocity_iterations=8, velocity_drive_mode="active")
+            test.assertGreater(abs(frozen_contact - position_contact), 1.0e-4 * abs(position_contact))
+            test.assertEqual(frozen_drive, position_drive)
+            test.assertGreater(abs(active_drive - position_drive), 1.0e-4 * abs(position_drive))
+
+
+def test_schedules_routes_and_velocity_pass_agree_under_scene(test, device):
+    """Give the same analytic joint-friction result on every schedule and contact route, under the scene as Steel.
+
+    ``test_limits_drives``' hinge with joint friction 1, pushed by 0.5 and then 2.5 for 10 steps each, with each
+    schedule, route and velocity-pass option: under each mode it sticks (``qd`` within 1e-6 of 0) and then slides at
+    the analytic rate (within 1e-5). The explicit ``solve_mode="colored"`` case keeps Steel's colored sweep.
+    """
+    for mode in CARRIED_MODES:
+        with test.subTest(solve_mode=mode), wp.ScopedDevice(device), default_solve_mode(mode) as built:
+            steel_limits.TestSteelJointFriction.test_schedules_routes_and_velocity_pass_agree(test)
+            modes = [solver.solve_mode for solver in built]
+            test.assertEqual(modes, [mode] * (len(modes) - 1) + ["colored"])
+
+
+def test_kinematic_belt_drags_the_box_under_scene(test, device):
+    """Bring a box on a moving kinematic support to the support's speed in the coupled friction modes, as Steel.
+
+    ``test_friction``'s box resting flat on a kinematic body that moves at 0.5 m/s along x (``_box_on_support``, zero
+    contact gap, 60 steps), in the friction modes ``bisection``, ``bisection_desaxce`` and ``coulomb_newton`` for a
+    free box and ``bisection`` and ``bisection_desaxce`` for a box on a six-DOF joint: under each mode the box's mean
+    x velocity over the last 30 steps is the support's within 5e-3, and the scene's is Steel's within 5e-3. The scene
+    builds no free-body rows; Steel puts the free box's contact on its free-body rows and the articulated box's on its
+    dense rows.
+    """
+    cases = [(False, mode) for mode in steel_friction.MODES[1:]]
+    cases += [(True, mode) for mode in ("bisection", "bisection_desaxce")]
+    for articulated, friction_mode in cases:
+        with test.subTest(articulated=articulated, friction_mode=friction_mode):
+            speeds = {}
+            for mode in CARRIED_MODES:
+                with default_solve_mode(mode) as built:
+                    mean_vx, _, _, free_body_rows = steel_friction._box_on_support(
+                        device, friction_mode, articulated, 0.5
+                    )
+                test.assertEqual([solver.solve_mode for solver in built], [mode])
+                test.assertEqual(free_body_rows == 0, mode == "scene" or articulated, f"{mode}: free-body rows")
+                test.assertAlmostEqual(mean_vx, 0.5, delta=5.0e-3, msg=mode)
+                speeds[mode] = mean_vx
+            test.assertAlmostEqual(speeds["scene"], speeds["serial"], delta=5.0e-3)
+
+
+class TestSteelSceneCarriedContacts(unittest.TestCase):
+    """Steel's contact, friction and drive tests carried to the scene mode."""
+
+
+add_function_test(
+    TestSteelSceneCarriedContacts,
+    test_contact_f_reports_each_box_weight_under_scene.__name__,
+    test_contact_f_reports_each_box_weight_under_scene,
+    devices=get_test_devices(),
+)
+
+# CUDA only, as the Steel tests they carry.
+for _fn in (
+    test_contact_f_in_a_captured_graph_under_scene,
+    test_penetrating_impact_replaces_baumgarte_with_restitution_under_scene,
+    test_two_body_impact_conserves_momentum_and_reverses_relative_speed_under_scene,
+    test_restitution_is_relative_to_a_moving_kinematic_surface_under_scene,
+    test_every_contact_response_route_enforces_restitution_under_scene,
+    test_multiworld_restitution_keeps_case_data_isolated_under_scene,
+    test_warm_start_history_does_not_change_or_repeat_restitution_under_scene,
+    test_notify_reads_replaced_and_in_place_restitution_under_scene,
+    test_warm_start_with_velocity_iterations_is_supported_under_scene,
+    test_non_crossing_row_keeps_its_speculative_allowance_under_scene,
+    test_crossing_row_loses_its_speculative_allowance_under_scene,
+    test_light_body_crossing_uses_end_gap_not_impulse_scale_under_scene,
+    test_faceted_rolling_across_tessellation_direction_and_timestep_under_scene,
+    test_anchor_selection_respects_contact_gap_filters_under_scene,
+    test_cuda_planar_patch_reduces_friction_rows_under_scene,
+    test_frozen_drive_rows_keep_the_position_solve_impulse_under_scene,
+    test_schedules_routes_and_velocity_pass_agree_under_scene,
+    test_kinematic_belt_drags_the_box_under_scene,
+):
+    add_function_test(TestSteelSceneCarriedContacts, _fn.__name__, _fn, devices=get_cuda_test_devices())
 
 
 if __name__ == "__main__":

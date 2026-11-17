@@ -18,22 +18,27 @@ and reads back as requested: Steel's pre-elimination (its direct closure solve) 
 
 import re
 import unittest
+from unittest import mock
 
 import numpy as np
 import warp as wp
 
 import newton
 from newton._src.solvers.steel import scene_rows
+from newton._src.solvers.steel.solver_steel import _SteelTreePlan
 from newton.solvers import SolverSteel
+from newton.tests.steel import test_propagation as steel_propagation
 from newton.tests.steel._fixtures import (
     DT,
     _build_carried_load,
     _build_four_bar,
     _build_scissor_model,
     _build_two_revolute_chain,
+    _heap,
     _loop_anchor_gap,
 )
-from newton.tests.steel._scene_fixtures import SCENE, _humanoids, _rms
+from newton.tests.steel._fixtures import _solver as tree_solver
+from newton.tests.steel._scene_fixtures import SCENE, _humanoids, _rms, contact_routes, default_solve_mode
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
 HUMANOID_ROWS = {"articulation_constraint_max": 1024}
@@ -529,6 +534,359 @@ for _fn in (
     test_preelimination_alias_converges,  # Steel's pre-elimination reference was measured on CUDA
 ):
     add_function_test(TestSteelSceneAliases, _fn.__name__, _fn, devices=get_cuda_test_devices())
+
+
+# Steel's propagation and tree-traversal tests whose comparisons ran the scene mode, carried here. The scene accepts
+# articulated_contact_response="propagation" and solves its immediate response (PROPAGATION below), on the dense rows
+# (route 0) where Steel's propagation response puts its articulated contacts on its propagation rows (route 2). Each
+# test compares the scene with Steel's serial solve (solve_mode="serial") on the same model and the same contacts,
+# within the Steel test's tolerance, or holds both to the Steel test's checks.
+
+PROPAGATION = {"articulated_contact_response": "propagation"}
+"""The propagation response as Steel's tests request it; the scene runs it as its immediate response."""
+
+
+def test_global_kinematic_floor_moves_articulated_bodies_under_scene(test, device):
+    """Solve articulated contacts against a global kinematic floor in every world, under the scene as under Steel.
+
+    ``test_propagation``'s two chains per world on a floor that is static, kinematic at rest or kinematic moving at
+    0.5 m/s, one step at 50 iterations with the propagation response requested: under each mode no row overflows,
+    the kinematic floor at rest gives the static floor's velocities (``rtol`` 1e-4, ``atol`` 5e-5), both worlds alike
+    (1e-5), and the moving floor's velocity enters every world's contact target. Steel's contacts take its
+    propagation rows (route 2), the scene's its dense rows.
+    """
+    for mode, route in (("scene", 0), ("serial", steel_propagation.PROPAGATION_PATH)):
+        with test.subTest(solve_mode=mode):
+            results = {}
+            for floor, floor_velocity in (("static", 0.0), ("kinematic", 0.0), ("kinematic", 0.5)):
+                model = steel_propagation._chains_on_global_floor(device, floor)
+                solver = SolverSteel(
+                    model,
+                    iterations=50,
+                    articulation_constraint_max=64,
+                    friction_anchor_beta=0.0,
+                    solve_mode=mode,
+                    **PROPAGATION,
+                )
+                state_0, state_1 = model.state(), model.state()
+                joint_qd = state_0.joint_qd.numpy()
+                joint_qd[:4] = -1.0
+                if floor == "kinematic":
+                    joint_qd[-4] = floor_velocity
+                state_0.joint_qd.assign(joint_qd)
+                newton.eval_fk(model, state_0.joint_q, state_0.joint_qd, state_0)
+                pipeline = newton.CollisionPipeline(model)
+                contacts = pipeline.contacts()
+                pipeline.collide(state_0, contacts)
+                solver.step(state_0, state_1, model.control(), contacts, 0.01)
+                test.assertGreater(int(contacts.rigid_contact_count.numpy()[0]), 0)
+                test.assertEqual(contact_routes(solver, contacts), {route})
+                test.assertFalse(solver.constraint_overflow.numpy().any())
+                results[(floor, floor_velocity)] = state_1.body_qd.numpy()[:4]
+            static = results[("static", 0.0)]
+            np.testing.assert_allclose(results[("kinematic", 0.0)], static, rtol=1.0e-4, atol=5.0e-5)
+            np.testing.assert_allclose(static[:2], static[2:], atol=1.0e-5)
+            moving = results[("kinematic", 0.5)]
+            test.assertGreater(float(np.sum(moving[:, 2] - static[:, 2])), 0.05)
+            np.testing.assert_allclose(moving[:2], moving[2:], atol=1.0e-5)
+
+
+def test_propagation_matches_immediate_when_converged_under_scene(test, device):
+    """Agree with Steel's immediate response on articulated and free multi-box contacts at 32 iterations.
+
+    ``test_propagation``'s box chains (links, boxes, articulations per world): one step of the scene with the
+    propagation response requested, which builds no propagation row, against Steel's immediate response on the same
+    contacts: ``joint_qd`` within a relative L2 of 1e-4 and every state entry within 1e-4.
+    """
+    for links, boxes, articulations in ((4, 1, 1), (4, 2, 1), (2, 2, 1), (4, 4, 1), (4, 1, 2)):
+        with test.subTest(links=links, boxes=boxes, articulations=articulations):
+            model = steel_propagation._build_box_chain(device, links, boxes, articulations)
+            initial = model.state()
+            newton.eval_fk(model, initial.joint_q, initial.joint_qd, initial)
+            pipeline = newton.CollisionPipeline(model)
+            contacts = pipeline.contacts()
+            pipeline.collide(initial, contacts)
+            results = {}
+            for name, options in (
+                ("steel", {"solve_mode": "serial"}),
+                ("scene", {"solve_mode": "scene", **PROPAGATION}),
+            ):
+                solver = SolverSteel(
+                    model,
+                    iterations=32,
+                    friction_anchor_beta=0.0,
+                    articulation_constraint_max=16 * articulations * boxes,
+                    free_body_constraint_max=16,
+                    **options,
+                )
+                state_out = model.state()
+                solver.step(initial, state_out, model.control(), contacts, 1.0 / 240.0)
+                solver.check_constraint_capacity()
+                results[name] = {
+                    field: getattr(state_out, field).numpy().astype(np.float64)
+                    for field in ("joint_q", "joint_qd", "body_q", "body_qd")
+                }
+                if name == "scene":
+                    test.assertNotIn(steel_propagation.PROPAGATION_PATH, contact_routes(solver, contacts))
+                    test.assertEqual(int(solver._propagation_constraint_count.numpy().sum()), 0)
+            reference, result = results["steel"], results["scene"]
+            rel_l2 = np.linalg.norm(result["joint_qd"] - reference["joint_qd"]) / max(
+                np.linalg.norm(reference["joint_qd"]), 1.0e-30
+            )
+            test.assertLess(rel_l2, 1.0e-4)
+            test.assertLess(max(np.max(np.abs(result[field] - reference[field])) for field in reference), 1.0e-4)
+
+
+def test_options_match_the_immediate_response_at_convergence_under_scene(test, device):
+    """Converge each option to Steel's immediate response's step from the same state, with propagation requested.
+
+    ``test_propagation``'s chain with boxes landing on it, settled 40 steps by Steel, then one step at 300 iterations
+    for each option of its ``CASES``: the scene's body velocities within 2e-3 of Steel's immediate response's, with no
+    contact on a propagation row.
+    """
+    for name, options in steel_propagation.CASES.items():
+        with test.subTest(option=name):
+            model = steel_propagation._combination_scene(device)
+            if "velocity_limit_activation_fraction" in options:
+                model.joint_velocity_limit.fill_(0.5)
+            with default_solve_mode("serial"):
+                state = steel_propagation._settled_state(model, 40)
+            _, _, reference = steel_propagation._one_step(model, state, iterations=300, solve_mode="serial", **options)
+            solver, contacts, body_qd = steel_propagation._one_step(
+                model, state, iterations=300, solve_mode="scene", **PROPAGATION, **options
+            )
+            test.assertEqual(solver.solve_mode, "scene")
+            test.assertNotIn(steel_propagation.PROPAGATION_PATH, contact_routes(solver, contacts))
+            np.testing.assert_allclose(body_qd, reference, rtol=0.0, atol=2.0e-3)
+
+
+def test_restitution_rebounds_on_propagation_rows_under_scene(test, device):
+    """Rebound a box falling onto a chain with its restitution, with propagation requested, as Steel's immediate solve.
+
+    ``test_propagation``'s box just above the chain's first link, moving down at 2 m/s with restitution 0.8, one step
+    at 64 iterations with joint limits: the scene rebounds it upward faster than 0.5 m/s, and its velocity is Steel's
+    immediate response's within 1e-2.
+    """
+    model = steel_propagation._combination_scene(device, restitution=0.8)
+    state = model.state()
+    box_joint = 3
+    q_start = int(model.joint_q_start.numpy()[box_joint])
+    qd_start = int(model.joint_qd_start.numpy()[box_joint])
+    joint_q = state.joint_q.numpy()
+    joint_q[q_start + 2] = 0.3 + 0.045 + 0.05 + 0.002
+    state.joint_q.assign(joint_q)
+    joint_qd = state.joint_qd.numpy()
+    joint_qd[qd_start + 2] = -2.0
+    state.joint_qd.assign(joint_qd)
+    newton.eval_fk(model, state.joint_q, state.joint_qd, state)
+    solver, contacts, after = steel_propagation._one_step(
+        model, state, iterations=64, enable_joint_limits=True, solve_mode="scene", **PROPAGATION
+    )
+    test.assertNotIn(steel_propagation.PROPAGATION_PATH, contact_routes(solver, contacts))
+    test.assertGreater(float(after[3, 2]), 0.5)
+    _, _, reference = steel_propagation._one_step(
+        model, state, iterations=64, enable_joint_limits=True, solve_mode="serial"
+    )
+    np.testing.assert_allclose(after[3], reference[3], rtol=0.0, atol=1.0e-2)
+
+
+def test_regularized_feet_reach_immediate_equilibrium_under_scene(test, device):
+    """Keep the regularized contact fixed point of three coupled feet, with propagation requested, as Steel's
+    immediate response does.
+
+    ``test_propagation``'s three-foot slider pushed down at 1 m/s, one step at 32 and 128 iterations with contact
+    regularization 3: the scene's slider velocity, with the propagation response requested cached or not, is Steel's
+    immediate response's within 1e-4.
+    """
+    model = steel_propagation._three_foot_slider_model(device)
+    push = np.array([-1.0], dtype=np.float32)
+    for iterations in (32, 128):
+        steel = steel_propagation._coupled_solver(
+            model, "immediate", iterations, solve_mode="serial", **steel_propagation.REGULARIZED
+        )
+        (expected,) = steel_propagation._rollout(model, steel, push, 1)
+        for cached in (False, True):
+            with test.subTest(cached=cached, iterations=iterations):
+                solver = steel_propagation._coupled_solver(
+                    model, "propagation", iterations, cached=cached, solve_mode="scene", **steel_propagation.REGULARIZED
+                )
+                (qd,) = steel_propagation._rollout(model, solver, push, 1)
+                test.assertAlmostEqual(float(qd[0]), float(expected[0]), delta=1.0e-4)
+
+
+def test_linkage_gripper_holds_lifted_box_under_scene(test, device):
+    """Hold a box through a lift with pads whose mobility is their own passive linkage, as Steel does.
+
+    ``test_propagation``'s linkage gripper with the propagation response requested, 64 iterations, replayed from one
+    captured pair of steps: its driver closes, then lifts the box 0.2 m along a smoothstep and holds; under each mode
+    the palm rises more than 15 cm and the box's drop below it changes by less than 1 cm from the grasp to the end.
+    The scene runs the phase order ``"AB"``: the gripper's mimic rows (an internal unit, phase A) and the pad contacts
+    (two-sided units, phase B) conflict at 64 iterations and the phase swept last wins, so the contacts get the last
+    word, as in Steel's order of its internal rows and contacts.
+    """
+    model, palm, box = steel_propagation._linkage_gripper_model(device)
+
+    def box_below_palm(state):
+        body_q = state.body_q.numpy()
+        return float(body_q[palm, 2] - body_q[box, 2])
+
+    for mode, options in (("scene", {"scene_phase_order": "AB"}), ("serial", {})):
+        with test.subTest(solve_mode=mode):
+            solver = SolverSteel(
+                model,
+                iterations=64,
+                friction_anchor_beta=0.0,
+                contact_friction_gap_max=0.001,
+                solve_mode=mode,
+                **PROPAGATION,
+                **options,
+            )
+            pipeline = newton.CollisionPipeline(model)
+            contacts = pipeline.contacts()
+            state, output, control = model.state(), model.state(), model.control()
+            newton.eval_fk(model, model.joint_q, model.joint_qd, state)
+            with wp.ScopedCapture(device=model.device) as capture:
+                pipeline.collide(state, contacts)
+                for source, target in ((state, output), (output, state)) * 2:
+                    source.clear_forces()
+                    solver.step(source, target, control, contacts, 1.0 / 800.0)
+            joint_target = model.joint_target_q.numpy()
+            joint_target[2] = 0.8
+            grasped = None
+            palm_start = float(state.body_q.numpy()[palm, 2])
+            for tick in range(110):
+                lift = min(max(tick - 40, 0) / 50.0, 1.0)
+                joint_target[0] = 0.2 * lift * lift * (3.0 - 2.0 * lift)
+                control.joint_target_q.assign(joint_target)
+                wp.capture_launch(capture.graph)
+                if tick == 39:
+                    grasped = box_below_palm(state)
+            test.assertGreater(float(state.body_q.numpy()[palm, 2]) - palm_start, 0.15, "the palm did not lift")
+            test.assertLess(abs(grasped - box_below_palm(state)), 0.01)
+
+
+def test_colored_result_matches_the_immediate_response_under_scene(test, device):
+    """Settle a heap of boxes like Steel's immediate response, in either requested color order.
+
+    ``test_propagation``'s 4 x 4 x 2 heap, 24 steps of 6 iterations with the propagation response and a color order
+    (``"contact"``, ``"longest_first"``) requested, which the scene accepts and leaves to its own coloring: no
+    free-body contact row is dropped, and every box's height is within 1 cm of Steel's immediate response's.
+    """
+    finals = {}
+    for name, options in (
+        ("immediate", {"solve_mode": "serial", "articulated_contact_response": "immediate"}),
+        ("contact", {"solve_mode": "scene", "propagation_color_order": "contact"}),
+        ("longest_first", {"solve_mode": "scene", "propagation_color_order": "longest_first"}),
+    ):
+        model = _heap(device, nx=4, ny=4, nz=2)
+        solver = steel_propagation._colored_solver(model, row_watermark=True, **options)
+        test.assertEqual(solver.solve_mode, options["solve_mode"])
+        state, _ = steel_propagation._settle(model, solver, steps=24)
+        test.assertEqual(solver.constraint_row_watermarks()["free_body_dropped_contact_rows_high_water"], 0)
+        finals[name] = state.body_q.numpy()[:, :3]
+    test.assertTrue(np.isfinite(finals["immediate"]).all())
+    for name in ("contact", "longest_first"):
+        test.assertLess(float(np.max(np.abs(finals[name][:, 2] - finals["immediate"][:, 2]))), 0.01, name)
+
+
+def _run_tree_test(test, function, device):
+    """Run ``test_propagation``'s tree-traversal test ``function`` with its parallel-tree solvers (``_solver(...,
+    enabled=True)``) under the scene and its serial-traversal references under Steel's serial solve."""
+    built = []
+
+    def solver_in_mode(model, *, enabled, **options):
+        solver = tree_solver(model, enabled=enabled, solve_mode="scene" if enabled else "serial", **options)
+        built.append(solver)
+        return solver
+
+    with mock.patch.object(steel_propagation, "_solver", solver_in_mode):
+        function(test, device)
+    test.assertEqual({solver.solve_mode for solver in built}, {"scene", "serial"})
+    for solver in built:
+        test.assertEqual(solver._tree_plan is not None, solver.solve_mode == "scene")
+
+
+def test_cuda_actual_graph_publication_under_scene(test, device):
+    """Publish the scene's body state eagerly and by graph replay into poisoned buffers as Steel's serial traversal.
+
+    ``test_propagation``'s broad tree of 108 leaves and its branched tree on a floating root: the scene's parallel
+    tree traversal publishes ``body_q`` and ``body_qd`` identically eagerly and by replay, and within 3e-6 of Steel's
+    serial traversal and of the public forward kinematics.
+    """
+    _run_tree_test(test, steel_propagation.test_cuda_actual_graph_publication, device)
+
+
+def test_interleaved_mixed_leaves_and_moving_parents_under_scene(test, device):
+    """Keep internal joints in order and match Steel's serial forward pass with moving parents, under the scene.
+
+    ``test_propagation``'s branched model, fixed and floating: the scene's parallel tree traversal gives Steel's serial
+    traversal's dynamics fields within 3e-6, its leaves accelerate, and its body poses are the forward kinematics'.
+    """
+    _run_tree_test(test, steel_propagation.test_interleaved_mixed_leaves_and_moving_parents, device)
+
+
+def test_current_frames_and_inertial_notifications_under_scene(test, device):
+    """Read current joint frames, axes, COMs, masses, inertias and gravity after a notification, as Steel does.
+
+    ``test_propagation``'s model, edited and notified with ``ModelFlags.ALL``: the scene's parallel tree traversal
+    gives Steel's serial traversal's dynamics fields and joint torques within 3e-6, and its poses moved.
+    """
+    _run_tree_test(test, steel_propagation.test_current_frames_and_inertial_notifications, device)
+
+
+def test_contact_trajectory_matches_serial_under_scene(test, device):
+    """Match Steel's serial traversal over a contact-loaded trajectory of a branched articulation, under the scene.
+
+    ``test_propagation``'s branched articulation on the ground, 40 steps: the scene with its parallel tree traversal
+    against Steel's serial solve with its serial traversal, every state entry within ``rtol`` 1e-5 and ``atol`` 2e-6.
+    """
+    _run_tree_test(test, steel_propagation.test_contact_trajectory_matches_serial, device)
+
+
+def test_serial_selection_skips_tree_setup_under_scene(test, device):
+    """Build no tree plan and no branch scratch under the scene with serial traversal, and publish as Steel does.
+
+    ``test_propagation``'s fingers: Steel's default solve and the scene with ``parallel_tree=False`` build no tree
+    plan, and their published body states after the kinematics stage are equal bit for bit.
+    """
+    model = steel_propagation._build_fingers(device, articulations=1)
+    states = []
+    for options in ({"solve_mode": "serial"}, {"solve_mode": "scene", "parallel_tree": False}):
+        with test.subTest(**options):
+            with mock.patch.object(_SteelTreePlan, "build", wraps=_SteelTreePlan.build) as build:
+                solver = SolverSteel(model, **options)
+            test.assertEqual(solver.solve_mode, options["solve_mode"])
+            build.assert_not_called()
+            test.assertIsNone(solver._tree_plan)
+            test.assertEqual(solver._tree_net_wrenches, ())
+            state = model.state()
+            solver._prepare_augmented_state(state)
+            solver._stage7_update_kinematics(state)
+            states.append(state)
+    for name in ("body_q", "body_qd"):
+        np.testing.assert_array_equal(getattr(states[0], name).numpy(), getattr(states[1], name).numpy())
+
+
+class TestSteelSceneCarriedPropagation(unittest.TestCase):
+    """Steel's propagation and tree-traversal tests carried to the scene mode."""
+
+
+# CUDA only, as the Steel tests they carry.
+for _fn in (
+    test_global_kinematic_floor_moves_articulated_bodies_under_scene,
+    test_propagation_matches_immediate_when_converged_under_scene,
+    test_options_match_the_immediate_response_at_convergence_under_scene,
+    test_restitution_rebounds_on_propagation_rows_under_scene,
+    test_regularized_feet_reach_immediate_equilibrium_under_scene,
+    test_linkage_gripper_holds_lifted_box_under_scene,
+    test_colored_result_matches_the_immediate_response_under_scene,
+    test_cuda_actual_graph_publication_under_scene,
+    test_interleaved_mixed_leaves_and_moving_parents_under_scene,
+    test_current_frames_and_inertial_notifications_under_scene,
+    test_contact_trajectory_matches_serial_under_scene,
+    test_serial_selection_skips_tree_setup_under_scene,
+):
+    add_function_test(TestSteelSceneCarriedPropagation, _fn.__name__, _fn, devices=get_cuda_test_devices())
 
 
 if __name__ == "__main__":

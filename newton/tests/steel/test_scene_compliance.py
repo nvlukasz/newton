@@ -725,5 +725,31 @@ for _fn in (
     add_function_test(TestSteelSceneCompliance, _fn.__name__, _fn, devices=get_cuda_test_devices())
 
 
+def test_mf_free_body_support_under_scene(test, device):
+    """Recover the compliant indentation of a free sphere resting on the ground, under the scene as under Steel.
+
+    ``test_compliance``' 0.3 kg sphere, free, on a compliant ground of stiffness 3000 N/m, 200 steps: under each mode
+    its contact is compliant and it rests within 2e-6 m of the static indentation ``m g / k``, the scene on its dense
+    rows (route 0) and Steel on its free-body rows (route 1).
+    """
+    for mode, route in (("scene", 0), ("serial", 1)):
+        with test.subTest(solve_mode=mode):
+            trace, paths, solver, mass = run_fixture(
+                device=device, articulated=False, enabled=True, solver_options={"solve_mode": mode}
+            )
+            test.assertEqual(solver.solve_mode, mode)
+            test.assertEqual(paths, {route})
+            test.assertGreater(solver.compliance_contact_count, 0)
+            test.assertLess(abs(float(trace[-1, 2]) - (0.05 - mass * 9.81 / 3000)), 2e-6)
+
+
+add_function_test(
+    TestSteelSceneCompliance,
+    test_mf_free_body_support_under_scene.__name__,
+    test_mf_free_body_support_under_scene,
+    devices=get_cuda_test_devices(),
+)
+
+
 if __name__ == "__main__":
     unittest.main()

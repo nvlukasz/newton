@@ -52,7 +52,20 @@ from newton._src.solvers.steel.scene_warmstart import (
 )
 from newton.solvers import SolverSteel
 from newton.tests.steel._fixtures import CONTACT_MAX, DT, _build_contact_scene, _heap, _set_box_velocities
-from newton.tests.steel._scene_fixtures import _global_box_model, _humanoids, _rms, _Run, _scene_heap
+from newton.tests.steel._scene_fixtures import (
+    CARRIED_MODES,
+    _carried_row,
+    _contact_row,
+    _global_box_model,
+    _humanoids,
+    _rms,
+    _Run,
+    _scene_heap,
+    carried_routes,
+    contact_routes,
+    default_solve_mode,
+    row_families,
+)
 from newton.tests.steel.test_capacity import _box_on_ground
 from newton.tests.steel.test_scene_drives import DRIVE_TRACK_RTOL
 from newton.tests.steel.test_scene_features import (
@@ -66,6 +79,7 @@ from newton.tests.steel.test_scene_features import (
 )
 from newton.tests.steel.test_scene_velocity_iterations import VELOCITY_ITERATIONS, _FixedRun
 from newton.tests.steel.test_scene_velocity_limits import _free_body_dofs, _throw_free_bodies
+from newton.tests.steel.test_warmstart import _insertion_after_solved_single_contact, _resting_box_rows, _stack
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
 # The tolerances, scenes and runs shared with the other scene test modules (test_scene_features, test_scene_drives,
@@ -1909,6 +1923,447 @@ for _fn in (
     test_sleeping_articulation_gets_no_internal_rows,  # Steel refuses joint friction on the CPU
 ):
     add_function_test(TestSteelSceneState, _fn.__name__, _fn, devices=get_cuda_test_devices())
+
+
+# Steel's warm-start tests under the scene mode. Each runs the Steel test's steps once under the scene and once under
+# Steel's serial solve (solve_mode="serial"), on the same model and contacts, through Steel's own helpers
+# (default_solve_mode), and reads each contact's rows on the route its solver gave it: the scene puts every contact on
+# the dense rows (ROUTE_DENSE), where Steel puts a free body's on its free-body rows (ROUTE_FREE_BODY).
+
+
+def _expected_routes(test, solver, contacts, mode: str, articulated: bool) -> None:
+    """Assert the routes of ``mode`` (:func:`carried_routes`) for ``contacts``' active contacts."""
+    test.assertEqual(contact_routes(solver, contacts), carried_routes(mode, articulated), f"{mode}: wrong routes")
+
+
+def _normal_impulses(solver) -> np.ndarray:
+    """World 0's normal-row impulses over every row family (:func:`row_families`), the dense rows first."""
+    return np.concatenate(
+        [impulses[row_type == PGS_CONSTRAINT_TYPE_CONTACT] for row_type, impulses in row_families(solver)]
+    )
+
+
+def _seeded_impulses(solver, contacts, shapes, state_in, state_out, model, step=True) -> list[float]:
+    """Step without a sweep and return the seeded normal impulses of A's and B's contacts, each on its own route.
+
+    With ``step=False`` the caller has already stepped (for example by a graph replay).
+    """
+    if step:
+        solver._iterations = 0
+        solver.step(state_in, state_out, model.control(), contacts, 1.0 / 240.0)
+    count = int(contacts.rigid_contact_count.numpy()[0])
+    shape0 = contacts.rigid_contact_shape0.numpy()[:count]
+    shape1 = contacts.rigid_contact_shape1.numpy()[:count]
+    seeds = []
+    for shape in shapes:
+        index = np.flatnonzero((shape0 == shape) | (shape1 == shape))
+        seeds.append(_contact_row(solver, int(index[0]))[1])
+    return seeds
+
+
+def _insertion(device, mode: str, articulated: bool = False):
+    """``test_warmstart``'s solved single contact with sphere A lowered, under ``mode``; and B's carried impulse.
+
+    Returns the helper's tuple with its last entry, the carried impulse, read from the history of B's route.
+    """
+    with default_solve_mode(mode):
+        *run, _ = _insertion_after_solved_single_contact(device, articulated)
+    solver = run[3]
+    if solver.solve_mode != mode:
+        raise AssertionError(f"the helper built solve_mode={solver.solve_mode!r}, not {mode!r}")
+    return (*run, _carried_row(solver, 0)[1])
+
+
+def test_real_contact_insertion_moves_slots_without_cross_seeding_under_scene(test, device):
+    """Shift a persistent contact's real solver slot when a lower-key contact is inserted, as Steel does.
+
+    ``test_warmstart``'s two free spheres: B rests on the ground alone and is solved, then A is lowered so its contact
+    sorts before B's. Under the scene and under Steel, B's contact moves to another row, is seeded with exactly its
+    carried impulse (within 1e-6) and A's new contact with nothing; the scene reads both on its dense rows where Steel
+    reads them on its free-body rows.
+    """
+    for mode in CARRIED_MODES:
+        with test.subTest(solve_mode=mode):
+            builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
+            body_a = builder.add_body(xform=wp.transform(wp.vec3(-0.5, 0.0, 1.0), wp.quat_identity()))
+            shape_a = builder.add_shape_sphere(body_a, radius=0.1)
+            body_b = builder.add_body(xform=wp.transform(wp.vec3(0.5, 0.0, 0.099), wp.quat_identity()))
+            shape_b = builder.add_shape_sphere(body_b, radius=0.1)
+            builder.add_ground_plane()
+            model = builder.finalize(device=device)
+            pipeline = newton.CollisionPipeline(model, broad_phase="nxn", contact_matching="sticky")
+            contacts = pipeline.contacts()
+            solver = SolverSteel(model, iterations=8, contact_warmstart=True, solve_mode=mode)
+            state_0, state_1 = model.state(), model.state()
+            control = model.control()
+
+            pipeline.collide(state_0, contacts)
+            test.assertEqual(int(contacts.rigid_contact_count.numpy()[0]), 1)
+            solver.step(state_0, state_1, control, contacts, 1.0 / 240.0)
+            _expected_routes(test, solver, contacts, mode, articulated=False)
+            old_slot, old_impulse = _carried_row(solver, 0)
+            test.assertGreater(old_impulse, 0.0)
+
+            q = state_1.body_q.numpy()
+            q[body_a][2] = 0.099
+            state_1.body_q.assign(q)
+            pipeline.collide(state_1, contacts)
+            count = int(contacts.rigid_contact_count.numpy()[0])
+            test.assertEqual(count, 2)
+            match = contacts.rigid_contact_match_index.numpy()[:count]
+            shape0 = contacts.rigid_contact_shape0.numpy()[:count]
+            shape1 = contacts.rigid_contact_shape1.numpy()[:count]
+            (b_contact,) = np.flatnonzero((shape0 == shape_b) | (shape1 == shape_b)).tolist()
+            (a_contact,) = np.flatnonzero((shape0 == shape_a) | (shape1 == shape_a)).tolist()
+            test.assertEqual(int(match[b_contact]), 0)
+            test.assertLess(int(match[a_contact]), 0)
+
+            solver._iterations = 0
+            solver.step(state_1, state_0, control, contacts, 1.0 / 240.0)
+            b_slot, b_impulse = _contact_row(solver, b_contact)
+            _, a_impulse = _contact_row(solver, a_contact)
+            test.assertNotEqual(b_slot, old_slot, "test did not produce actual solver-slot churn")
+            test.assertAlmostEqual(b_impulse, old_impulse, delta=1.0e-6)
+            test.assertEqual(a_impulse, 0.0)
+
+
+def test_replaced_contact_buffer_starts_cold_under_scene(test, device):
+    """Never reuse history for a fresh ``Contacts`` buffer whose generation equals the solved one, as Steel.
+
+    ``test_warmstart``'s solved single contact (B) and a fresh buffer's first pass with A lowered: under the scene and
+    under Steel neither contact is seeded, although B carried an impulse.
+    """
+    for mode in CARRIED_MODES:
+        with test.subTest(solve_mode=mode):
+            model, pipeline, contacts, solver, state_in, state_out, shapes, carried = _insertion(device, mode)
+            _expected_routes(test, solver, contacts, mode, articulated=False)
+            test.assertGreater(carried, 0.0)
+            replacement = pipeline.contacts()
+            pipeline.collide(state_in, replacement)
+            test.assertEqual(int(replacement.rigid_contact_count.numpy()[0]), 2)
+            test.assertEqual(
+                int(replacement.contact_generation.numpy()[0]), int(contacts.contact_generation.numpy()[0])
+            )
+            seed_a, seed_b = _seeded_impulses(solver, replacement, shapes, state_in, state_out, model)
+            test.assertEqual(seed_a, 0.0)
+            test.assertEqual(seed_b, 0.0)
+
+
+def test_skipped_collision_pass_starts_cold_under_scene(test, device):
+    """Start cold after two collision passes between solves, which match against an unsolved contact set, as Steel.
+
+    ``test_warmstart``'s solved single contact (B), then two collision passes with A lowered: under the scene and under
+    Steel neither contact is seeded, although B carried an impulse.
+    """
+    for mode in CARRIED_MODES:
+        with test.subTest(solve_mode=mode):
+            model, pipeline, contacts, solver, state_in, state_out, shapes, carried = _insertion(device, mode)
+            _expected_routes(test, solver, contacts, mode, articulated=False)
+            test.assertGreater(carried, 0.0)
+            pipeline.collide(state_in, contacts)
+            pipeline.collide(state_in, contacts)
+            test.assertEqual(int(contacts.rigid_contact_count.numpy()[0]), 2)
+            seed_a, seed_b = _seeded_impulses(solver, contacts, shapes, state_in, state_out, model)
+            test.assertEqual(seed_a, 0.0)
+            test.assertEqual(seed_b, 0.0)
+
+
+def test_interleaved_contact_buffers_start_cold_under_scene(test, device):
+    """Start cold on a pass into the solved buffer after a pass into another buffer, as Steel.
+
+    ``test_warmstart``'s solved single contact (B) with free and with articulated spheres: a pass into another buffer
+    and one into the solved buffer seed neither contact, under the scene and under Steel; one pass straight into the
+    solved buffer seeds B with its carried impulse (within 1e-6) and A with nothing.
+    """
+    for articulated in (False, True):
+        for mode in CARRIED_MODES:
+            with test.subTest(articulated=articulated, solve_mode=mode):
+                model, pipeline, contacts, solver, state_in, state_out, shapes, carried = _insertion(
+                    device, mode, articulated
+                )
+                _expected_routes(test, solver, contacts, mode, articulated)
+                test.assertGreater(carried, 0.0)
+                other = pipeline.contacts()
+                pipeline.collide(state_in, other)
+                pipeline.collide(state_in, contacts)
+                test.assertEqual(int(contacts.rigid_contact_count.numpy()[0]), 2)
+                seed_a, seed_b = _seeded_impulses(solver, contacts, shapes, state_in, state_out, model)
+                test.assertEqual(seed_a, 0.0)
+                test.assertEqual(seed_b, 0.0)
+
+                model, pipeline, contacts, solver, state_in, state_out, shapes, carried = _insertion(
+                    device, mode, articulated
+                )
+                pipeline.collide(state_in, contacts)
+                seed_a, seed_b = _seeded_impulses(solver, contacts, shapes, state_in, state_out, model)
+                test.assertEqual(seed_a, 0.0)
+                test.assertAlmostEqual(seed_b, carried, delta=1.0e-6)
+
+
+def test_interleaved_contact_buffers_start_cold_under_graph_replay_under_scene(test, device):
+    """Keep the interleaved-buffer cold start under alternating captured collision passes, as Steel.
+
+    The steps of :func:`test_interleaved_contact_buffers_start_cold_under_scene` replayed from captured graphs (the
+    two collision passes and a step without a sweep): under the scene and under Steel, a pass into the solved buffer
+    seeds B with its carried impulse (within 1e-6), and a pass into the other buffer before it seeds nothing.
+    """
+    for articulated in (False, True):
+        for mode in CARRIED_MODES:
+            with test.subTest(articulated=articulated, solve_mode=mode):
+                model, pipeline, contacts, solver, state_in, state_out, shapes, carried = _insertion(
+                    device, mode, articulated
+                )
+                _expected_routes(test, solver, contacts, mode, articulated)
+                test.assertGreater(carried, 0.0)
+                other = pipeline.contacts()
+                solver._iterations = 0
+                graphs = {}
+                with wp.ScopedCapture(device) as capture:
+                    pipeline.collide(state_in, contacts)
+                graphs["collide"] = capture.graph
+                with wp.ScopedCapture(device) as capture:
+                    pipeline.collide(state_in, other)
+                graphs["collide_other"] = capture.graph
+                with wp.ScopedCapture(device) as capture:
+                    solver.step(state_in, state_out, model.control(), contacts, 1.0 / 240.0)
+                graphs["step"] = capture.graph
+
+                wp.capture_launch(graphs["collide"])
+                wp.capture_launch(graphs["step"])
+                seed_a, seed_b = _seeded_impulses(solver, contacts, shapes, state_in, state_out, model, step=False)
+                test.assertEqual(seed_a, 0.0)
+                test.assertAlmostEqual(seed_b, carried, delta=1.0e-6)
+
+                wp.capture_launch(graphs["collide_other"])
+                wp.capture_launch(graphs["collide"])
+                wp.capture_launch(graphs["step"])
+                seed_a, seed_b = _seeded_impulses(solver, contacts, shapes, state_in, state_out, model, step=False)
+                test.assertEqual(seed_a, 0.0)
+                test.assertEqual(seed_b, 0.0)
+
+
+def test_substeps_reuse_contacts_with_their_own_history_under_scene(test, device):
+    """Seed each contact from its own last solve across solver substeps on one contact set, as Steel.
+
+    ``test_warmstart``'s two free spheres, B resting alone, then A inserted before B, then A removed again: in each
+    phase two substeps solve and then seed the next substep without a sweep, and every contact's seed is its own
+    solved impulse (within 1e-6 of it), under the scene on its dense rows and under Steel on its free-body rows.
+    """
+    for mode in CARRIED_MODES:
+        with test.subTest(solve_mode=mode):
+            builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
+            body_a = builder.add_body(xform=wp.transform(wp.vec3(-0.5, 0.0, 1.0), wp.quat_identity()))
+            shape_a = builder.add_shape_sphere(body_a, radius=0.1)
+            body_b = builder.add_body(xform=wp.transform(wp.vec3(0.5, 0.0, 0.1), wp.quat_identity()))
+            shape_b = builder.add_shape_sphere(body_b, radius=0.1)
+            builder.add_ground_plane()
+            model = builder.finalize(device=device)
+            pipeline = newton.CollisionPipeline(model, broad_phase="nxn", contact_matching="sticky")
+            contacts = pipeline.contacts()
+            solver = SolverSteel(model, iterations=8, contact_warmstart=True, solve_mode=mode)
+            states = [model.state(), model.state()]
+            control = model.control()
+
+            def step(iterations, solver=solver, contacts=contacts, states=states, control=control):
+                solver._iterations = iterations
+                solver.step(states[0], states[1], control, contacts, 1.0 / 240.0)
+                states.reverse()
+
+            def contact_impulses(solver=solver, contacts=contacts, shapes=(("a", shape_a), ("b", shape_b))):
+                count = int(contacts.rigid_contact_count.numpy()[0])
+                shape0 = contacts.rigid_contact_shape0.numpy()[:count]
+                shape1 = contacts.rigid_contact_shape1.numpy()[:count]
+                result = {}
+                for name, shape in shapes:
+                    index = np.flatnonzero((shape0 == shape) | (shape1 == shape))
+                    if len(index):
+                        result[name] = _contact_row(solver, int(index[0]))[1]
+                return result
+
+            def check_substeps(phase, mode=mode, solver=solver, contacts=contacts):
+                for substep in range(2):
+                    step(8)
+                    solved = contact_impulses()
+                    step(0)
+                    seeded = contact_impulses()
+                    with test.subTest(phase=phase, substep=substep):
+                        _expected_routes(test, solver, contacts, mode, articulated=False)
+                        test.assertEqual(seeded.keys(), solved.keys())
+                        test.assertGreater(solved["b"], 0.0)
+                        for name, value in solved.items():
+                            test.assertAlmostEqual(seeded[name], value, delta=1.0e-6 * max(1.0, abs(value)))
+
+            pipeline.collide(states[0], contacts)
+            test.assertEqual(int(contacts.rigid_contact_count.numpy()[0]), 1)
+            check_substeps("B alone")
+
+            q = states[0].body_q.numpy()
+            q[body_a][2] = 0.1
+            states[0].body_q.assign(q)
+            qd = states[0].body_qd.numpy()
+            qd[body_a] = 0.0
+            states[0].body_qd.assign(qd)
+            pipeline.collide(states[0], contacts)
+            test.assertEqual(int(contacts.rigid_contact_count.numpy()[0]), 2)
+            test.assertGreaterEqual(int(contacts.rigid_contact_match_index.numpy()[1]), 0)
+            check_substeps("insertion")
+
+            q = states[0].body_q.numpy()
+            q[body_a][2] = 1.0
+            states[0].body_q.assign(q)
+            pipeline.collide(states[0], contacts)
+            test.assertEqual(int(contacts.rigid_contact_count.numpy()[0]), 1)
+            test.assertEqual(int(contacts.rigid_contact_match_index.numpy()[0]), 1)
+            check_substeps("deletion")
+
+
+def test_graph_replay_rescales_history_once_after_a_timestep_change_under_scene(test, device):
+    """Rescale carried impulses by the step ratio once in captured steps, as in eager steps, and as Steel does.
+
+    ``test_warmstart``'s box settled on the ground at 1/120 s, free and on a vertical slider, then three steps without a
+    sweep at 1/240 s, eager and replayed from one captured step: every step seeds 0.5 of the settled normal load
+    (within ``rtol`` 1e-5), the replays as the eager steps, under the scene and under Steel.
+    """
+    for articulated in (True, False):
+        for mode in CARRIED_MODES:
+            ratios = {}
+            for captured in (False, True):
+                with default_solve_mode(mode):
+                    _model, pipeline, contacts, solver, state_0, state_1, control = _resting_box_rows(
+                        device, articulated
+                    )
+                settled = float(_normal_impulses(solver).sum())
+                with test.subTest(articulated=articulated, solve_mode=mode, captured=captured):
+                    _expected_routes(test, solver, contacts, mode, articulated)
+                    test.assertGreater(settled, 0.0)
+                solver._iterations = 0
+                pipeline.collide(state_0, contacts)
+                if captured:
+                    with wp.ScopedCapture(device) as capture:
+                        solver.step(state_0, state_1, control, contacts, 0.5 / 120.0)
+                values = []
+                for _ in range(3):
+                    if captured:
+                        wp.capture_launch(capture.graph)
+                    else:
+                        solver.step(state_0, state_1, control, contacts, 0.5 / 120.0)
+                    values.append(float(_normal_impulses(solver).sum()) / settled)
+                ratios[captured] = values
+            with test.subTest(articulated=articulated, solve_mode=mode):
+                np.testing.assert_allclose(ratios[False], [0.5, 0.5, 0.5], rtol=1.0e-5)
+                np.testing.assert_allclose(ratios[True], ratios[False], rtol=1.0e-5)
+
+
+def test_both_row_families_seed_impulses_scaled_by_the_step_ratio_under_scene(test, device):
+    """Seed the carried normal impulses scaled by ``dt / dt_previous``, on the scene's one row family as on Steel's two.
+
+    ``test_warmstart``'s box settled on the ground at 1/120 s, free and on a vertical slider, then one step without a
+    sweep at 1/240 s: the row count is unchanged and every normal row holds half its carried impulse (``rtol`` 1e-6),
+    under the scene on its dense rows and under Steel on the row family of the body's kind.
+    """
+    for articulated in (True, False):
+        for mode in CARRIED_MODES:
+            with test.subTest(articulated=articulated, solve_mode=mode):
+                with default_solve_mode(mode):
+                    _model, pipeline, contacts, solver, state_0, state_1, control = _resting_box_rows(
+                        device, articulated
+                    )
+                _expected_routes(test, solver, contacts, mode, articulated)
+                rows = [len(row_type) for row_type, _ in row_families(solver)]
+                previous = _normal_impulses(solver)
+                test.assertGreater(float(previous.sum()), 0.0)
+
+                solver._iterations = 0
+                pipeline.collide(state_0, contacts)
+                solver.step(state_0, state_1, control, contacts, 0.5 / 120.0)
+                test.assertEqual([len(row_type) for row_type, _ in row_families(solver)], rows)
+                np.testing.assert_allclose(_normal_impulses(solver), 0.5 * previous, rtol=1.0e-6, atol=1.0e-9)
+
+
+def _settle_stack(test, device, mode: str, schedule):
+    """Step ``test_warmstart``'s three-box stack under ``mode``, ``(steps, dt)`` at a time; yield after each step.
+
+    Yields the solver and the top box's height after each step.
+    """
+    with default_solve_mode(mode):
+        model, pipeline, solver = _stack(device)
+    test.assertEqual(solver.solve_mode, mode)
+    contacts = pipeline.contacts()
+    s0, s1 = model.state(), model.state()
+    control = model.control()
+    newton.eval_fk(model, model.joint_q, model.joint_qd, s0)
+    for steps, dt in schedule:
+        for _ in range(steps):
+            pipeline.collide(s0, contacts)
+            s0.clear_forces()
+            solver.step(s0, s1, control, contacts, dt)
+            s0, s1 = s1, s0
+            yield solver, float(s0.body_q.numpy()[2][2])
+    _expected_routes(test, solver, contacts, mode, articulated=False)
+
+
+def test_warm_carry_fixed_dt_identity_under_scene(test, device):
+    """Carry impulses with a ratio of exactly 1 at a fixed step, under the scene as under Steel.
+
+    ``test_warmstart``'s settled three-box stack at 1/60 s, steps 100-119: the per-step normal-load totals over every
+    row family stay within a 15 % band, their means over the first and last ten steps within 2 %, and the top box's
+    height within 1 mm, under the scene and under Steel.
+    """
+    for mode in CARRIED_MODES:
+        with test.subTest(solve_mode=mode):
+            totals, heights = [], []
+            for k, (solver, height) in enumerate(_settle_stack(test, device, mode, [(120, 1.0 / 60.0)])):
+                if k >= 100:
+                    totals.append(float(_normal_impulses(solver).sum()))
+                    heights.append(height)
+            test.assertGreater(min(totals), 0.0)
+            test.assertLess((max(totals) - min(totals)) / max(totals), 0.15, f"totals unstable: {totals[-5:]}")
+            test.assertAlmostEqual(
+                float(np.mean(totals[:10])), float(np.mean(totals[10:])), delta=0.02 * float(np.mean(totals))
+            )
+            test.assertLess(max(heights) - min(heights), 1.0e-3, f"stack height drifting ({heights[-3:]})")
+
+
+def test_warm_carry_scales_with_dt_under_scene(test, device):
+    """Rescale carried impulses by ``dt_new / dt_old`` across a step-size change, under the scene as under Steel.
+
+    ``test_warmstart``'s three-box stack settled at 1/240 s, then stepped at 1/60 s: the normal-load total over every
+    row family grows about four times (within 0.6), the top box does not pop (1 mm) and stays within 2 mm.
+    """
+    for mode in CARRIED_MODES:
+        with test.subTest(solve_mode=mode):
+            heights = []
+            schedule = [(240, 1.0 / 240.0), (60, 1.0 / 60.0)]
+            for k, (solver, height) in enumerate(_settle_stack(test, device, mode, schedule)):
+                heights.append(height)
+                if k == 239:
+                    i_small = float(_normal_impulses(solver).sum())
+            i_big = float(_normal_impulses(solver).sum())
+            z_before = heights[239]
+            test.assertGreater(i_small, 0.0)
+            test.assertAlmostEqual(i_big / i_small, 4.0, delta=0.6)
+            test.assertLess(abs(heights[240] - z_before), 1.0e-3, "stack popped on the timestep switch")
+            test.assertLess(abs(heights[-1] - z_before), 2.0e-3, "stack drifted after the switch")
+
+
+class TestSteelSceneCarriedWarmstart(unittest.TestCase):
+    """Steel's contact warm-start tests carried to the scene mode."""
+
+
+# CUDA only: Steel's warm-start tests run on CUDA.
+for _fn in (
+    test_real_contact_insertion_moves_slots_without_cross_seeding_under_scene,
+    test_replaced_contact_buffer_starts_cold_under_scene,
+    test_skipped_collision_pass_starts_cold_under_scene,
+    test_interleaved_contact_buffers_start_cold_under_scene,
+    test_interleaved_contact_buffers_start_cold_under_graph_replay_under_scene,
+    test_substeps_reuse_contacts_with_their_own_history_under_scene,
+    test_graph_replay_rescales_history_once_after_a_timestep_change_under_scene,
+    test_both_row_families_seed_impulses_scaled_by_the_step_ratio_under_scene,
+    test_warm_carry_fixed_dt_identity_under_scene,
+    test_warm_carry_scales_with_dt_under_scene,
+):
+    add_function_test(TestSteelSceneCarriedWarmstart, _fn.__name__, _fn, devices=get_cuda_test_devices())
 
 
 if __name__ == "__main__":

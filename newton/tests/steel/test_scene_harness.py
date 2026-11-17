@@ -312,12 +312,8 @@ class TestSteelSceneHarness(unittest.TestCase):
             with self.subTest(test=test):
                 self.assertTrue(entry in _scene_parity.STEEL_PATH_REASONS or entry.startswith(prefixes), entry)
 
-    def test_skips_name_registered_tests(self):
-        """Every ``_scene_parity.SKIPS`` key names a test this package registers, so no entry silently never skips.
-
-        A key ``"<Class>::<name>"`` matches a method ``name`` of the test class ``Class``, with or without a device
-        suffix (a test with no device on this machine registers under its bare name).
-        """
+    def _registered_tests(self) -> set[tuple[str, str, str]]:
+        """``(module, class, name)`` of every test this package registers, ``name`` without its device suffix."""
         registered = set()
         directory = os.path.dirname(os.path.abspath(__file__))
         for stem in sorted(name[:-3] for name in os.listdir(directory) if re.fullmatch(r"test_\w+\.py", name)):
@@ -326,8 +322,26 @@ class TestSteelSceneHarness(unittest.TestCase):
                 if isinstance(cls, type) and issubclass(cls, unittest.TestCase) and cls.__module__ == module.__name__:
                     for method in dir(cls):
                         if method.startswith("test"):
-                            registered.add(f"{cls.__name__}::{_scene_parity._DEVICE_SUFFIX.sub('', method)}")
+                            registered.add((stem, cls.__name__, _scene_parity._DEVICE_SUFFIX.sub("", method)))
+        return registered
+
+    def test_skips_name_registered_tests(self):
+        """Every ``_scene_parity.SKIPS`` key names a test this package registers, so no entry silently never skips.
+
+        A key ``"<Class>::<name>"`` matches a method ``name`` of the test class ``Class``, with or without a device
+        suffix (a test with no device on this machine registers under its bare name).
+        """
+        registered = {f"{cls}::{name}" for _, cls, name in self._registered_tests()}
         self.assertEqual([key for key in _scene_parity.SKIPS if key not in registered], [])
+
+    def test_skip_counterparts_name_registered_scene_tests(self):
+        """Every ``"scene counterpart: <test>"`` of ``_scene_parity.SKIPS`` names a test a ``test_scene_*`` module
+        registers (with or without a device suffix), so a skipped test's replacement runs."""
+        scene_tests = {name for stem, _, name in self._registered_tests() if stem.startswith("test_scene_")}
+        prefix = "scene counterpart: "
+        counterparts = {entry[len(prefix) :] for entry in _scene_parity.SKIPS.values() if entry.startswith(prefix)}
+        self.assertTrue(counterparts)
+        self.assertEqual(sorted(counterparts - scene_tests), [])
 
 
 add_function_test(

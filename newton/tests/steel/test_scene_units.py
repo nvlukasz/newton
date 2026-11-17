@@ -39,11 +39,17 @@ def _scene(name, device):
 
 
 def _solver(model, overrides=None, **options):
-    """A solver without the scene mode, with room for every contact row, so no contact is dropped.
+    """A solver without the scene mode (``solve_mode="serial"`` unless ``options`` name one), with room for every
+    contact row, so no contact is dropped.
 
     ``overrides`` are its kernel overrides: the units' ``scene_color_cap`` and ``scene_pair_rule``.
     """
-    settings = {"free_body_constraint_max": CONTACT_MAX, "articulation_constraint_max": 256, **options}
+    settings = {
+        "solve_mode": "serial",
+        "free_body_constraint_max": CONTACT_MAX,
+        "articulation_constraint_max": 256,
+        **options,
+    }
     with kernel_overrides(overrides or {}):
         return SolverSteel(model, **settings)
 

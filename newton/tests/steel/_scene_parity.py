@@ -111,7 +111,15 @@ mode's ``solve_mode='scene' does not support`` message, which a parity tool file
 SKIPS: dict[str, str] = {
     # test_articulation
     "TestSteelConnect::test_closure_row_overflow_is_reported": "STEEL_ROW_BUDGETS",
+    "TestSteelConnectModelEdits::test_captured_device_release": (
+        "scene counterpart: test_captured_device_release_under_scene"
+    ),
+    "TestSteelConnectModelEdits::test_in_place_release": "scene counterpart: test_in_place_release_under_scene",
+    "TestSteelConnectModelEdits::test_in_place_release_with_preelimination": (
+        "scene counterpart: test_in_place_release_with_preelimination_under_scene"
+    ),
     "TestSteelMimic::test_mimic_row_overflow_is_reported": "STEEL_ROW_BUDGETS",
+    "TestSteelMixedWorld::test_mixed_world_stack_rests": "scene counterpart: test_mixed_world_stack_rests_under_scene",
     # A recorded exception: a behavioural test the mode does not hold.
     "TestSteelPreelimination::test_closure_held_at_low_iterations": "STEEL_PREELIMINATION",
     "TestSteelPreelimination::test_default_preserves_all_bilateral_trajectory": "STEEL_PREELIMINATION",
@@ -124,33 +132,54 @@ SKIPS: dict[str, str] = {
     "TestSteelPreelimination::test_prescribed_parent_closure_warns_and_falls_back": "STEEL_PREELIMINATION",
     "TestSteelPreelimination::test_warmstart_with_preelimination_holds_a_loaded_closure": "STEEL_PREELIMINATION",
     "TestSteelPreeliminationPropagation::test_propagation_keeps_iterative_mimic_rows": "STEEL_PREELIMINATION",
+    "TestSteelPrescribedParentConnect::test_disabled_loop_joint_starts_released": (
+        "scene counterpart: test_disabled_loop_joint_starts_released_under_scene"
+    ),
     # test_capacity
     # Scene counterpart: test_scene_features::test_scene_capacity_failure_is_observable
     # A recorded exception: a behavioural test the mode does not hold.
     "TestSteelCapacityStatus::test_capacity_failure_is_observable": "STEEL_ROW_BUDGETS",
-    # Scene counterpart: test_scene_features::test_scene_capacity_failure_is_observable
-    "TestSteelCapacityStatus::test_dense_capacity_failure_is_world_local": "STEEL_ROW_BUDGETS",
+    "TestSteelCapacityStatus::test_dense_capacity_failure_is_world_local": (
+        "scene counterpart: test_scene_capacity_failure_is_observable"
+    ),
     # Scene counterpart: test_scene_features::test_scene_overflow_warning_is_printed_once
     # A recorded exception: a behavioural test the mode does not hold.
     "TestSteelCapacityStatus::test_overflow_warning_is_printed_once": "STEEL_ROW_BUDGETS",
     # Scene counterpart: test_scene_features::test_scene_overflow_warning_is_printed_once
     # A recorded exception: a behavioural test the mode does not hold.
     "TestSteelCapacityStatus::test_overflow_warning_is_printed_once_propagation": "STEEL_ROW_BUDGETS",
-    # Scene counterpart: test_scene_groups::test_heterogeneous_worlds_match_isolated_worlds_bitwise
-    "TestSteelHeteroGuard::test_hetero_serial_constructs": "STEEL_SOLVE_WORLDS",
-    # Scene counterpart: test_scene_groups::test_heterogeneous_worlds_match_isolated_worlds_bitwise
-    "TestSteelHeteroGuard::test_homogeneous_propagation_constructs": "STEEL_SOLVE_WORLDS",
-    # Scene counterpart: test_scene_groups::test_heterogeneous_worlds_match_isolated_worlds_bitwise
-    "TestSteelHeteroGuard::test_homogeneous_serial_constructs": "STEEL_SOLVE_WORLDS",
-    # Scene counterpart: test_scene_features::test_scene_watermark_excess_counts_dropped_rows
-    "TestSteelRowWatermark::test_watermarks_record_capacity_overflow": "STEEL_ROW_BUDGETS",
+    "TestSteelHeteroGuard::test_hetero_serial_constructs": (
+        "scene counterpart: test_heterogeneous_worlds_match_isolated_worlds_bitwise"
+    ),
+    "TestSteelHeteroGuard::test_homogeneous_propagation_constructs": (
+        "scene counterpart: test_heterogeneous_worlds_match_isolated_worlds_bitwise"
+    ),
+    "TestSteelHeteroGuard::test_homogeneous_serial_constructs": (
+        "scene counterpart: test_heterogeneous_worlds_match_isolated_worlds_bitwise"
+    ),
+    "TestSteelRowWatermark::test_watermarks_record_capacity_overflow": (
+        "scene counterpart: test_scene_watermark_excess_counts_dropped_rows"
+    ),
     "TestSteelRowWatermark::test_watermarks_track_propagation_rows": "STEEL_PROPAGATION",
-    # Scene counterpart: test_scene_features::test_row_watermark_counts_rows_per_model_world
-    "TestSteelRowWatermark::test_watermarks_track_the_largest_row_counts": "STEEL_ROW_FAMILIES",
+    "TestSteelRowWatermark::test_watermarks_track_the_largest_row_counts": (
+        "scene counterpart: test_row_watermark_counts_rows_per_model_world"
+    ),
     # test_compliance
+    "TestContactComplianceIntegration::test_mf_free_body_support": (
+        "scene counterpart: test_mf_free_body_support_under_scene"
+    ),
     "TestContactComplianceIntegration::test_native_hydro_free_body_manifold": "STEEL_ROW_FAMILIES",
+    "TestContactComplianceSafety::test_solver_overflow_and_dropped_contact_rejected": (
+        "scene counterpart: test_compliance_counts_match_steel"
+    ),
     # test_contacts
     "TestSteelContactControls::test_overflow_warning_enabled_after_construction_latches": "STEEL_ROW_BUDGETS",
+    "TestSteelContactObservable::test_contact_f_in_a_captured_graph": (
+        "scene counterpart: test_contact_f_in_a_captured_graph_under_scene"
+    ),
+    "TestSteelContactObservable::test_contact_f_reports_each_box_weight": (
+        "scene counterpart: test_contact_f_reports_each_box_weight_under_scene"
+    ),
     # A recorded exception: a behavioural test the mode does not hold.
     "TestSteelContactObservable::test_contact_f_reports_each_box_weight_row_overflow": "STEEL_ROW_BUDGETS",
     "TestSteelPairedResponse::test_paired_response_selection": "STEEL_CONTACT_SOLVES",
@@ -161,62 +190,157 @@ SKIPS: dict[str, str] = {
         "STEEL_WARMSTART_HISTORY"
     ),
     "TestSteelPersistentContacts::test_rotating_contact_clamps_the_projected_friction_cone": "STEEL_ROW_FAMILIES",
-    # Scene counterpart: test_scene_features::test_restitution_rows_fire_where_steel_fires
-    "TestSteelRestitution::test_restitution_uses_ordinary_rows_and_validates_configuration": "STEEL_ROW_LAYOUT",
-    # Scene counterpart: test_scene_velocity_iterations::test_velocity_iterations_rebound_tracks_steel
-    "TestSteelVelocityPassSpeculative::test_every_contact_response_route_lands": "STEEL_ROW_FAMILIES",
+    "TestSteelRestitution::test_every_contact_response_route_enforces_restitution": (
+        "scene counterpart: test_every_contact_response_route_enforces_restitution_under_scene"
+    ),
+    "TestSteelRestitution::test_multiworld_restitution_keeps_case_data_isolated": (
+        "scene counterpart: test_multiworld_restitution_keeps_case_data_isolated_under_scene"
+    ),
+    "TestSteelRestitution::test_notify_reads_replaced_and_in_place_restitution": (
+        "scene counterpart: test_notify_reads_replaced_and_in_place_restitution_under_scene"
+    ),
+    "TestSteelRestitution::test_penetrating_impact_replaces_baumgarte_with_restitution": (
+        "scene counterpart: test_penetrating_impact_replaces_baumgarte_with_restitution_under_scene"
+    ),
+    "TestSteelRestitution::test_restitution_is_relative_to_a_moving_kinematic_surface": (
+        "scene counterpart: test_restitution_is_relative_to_a_moving_kinematic_surface_under_scene"
+    ),
+    "TestSteelRestitution::test_restitution_uses_ordinary_rows_and_validates_configuration": (
+        "scene counterpart: test_restitution_rows_fire_where_steel_fires"
+    ),
+    "TestSteelRestitution::test_two_body_impact_conserves_momentum_and_reverses_relative_speed": (
+        "scene counterpart: test_two_body_impact_conserves_momentum_and_reverses_relative_speed_under_scene"
+    ),
+    "TestSteelRestitution::test_warm_start_history_does_not_change_or_repeat_restitution": (
+        "scene counterpart: test_warm_start_history_does_not_change_or_repeat_restitution_under_scene"
+    ),
+    "TestSteelVelocityPassSpeculative::test_crossing_row_loses_its_speculative_allowance": (
+        "scene counterpart: test_crossing_row_loses_its_speculative_allowance_under_scene"
+    ),
+    "TestSteelVelocityPassSpeculative::test_every_contact_response_route_lands": (
+        "scene counterpart: test_velocity_iterations_rebound_tracks_steel"
+    ),
+    "TestSteelVelocityPassSpeculative::test_light_body_crossing_uses_end_gap_not_impulse_scale": (
+        "scene counterpart: test_light_body_crossing_uses_end_gap_not_impulse_scale_under_scene"
+    ),
+    "TestSteelVelocityPassSpeculative::test_non_crossing_row_keeps_its_speculative_allowance": (
+        "scene counterpart: test_non_crossing_row_keeps_its_speculative_allowance_under_scene"
+    ),
+    "TestSteelVelocityPassSpeculative::test_warm_start_with_velocity_iterations_is_supported": (
+        "scene counterpart: test_warm_start_with_velocity_iterations_is_supported_under_scene"
+    ),
     # test_determinism
-    # Scene counterpart: test_scene_rows::test_row_order_is_side_major_then_colors
-    "TestSteelDeterminism::test_deterministic_bilateral_rows_follow_element_order": "STEEL_ROW_LAYOUT",
-    # Scene counterpart: test_scene_internal_unit::test_joint_friction_bounds_match_steel_bitwise
-    "TestSteelDeterminism::test_deterministic_joint_friction_rows_follow_dof_order": "STEEL_ROW_LAYOUT",
-    # Scene counterpart: test_scene_rows::test_row_order_is_side_major_then_colors
-    "TestSteelDeterminism::test_deterministic_joint_rows_follow_articulation_order": "STEEL_ROW_LAYOUT",
-    # Scene counterpart: test_scene_rows::test_rows_overflow_in_scan_order
-    "TestSteelDeterminism::test_deterministic_overflow_keeps_earliest_contacts": "STEEL_ROW_BUDGETS",
-    # Scene counterpart: test_scene_features::test_scene_overflow_warning_is_printed_once
-    "TestSteelDeterminism::test_overflow_warning_names_deterministic_mode": "STEEL_ROW_BUDGETS",
+    "TestSteelDeterminism::test_deterministic_bilateral_rows_follow_element_order": (
+        "scene counterpart: test_row_order_is_side_major_then_colors"
+    ),
+    "TestSteelDeterminism::test_deterministic_joint_friction_rows_follow_dof_order": (
+        "scene counterpart: test_joint_friction_bounds_match_steel_bitwise"
+    ),
+    "TestSteelDeterminism::test_deterministic_joint_rows_follow_articulation_order": (
+        "scene counterpart: test_row_order_is_side_major_then_colors"
+    ),
+    "TestSteelDeterminism::test_deterministic_launches_replay_identically": (
+        "scene counterpart: test_deterministic_launches_replay_identically_under_scene"
+    ),
+    "TestSteelDeterminism::test_deterministic_overflow_keeps_earliest_contacts": (
+        "scene counterpart: test_rows_overflow_in_scan_order"
+    ),
+    "TestSteelDeterminism::test_overflow_warning_names_deterministic_mode": (
+        "scene counterpart: test_scene_overflow_warning_is_printed_once"
+    ),
+    "TestSteelPropagationDeterminism::test_deterministic_propagation_launches_replay_identically": (
+        "scene counterpart: test_deterministic_propagation_launches_replay_identically_under_scene"
+    ),
     "TestSteelPropagationDeterminism::test_deterministic_propagation_runs_are_bitwise_identical": "STEEL_PROPAGATION",
     # test_friction
+    "TestSteelFrictionAnchorSelection::test_anchor_selection_respects_contact_gap_filters": (
+        "scene counterpart: test_anchor_selection_respects_contact_gap_filters_under_scene"
+    ),
     "TestSteelFrictionAnchorSelection::test_contact_churn_reports_linear_force_but_not_a_wrench": "STEEL_ROW_FAMILIES",
-    # Scene counterpart: test_scene_state::test_patch_rows_follow_the_anchors
-    "TestSteelFrictionAnchors::test_row_builders_store_anchor_separation_per_route": "STEEL_ROW_FAMILIES",
-    # Scene counterpart: test_scene_friction_modes::test_friction_modes_track_steel
-    "TestSteelFrictionMode::test_modes_select_distinct_kernels": "STEEL_MATRIX_FREE_SWEEP",
-    # Scene counterpart: test_scene_friction_modes::test_friction_modes_track_steel
-    "TestSteelFrictionMode::test_sparse_factors_require_the_current_mode": "STEEL_FACTOR_SELECTION",
+    "TestSteelFrictionAnchorSelection::test_cuda_planar_patch_reduces_friction_rows": (
+        "scene counterpart: test_cuda_planar_patch_reduces_friction_rows_under_scene"
+    ),
+    "TestSteelFrictionAnchors::test_row_builders_store_anchor_separation_per_route": (
+        "scene counterpart: test_patch_rows_follow_the_anchors"
+    ),
+    "TestSteelFrictionMode::test_modes_select_distinct_kernels": "scene counterpart: test_friction_modes_track_steel",
+    "TestSteelFrictionMode::test_sparse_factors_require_the_current_mode": (
+        "scene counterpart: test_friction_modes_track_steel"
+    ),
+    "TestSteelFrictionRolling::test_faceted_rolling_across_tessellation_direction_and_timestep": (
+        "scene counterpart: test_faceted_rolling_across_tessellation_direction_and_timestep_under_scene"
+    ),
+    "TestSteelKinematicBeltFriction::test_kinematic_belt_drags_the_box": (
+        "scene counterpart: test_kinematic_belt_drags_the_box_under_scene"
+    ),
     # test_kernels
+    "TestSteelAdvancedOptions::test_serial_block_dim_is_bitwise": (
+        "scene counterpart: test_serial_block_dim_is_bitwise_under_scene"
+    ),
     "TestSteelFusedCrba::test_fused_assembly_follows_the_mass_update_interval": "STEEL_FACTOR_SELECTION",
     "TestSteelFusedCrba::test_fused_assembly_is_selected_only_where_supported": "STEEL_FACTOR_SELECTION",
     "TestSteelFusedCrba::test_fused_assembly_matches_the_separate_pipeline": "STEEL_FACTOR_SELECTION",
     "TestSteelLaunchConfig::test_articulated_contact_response_validation": "STEEL_PROPAGATION",
     "TestSteelLaunchConfig::test_compact_world_dof_mapping_pads_heterogeneous_worlds": "STEEL_SOLVE_WORLDS",
+    "TestSteelLaunchConfig::test_defaults": "STEEL_DEFAULTS",
     "TestSteelLaunchConfig::test_diagonal_fusion_requires_nonaliased_world_response": "STEEL_FACTOR_SELECTION",
     "TestSteelLaunchConfig::test_propagation_rejects_unsupported_options": "STEEL_PROPAGATION",
+    "TestSteelLaunchConfig::test_tiled_and_loop_kernels_step_identically": (
+        "scene counterpart: test_tiled_and_loop_kernels_step_identically_under_scene"
+    ),
     "TestSteelStreams::test_capture_after_eager_orders_the_pending_clear": "STEEL_FACTOR_SELECTION",
     "TestSteelStreams::test_double_buffer_capture_sequences_match_single_buffer": "STEEL_FACTOR_SELECTION",
     "TestSteelStreams::test_reset_after_an_eager_error_steps_like_a_fresh_solver": "STEEL_FACTOR_SELECTION",
+    # Scene counterpart (streams alone): test_scene_sweep::test_parallel_streams_step_identically_under_scene
     "TestSteelStreams::test_streams_and_double_buffer_step_identically": "STEEL_FACTOR_SELECTION",
     # test_limits_drives
     "TestSteelJointFriction::test_dense_row_overflow_is_reported": "STEEL_ROW_BUDGETS",
     "TestSteelJointFriction::test_local_internal_fast_path_is_not_selected": "STEEL_CONTACT_SOLVES",
-    # Scene counterpart: test_scene_velocity_limits::test_late_rows_follow_the_coupled_pass
-    "TestSteelJointLimitActivationGap::test_combined_row_families_follow_the_documented_layout": "STEEL_ROW_LAYOUT",
+    "TestSteelJointFriction::test_schedules_routes_and_velocity_pass_agree": (
+        "scene counterpart: test_schedules_routes_and_velocity_pass_agree_under_scene"
+    ),
+    "TestSteelJointLimitActivationGap::test_combined_row_families_follow_the_documented_layout": (
+        "scene counterpart: test_late_rows_follow_the_coupled_pass"
+    ),
     "TestSteelJointLimitActivationGap::test_default_finite_limits_keep_rows_and_warn_at_capacity": "STEEL_ROW_BUDGETS",
     "TestSteelJointLimitActivationGap::test_dense_row_families_respect_phase_bounds": "STEEL_ROW_LAYOUT",
     "TestSteelJointLimitActivationGap::test_propagation_solves_every_row_family": "STEEL_PROPAGATION",
-    # Scene counterpart: test_scene_velocity_limits::test_free_body_velocity_limit_rows_match_steel_rows
-    "TestSteelJointLimitActivationGap::test_velocity_limit_rows_require_the_option": "STEEL_ROW_FAMILIES",
+    "TestSteelJointLimitActivationGap::test_velocity_limit_rows_require_the_option": (
+        "scene counterpart: test_free_body_velocity_limit_rows_match_steel_rows"
+    ),
     "TestSteelPGSDrives::test_drive_rows_precede_limit_rows_and_count_against_capacity": "STEEL_ROW_BUDGETS",
-    # Scene counterpart: test_scene_drives::test_drive_rows_track_steel
-    "TestSteelPGSDrives::test_undriven_dofs_get_no_drive_rows": "STEEL_ROW_LAYOUT",
+    "TestSteelPGSDrives::test_undriven_dofs_get_no_drive_rows": "scene counterpart: test_drive_rows_track_steel",
+    "TestSteelVelocityDriveMode::test_frozen_drive_rows_keep_the_position_solve_impulse": (
+        "scene counterpart: test_frozen_drive_rows_keep_the_position_solve_impulse_under_scene"
+    ),
     # test_mass_matrix
     "TestSteelDiagonalMass::test_diagonal_mass_rows_match_dense_and_sparse_factors": "STEEL_FACTOR_SELECTION",
     "TestSteelDiagonalMass::test_fixed_base_sibling_branches_detect_diagonal_mass_topology": "STEEL_FACTOR_SELECTION",
     "TestSteelDiagonalMass::test_fixed_base_sibling_branches_use_diagonal_mass_path": "STEEL_FACTOR_SELECTION",
+    "TestSteelDiagonalMass::test_sleeping_diagonal_dynamics_skip_is_exact": (
+        "scene counterpart: test_sleeping_diagonal_dynamics_skip_is_exact_under_scene"
+    ),
+    "TestSteelNotifyDevice::test_armature_and_shape_notify_capture_into_a_graph": (
+        "scene counterpart: test_armature_and_shape_notify_capture_into_a_graph_under_scene"
+    ),
+    "TestSteelNotifyDevice::test_armature_notify_matches_host_reference_and_fresh_solver": (
+        "scene counterpart: test_armature_notify_matches_host_reference_and_fresh_solver_under_scene"
+    ),
+    "TestSteelNotifyDevice::test_captured_notify_reads_its_captured_arrays": (
+        "scene counterpart: test_captured_notify_reads_its_captured_arrays_under_scene"
+    ),
     "TestSteelNotifyDevice::test_captured_world_mask_follows_the_live_mask": "STEEL_WARMSTART_HISTORY",
+    "TestSteelNotifyDevice::test_kinematic_notify_matches_host_reference_and_fresh_solver": (
+        "scene counterpart: test_kinematic_notify_matches_host_reference_and_fresh_solver_under_scene"
+    ),
+    "TestSteelNotifyDevice::test_narrow_dof_flags_and_material_copies_capture_into_a_graph": (
+        "scene counterpart: test_narrow_dof_flags_and_material_copies_capture_into_a_graph_under_scene"
+    ),
     "TestSteelNotifyDevice::test_world_mask_limits_warmstart_invalidation": "STEEL_WARMSTART_HISTORY",
     # test_options
+    "TestSteelFrictionOptions::test_friction_position_iterations_gate_every_solve_path": (
+        "scene counterpart: test_friction_position_iterations_gate_the_scene_sweep"
+    ),
     "TestSteelGlobalWorld::test_construction_warns_about_unsolvable_global_contacts": "STEEL_GLOBAL_WORLD",
     "TestSteelGlobalWorld::test_construction_warns_about_unsolvable_global_contacts_propagation": "STEEL_GLOBAL_WORLD",
     "TestSteelGlobalWorld::test_dynamic_global_body_flags_other_world_contacts": "STEEL_GLOBAL_WORLD",
@@ -228,15 +352,28 @@ SKIPS: dict[str, str] = {
     "TestSteelGlobalWorld::test_jointed_global_kinematic_flags_other_world_contacts": "STEEL_GLOBAL_WORLD",
     "TestSteelGlobalWorld::test_jointed_global_kinematic_flags_other_world_contacts_propagation": "STEEL_GLOBAL_WORLD",
     # test_propagation
+    "TestLeafPublication::test_cuda_actual_graph_publication": (
+        "scene counterpart: test_cuda_actual_graph_publication_under_scene"
+    ),
+    "TestLeafPublication::test_current_frames_and_inertial_notifications": (
+        "scene counterpart: test_current_frames_and_inertial_notifications_under_scene"
+    ),
+    "TestLeafPublication::test_interleaved_mixed_leaves_and_moving_parents": (
+        "scene counterpart: test_interleaved_mixed_leaves_and_moving_parents_under_scene"
+    ),
     "TestPropagationSameArticulation::test_cross_response_effective_mass_matches_reference_operator": (
         "STEEL_PROPAGATION"
     ),
     "TestPropagationSameArticulation::test_default_routing_keeps_same_articulation_rows_dense": "STEEL_PROPAGATION",
-    # Scene counterpart: test_scene_rows::test_rows_match_steel_rows_bitwise
-    "TestPropagationSameArticulation::test_scissor_dense_diagonal_matches_reference": "STEEL_FACTOR_SELECTION",
+    "TestPropagationSameArticulation::test_scissor_dense_diagonal_matches_reference": (
+        "scene counterpart: test_rows_match_steel_rows_bitwise"
+    ),
     "TestSteelColoredPipeline::test_straight_line_units_match_the_row_loop": "STEEL_PROPAGATION",
     "TestSteelColoredPipeline::test_sweep_variants_match_the_reference_bitwise": "STEEL_PROPAGATION",
     "TestSteelColoredScheduling::test_colored_accepts_a_large_row_budget": "STEEL_PROPAGATION",
+    "TestSteelColoredScheduling::test_colored_result_matches_the_immediate_response": (
+        "scene counterpart: test_colored_result_matches_the_immediate_response_under_scene"
+    ),
     "TestSteelColoredScheduling::test_coloring_is_deterministic_for_a_fixed_contact_set": "STEEL_PROPAGATION",
     "TestSteelColoredScheduling::test_dense_heap_colors_without_a_serial_tail": "STEEL_PROPAGATION",
     "TestSteelColoredScheduling::test_kinematic_free_body_is_recorded_as_static": "STEEL_PROPAGATION",
@@ -245,8 +382,14 @@ SKIPS: dict[str, str] = {
     "TestSteelColoredUnitCapacity::test_mixed_units_graph_matches_eager": "STEEL_PROPAGATION",
     "TestSteelColoredUnitCapacity::test_mixed_units_match_serial_propagation": "STEEL_PROPAGATION",
     "TestSteelPropagation::test_contact_effective_mass_matches_dense_response": "STEEL_PROPAGATION",
+    "TestSteelPropagation::test_global_kinematic_floor_moves_articulated_bodies": (
+        "scene counterpart: test_global_kinematic_floor_moves_articulated_bodies_under_scene"
+    ),
     "TestSteelPropagation::test_native_tree_kernels_match_generic": "STEEL_PROPAGATION",
     "TestSteelPropagation::test_phased_sweeps_touch_only_their_row_family": "STEEL_MATRIX_FREE_SWEEP",
+    "TestSteelPropagation::test_propagation_matches_immediate_when_converged": (
+        "scene counterpart: test_propagation_matches_immediate_when_converged_under_scene"
+    ),
     "TestSteelPropagation::test_propagation_row_overflow_is_flagged_and_reset": "STEEL_PROPAGATION",
     "TestSteelPropagationCachedResponse::test_cached_matrices_match_numpy_reference": "STEEL_PROPAGATION",
     "TestSteelPropagationCachedResponse::test_cached_path_detected": "STEEL_PROPAGATION",
@@ -259,74 +402,163 @@ SKIPS: dict[str, str] = {
     "TestSteelPropagationCachedResponse::test_lockstep_second_size_group": "STEEL_PROPAGATION",
     "TestSteelPropagationCachedResponse::test_lockstep_single_contact": "STEEL_PROPAGATION",
     "TestSteelPropagationCachedResponse::test_overflow_falls_back_to_tree_walk": "STEEL_PROPAGATION",
+    "TestSteelPropagationCombinations::test_options_match_the_immediate_response_at_convergence": (
+        "scene counterpart: test_options_match_the_immediate_response_at_convergence_under_scene"
+    ),
     "TestSteelPropagationCombinations::test_regularization_weights_reach_the_propagation_rows": "STEEL_PROPAGATION",
+    "TestSteelPropagationCombinations::test_restitution_rebounds_on_propagation_rows": (
+        "scene counterpart: test_restitution_rebounds_on_propagation_rows_under_scene"
+    ),
     "TestSteelPropagationCombinations::test_warm_start_seeds_the_propagation_rows": "STEEL_PROPAGATION",
     "TestSteelPropagationCoupledContacts::test_graph_replay_matches_eager_steps": "STEEL_PROPAGATION",
+    "TestSteelPropagationCoupledContacts::test_linkage_gripper_holds_lifted_box": (
+        "scene counterpart: test_linkage_gripper_holds_lifted_box_under_scene"
+    ),
+    "TestSteelPropagationCoupledContacts::test_regularized_feet_reach_immediate_equilibrium": (
+        "scene counterpart: test_regularized_feet_reach_immediate_equilibrium_under_scene"
+    ),
     "TestSteelPropagationCoupledContacts::test_shared_dof_feet_split_their_whole_response": "STEEL_PROPAGATION",
     "TestSteelPropagationCoupledContacts::test_shared_root_split_matches_across_kernels": "STEEL_PROPAGATION",
     "TestSteelSchedule::test_contact_then_internal_gives_internal_rows_the_last_word": "STEEL_MATRIX_FREE_SWEEP",
     "TestSteelSchedule::test_row_phases_touch_only_their_row_families": "STEEL_MATRIX_FREE_SWEEP",
+    "TestSteelTreeExecution::test_contact_trajectory_matches_serial": (
+        "scene counterpart: test_contact_trajectory_matches_serial_under_scene"
+    ),
+    "TestSteelTreeExecution::test_serial_selection_skips_tree_setup": (
+        "scene counterpart: test_serial_selection_skips_tree_setup_under_scene"
+    ),
     # test_scene_mode
     "TestSteelSceneMode::test_scene_mode_is_off_by_default": "STEEL_DEFAULTS",
+    # test_sleeping
+    "TestSteelSleepWorkSkipping::test_graph_replay_restores_rows_on_force": (
+        "scene counterpart: test_graph_replay_restores_rows_on_force_under_scene"
+    ),
+    "TestSteelSleeping::test_default_and_explicit_disabled_match": (
+        "scene counterpart: test_default_and_explicit_disabled_match_under_scene"
+    ),
+    "TestSteelSleepingDynamics::test_alternate_kernel_paths_match": (
+        "scene counterpart: test_alternate_kernel_paths_match_under_scene"
+    ),
+    "TestSteelSleepingDynamics::test_eager_trajectories_match": (
+        "scene counterpart: test_eager_trajectories_match_under_scene"
+    ),
+    "TestSteelSleepingDynamics::test_graph_trajectories_match": (
+        "scene counterpart: test_graph_trajectories_match_under_scene"
+    ),
+    "TestSteelSleepingDynamics::test_transient_divergence_is_reported": (
+        "scene counterpart: test_transient_divergence_is_reported_under_scene"
+    ),
     # test_sparse
     "TestSteelSparseDiagonal::test_sparse_diagonal_contact_compliance_matches_general_owner": "STEEL_CONTACT_SOLVES",
     "TestSteelSparseDiagonal::test_sparse_diagonal_contact_friction_matches_general_owner": "STEEL_CONTACT_SOLVES",
     "TestSteelSparseDiagonal::test_sparse_diagonal_is_selected_only_where_supported": "STEEL_CONTACT_SOLVES",
     "TestSteelSparseDiagonal::test_sparse_diagonal_response_matches_dense_joint_limits": "STEEL_CONTACT_SOLVES",
-    # Scene counterpart: test_scene_aliases::test_mimic_rows_track_steel
-    "TestSteelSparseSelectionGuard::test_bilateral_rows_keep_dense_factors": "STEEL_FACTOR_SELECTION",
-    # Scene counterpart: test_scene_groups::test_one_topology_scene_has_one_factor_group
-    "TestSteelSparseSolver::test_default_selects_sparse_factors_for_branched_articulations": "STEEL_FACTOR_SELECTION",
-    # Scene counterpart: test_scene_groups::test_heterogeneous_scene_tracks_steel
-    "TestSteelSparseSolver::test_heterogeneous_worlds_do_not_invent_joint_support": "STEEL_FACTOR_SELECTION",
-    # Scene counterpart: test_scene_groups::test_heterogeneous_scene_tracks_steel
-    "TestSteelSparseSolver::test_mixed_contacts_match_existing_solver": "STEEL_FACTOR_SELECTION",
-    # Scene counterpart: test_scene_groups::test_heterogeneous_scene_tracks_steel
-    "TestSteelSparseSolver::test_moving_prescribed_support_and_reset": "STEEL_FACTOR_SELECTION",
-    # Scene counterpart: test_scene_groups::test_heterogeneous_scene_tracks_steel
-    "TestSteelSparseSolver::test_two_articulations_share_contact_solve": "STEEL_FACTOR_SELECTION",
+    "TestSteelSparseSelectionGuard::test_bilateral_rows_keep_dense_factors": (
+        "scene counterpart: test_mimic_rows_track_steel"
+    ),
+    "TestSteelSparseSolver::test_default_selects_sparse_factors_for_branched_articulations": (
+        "scene counterpart: test_one_topology_scene_has_one_factor_group"
+    ),
+    "TestSteelSparseSolver::test_graph_replay_preserves_sparse_problem": (
+        "scene counterpart: test_graph_replay_preserves_sparse_problem_under_scene"
+    ),
+    "TestSteelSparseSolver::test_heterogeneous_worlds_do_not_invent_joint_support": (
+        "scene counterpart: test_heterogeneous_scene_tracks_steel"
+    ),
+    "TestSteelSparseSolver::test_mixed_contacts_match_existing_solver": (
+        "scene counterpart: test_heterogeneous_scene_tracks_steel"
+    ),
+    "TestSteelSparseSolver::test_mixed_graph_replay_after_masked_reset": (
+        "scene counterpart: test_mixed_graph_replay_after_masked_reset_under_scene"
+    ),
+    "TestSteelSparseSolver::test_moving_prescribed_support_and_reset": (
+        "scene counterpart: test_heterogeneous_scene_tracks_steel"
+    ),
+    "TestSteelSparseSolver::test_trajectory_masked_reset_and_inertial_notify": (
+        "scene counterpart: test_trajectory_masked_reset_and_inertial_notify_under_scene"
+    ),
+    "TestSteelSparseSolver::test_two_articulations_share_contact_solve": (
+        "scene counterpart: test_heterogeneous_scene_tracks_steel"
+    ),
     "TestSteelSparseSolver::test_unsupported_configurations_keep_existing_path": "STEEL_FACTOR_SELECTION",
     # test_torsion
     "TestContactTorsion::test_capture_is_explicitly_rejected": "STEEL_TORSION_PREPARATION",
-    # Scene counterpart: test_scene_torsion::test_torsion_errors_are_latched
-    "TestContactTorsion::test_hydro_combination_is_rejected": "STEEL_TORSION_PREPARATION",
-    # Scene counterpart: test_scene_torsion::test_spin_rows_match_steel_rows
-    "TestContactTorsion::test_joint_response_and_coupled_budget": "STEEL_TORSION_PREPARATION",
+    "TestContactTorsion::test_hydro_combination_is_rejected": "scene counterpart: test_torsion_errors_are_latched",
+    "TestContactTorsion::test_joint_response_and_coupled_budget": "scene counterpart: test_spin_rows_match_steel_rows",
     "TestContactTorsion::test_timestep_and_capacity": "STEEL_TORSION_PREPARATION",
-    # Scene counterpart: test_scene_torsion::test_torsion_errors_are_latched
-    "TestContactTorsionRegressions::test_contact_input_overflow_is_rejected": "STEEL_TORSION_PREPARATION",
-    # Scene counterpart: test_scene_torsion::test_torsion_errors_are_latched
-    "TestContactTorsionRegressions::test_contact_row_loss_fails_without_diagnostics": "STEEL_TORSION_PREPARATION",
-    # Scene counterpart: test_scene_torsion::test_torsion_errors_are_latched
-    "TestContactTorsionRegressions::test_hydro_contact_input_is_rejected": "STEEL_TORSION_PREPARATION",
+    "TestContactTorsionRegressions::test_contact_input_overflow_is_rejected": (
+        "scene counterpart: test_torsion_errors_are_latched"
+    ),
+    "TestContactTorsionRegressions::test_contact_row_loss_fails_without_diagnostics": (
+        "scene counterpart: test_torsion_errors_are_latched"
+    ),
+    "TestContactTorsionRegressions::test_hydro_contact_input_is_rejected": (
+        "scene counterpart: test_torsion_errors_are_latched"
+    ),
     "TestContactTorsionRegressions::test_patch_spanning_shape_pairs_takes_the_largest_radius": (
         "STEEL_TORSION_PREPARATION"
     ),
-    # Scene counterpart: test_scene_torsion::test_one_sided_and_free_body_spin_rows_track_steel
-    "TestContactTorsionRegressions::test_torsion_keeps_free_body_velocity_limits": "STEEL_ROW_FAMILIES",
-    # Scene counterpart: test_scene_torsion::test_spin_rows_match_steel_rows
-    "TestContactTorsionRegressions::test_torsion_uses_cfm_floor": "STEEL_TORSION_PREPARATION",
+    "TestContactTorsionRegressions::test_torsion_keeps_free_body_velocity_limits": (
+        "scene counterpart: test_one_sided_and_free_body_spin_rows_track_steel"
+    ),
+    "TestContactTorsionRegressions::test_torsion_uses_cfm_floor": "scene counterpart: test_spin_rows_match_steel_rows",
     "TestDeviceTorsionPreparation::test_cuda_cold_capture_reports_errors_until_reset": "STEEL_TORSION_PREPARATION",
     "TestDeviceTorsionPreparation::test_cuda_solver_profiles": "STEEL_TORSION_PREPARATION",
-    # Scene counterpart: test_scene_torsion::test_torsion_errors_are_latched
-    "TestDeviceTorsionPreparation::test_public_api_noop_and_fail_stop": "STEEL_TORSION_PREPARATION",
-    # Scene counterpart: test_scene_torsion::test_spin_rows_match_steel_rows
-    "TestFinalPatchBudget::test_final_budget_and_velocity_response": "STEEL_TORSION_PREPARATION",
-    # Scene counterpart: test_scene_torsion::test_spin_rows_match_steel_rows
-    "TestTorsionCombined::test_analytic_normal_load_position_soft_velocity_rigid": "STEEL_TORSION_PREPARATION",
-    # Scene counterpart: test_scene_torsion::test_spin_rows_match_steel_rows
-    "TestTorsionCombined::test_distributed_budget_and_export": "STEEL_TORSION_PREPARATION",
-    # Scene counterpart: test_scene_torsion::test_retired_spin_row_refunds_under_velocity_iterations
-    "TestTorsionCombined::test_no_load_near_positive_gap_and_release": "STEEL_TORSION_PREPARATION",
-    # Scene counterpart: test_scene_torsion::test_spin_rows_match_steel_rows
-    "TestTorsionRegularization::test_analytic_regularized_load_and_saturated_spin": "STEEL_TORSION_PREPARATION",
-    # Scene counterpart: test_scene_torsion::test_spin_rows_match_steel_rows
-    "TestTorsionRegularization::test_final_load_budget_across_iterations": "STEEL_TORSION_PREPARATION",
-    # Scene counterpart: test_scene_torsion::test_retired_spin_row_refunds_under_velocity_iterations
-    "TestTorsionVelocitySolve::test_carried_spin_is_refunded_when_postpass_retires_group": "STEEL_TORSION_PREPARATION",
-    # Scene counterpart: test_scene_torsion::test_spin_rows_match_steel_rows
+    "TestDeviceTorsionPreparation::test_public_api_noop_and_fail_stop": (
+        "scene counterpart: test_torsion_errors_are_latched"
+    ),
+    "TestFinalPatchBudget::test_final_budget_and_velocity_response": (
+        "scene counterpart: test_spin_rows_match_steel_rows"
+    ),
+    "TestTorsionCombined::test_analytic_normal_load_position_soft_velocity_rigid": (
+        "scene counterpart: test_spin_rows_match_steel_rows"
+    ),
+    "TestTorsionCombined::test_distributed_budget_and_export": "scene counterpart: test_spin_rows_match_steel_rows",
+    "TestTorsionCombined::test_no_load_near_positive_gap_and_release": (
+        "scene counterpart: test_retired_spin_row_refunds_under_velocity_iterations"
+    ),
+    "TestTorsionRegularization::test_analytic_regularized_load_and_saturated_spin": (
+        "scene counterpart: test_spin_rows_match_steel_rows"
+    ),
+    "TestTorsionRegularization::test_final_load_budget_across_iterations": (
+        "scene counterpart: test_spin_rows_match_steel_rows"
+    ),
+    "TestTorsionVelocitySolve::test_carried_spin_is_refunded_when_postpass_retires_group": (
+        "scene counterpart: test_retired_spin_row_refunds_under_velocity_iterations"
+    ),
     "TestTorsionVelocitySolve::test_postpass_accumulated_impulse_response_and_position_split": (
-        "STEEL_TORSION_PREPARATION"
+        "scene counterpart: test_spin_rows_match_steel_rows"
+    ),
+    # test_warmstart
+    "TestSteelIdentityWarmstart::test_both_row_families_seed_impulses_scaled_by_the_step_ratio": (
+        "scene counterpart: test_both_row_families_seed_impulses_scaled_by_the_step_ratio_under_scene"
+    ),
+    "TestSteelIdentityWarmstart::test_graph_replay_rescales_history_once_after_a_timestep_change": (
+        "scene counterpart: test_graph_replay_rescales_history_once_after_a_timestep_change_under_scene"
+    ),
+    "TestSteelIdentityWarmstart::test_interleaved_contact_buffers_start_cold": (
+        "scene counterpart: test_interleaved_contact_buffers_start_cold_under_scene"
+    ),
+    "TestSteelIdentityWarmstart::test_interleaved_contact_buffers_start_cold_under_graph_replay": (
+        "scene counterpart: test_interleaved_contact_buffers_start_cold_under_graph_replay_under_scene"
+    ),
+    "TestSteelIdentityWarmstart::test_real_contact_insertion_moves_slots_without_cross_seeding": (
+        "scene counterpart: test_real_contact_insertion_moves_slots_without_cross_seeding_under_scene"
+    ),
+    "TestSteelIdentityWarmstart::test_replaced_contact_buffer_starts_cold": (
+        "scene counterpart: test_replaced_contact_buffer_starts_cold_under_scene"
+    ),
+    "TestSteelIdentityWarmstart::test_skipped_collision_pass_starts_cold": (
+        "scene counterpart: test_skipped_collision_pass_starts_cold_under_scene"
+    ),
+    "TestSteelIdentityWarmstart::test_substeps_reuse_contacts_with_their_own_history": (
+        "scene counterpart: test_substeps_reuse_contacts_with_their_own_history_under_scene"
+    ),
+    "TestSteelWarmstartDt::test_warm_carry_fixed_dt_identity": (
+        "scene counterpart: test_warm_carry_fixed_dt_identity_under_scene"
+    ),
+    "TestSteelWarmstartDt::test_warm_carry_scales_with_dt": (
+        "scene counterpart: test_warm_carry_scales_with_dt_under_scene"
     ),
 }
 """The tests the forced run skips: ``"<Class>::<test>"`` (the test's method name without a device suffix, so that the
