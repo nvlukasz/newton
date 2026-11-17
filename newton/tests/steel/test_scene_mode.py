@@ -8,9 +8,12 @@ reject raises their error under the mode too; what the mode then rejects on its 
 naming the mode.
 """
 
+import ctypes
 import re
+import sys
 import unittest
 import warnings
+from collections.abc import Callable
 from functools import partial
 from typing import NamedTuple
 from unittest import mock
@@ -1294,6 +1297,214 @@ def test_scene_status_reports_through_steel_api(test, device):
     test.assertEqual((stats["compliant_contacts_dropped"], stats["compliance_error"]), (0, 0))
 
 
+def test_scene_step_runs_under_an_external_capture(test, device):
+    """Replay a scene step captured through the CUDA driver alone bitwise like the same step captured by Warp.
+
+    ``test_determinism``'s step under another framework's capture, run under the scene mode: its ants and boxes pile
+    up, so the step colors two-sided units and sweeps coupled sides, whose loops are conditional graph nodes, and its
+    unit build scans with a temporary allocation. Both need a capture Warp knows, which the scene's step registers
+    when another framework began it.
+    """
+    with default_solve_mode("scene") as built:
+        determinism.test_deterministic_step_runs_under_an_external_capture(test, device)
+    test.assertEqual([solver.solve_mode for solver in built], ["scene", "scene"])
+    for solver in built:
+        test.assertGreater(solver.color_statistics()["two_sided"], 0)
+
+
+class _CudaDriver:
+    """The CUDA driver calls of another framework that captures Warp's stream itself (``libcuda.so.1``, Linux)."""
+
+    GLOBAL, THREAD_LOCAL, RELAXED = 0, 1, 2
+    """``CUstreamCaptureMode``."""
+
+    def __init__(self):
+        self.cuda = ctypes.CDLL("libcuda.so.1")
+        handle = ctypes.c_void_p
+        for name, argtypes in {
+            "cuStreamBeginCapture_v2": [handle, ctypes.c_int],
+            "cuStreamEndCapture": [handle, ctypes.POINTER(handle)],
+            "cuGraphInstantiateWithFlags": [ctypes.POINTER(handle), handle, ctypes.c_ulonglong],
+            "cuGraphLaunch": [handle, handle],
+            "cuGraphExecDestroy": [handle],
+            "cuGraphDestroy": [handle],
+            "cuMemAlloc_v2": [ctypes.POINTER(ctypes.c_ulonglong), ctypes.c_size_t],
+            "cuMemFree_v2": [ctypes.c_ulonglong],
+            "cuEventCreate": [ctypes.POINTER(handle), ctypes.c_uint],
+            "cuEventRecord": [handle, handle],
+            "cuEventDestroy_v2": [handle],
+            "cuStreamWaitEvent": [handle, handle, ctypes.c_uint],
+        }.items():
+            getattr(self.cuda, name).argtypes = argtypes
+
+    def begin(self, stream: wp.Stream, mode: int) -> None:
+        if self.cuda.cuStreamBeginCapture_v2(ctypes.c_void_p(stream.cuda_stream), mode) != 0:
+            raise RuntimeError("cuStreamBeginCapture failed")
+
+    def end(self, stream: wp.Stream) -> tuple[int, ctypes.c_void_p]:
+        """End the capture: the driver's result and the graph (``None`` handle when it failed)."""
+        graph = ctypes.c_void_p()
+        return self.cuda.cuStreamEndCapture(ctypes.c_void_p(stream.cuda_stream), ctypes.byref(graph)), graph
+
+    def unsafe_call(self) -> int:
+        """A call that a GLOBAL or THREAD_LOCAL capture of this thread forbids (``cuMemAlloc``): the driver's result."""
+        pointer = ctypes.c_ulonglong()
+        result = self.cuda.cuMemAlloc_v2(ctypes.byref(pointer), 1024)
+        if result == 0:
+            self.cuda.cuMemFree_v2(pointer)
+        return result
+
+    def replay(self, graph: ctypes.c_void_p, stream: wp.Stream) -> None:
+        """Instantiate ``graph``, launch it once on ``stream``, wait for it and release both."""
+        executable = ctypes.c_void_p()
+        try:
+            if self.cuda.cuGraphInstantiateWithFlags(ctypes.byref(executable), graph, 0) != 0:
+                raise RuntimeError("cuGraphInstantiateWithFlags failed")
+            if self.cuda.cuGraphLaunch(executable, ctypes.c_void_p(stream.cuda_stream)) != 0:
+                raise RuntimeError("cuGraphLaunch failed")
+            wp.synchronize_stream(stream)
+        finally:
+            if executable.value:
+                self.cuda.cuGraphExecDestroy(executable)
+            self.cuda.cuGraphDestroy(graph)
+
+    def fork(self, origin: wp.Stream, stream: wp.Stream) -> None:
+        """Make ``stream`` wait on ``origin``'s work so far (an event fork into ``origin``'s capture)."""
+        event = ctypes.c_void_p()
+        self.cuda.cuEventCreate(ctypes.byref(event), 0)
+        self.cuda.cuEventRecord(event, ctypes.c_void_p(origin.cuda_stream))
+        self.cuda.cuStreamWaitEvent(ctypes.c_void_p(stream.cuda_stream), event, 0)
+        self.cuda.cuEventDestroy_v2(event)
+
+
+class _ForeignCaptureRun(NamedTuple):
+    """``test_determinism``'s contact scene under the scene mode, ready to step under another framework's capture."""
+
+    solver: SolverSteel
+    state: newton.State
+    step: Callable[[], None]
+    """One scene step of ``state`` into itself (through the output state)."""
+
+
+def _foreign_capture_run(device) -> _ForeignCaptureRun:
+    model = determinism._build_contact_scene(device, joint_friction=0.4)
+    options = {"deterministic": determinism.RUN_TO_RUN, **determinism.FRICTION_OPTIONS}
+    solver = SolverSteel(model, solve_mode="scene", **options)
+    pipeline = determinism._make_pipeline(model, determinism.FRICTION_OPTIONS)
+    contacts = pipeline.contacts()
+    state_0, state_1, control = model.state(), model.state(), model.control()
+    newton.eval_fk(model, model.joint_q, model.joint_qd, state_0)
+    determinism._actuate(model, control)
+    pipeline.collide(state_0, contacts)
+
+    def step():
+        solver.step(state_0, state_1, control, contacts, 0.005)
+        for name in ("body_q", "body_qd", "joint_q", "joint_qd"):
+            wp.copy(getattr(state_0, name), getattr(state_1, name))
+
+    return _ForeignCaptureRun(solver, state_0, step)
+
+
+def _assert_replayed(test, run: _ForeignCaptureRun, before: np.ndarray) -> None:
+    """The replay moved the scene and kept it finite."""
+    after = run.state.joint_q.numpy()
+    test.assertTrue(np.all(np.isfinite(after)))
+    test.assertFalse(np.array_equal(after, before))
+
+
+def test_scene_step_hands_a_foreign_capture_back_relaxed(test, device):
+    """Hand a capture another framework began back ``RELAXED``, so no call its own mode allowed invalidates it.
+
+    A driver capture of a scene step on Warp's stream, begun in each CUDA capture mode: the step registers it with Warp
+    as ``RELAXED``, so a ``cuMemAlloc`` after the step, which only a ``RELAXED`` capture allows, succeeds, and the
+    capture ends, instantiates and replays. A ``RELAXED`` capture comes back ``RELAXED``; a ``GLOBAL`` or
+    ``THREAD_LOCAL`` one comes back looser, as ``SolverSteel.step`` documents.
+    """
+    if not sys.platform.startswith("linux"):
+        test.skipTest("the CUDA driver capture loads libcuda.so.1")
+    driver = _CudaDriver()
+    run = _foreign_capture_run(device)
+    stream = wp.get_stream(device)
+    for mode in (driver.GLOBAL, driver.THREAD_LOCAL, driver.RELAXED):
+        with test.subTest(mode=mode):
+            before = run.state.joint_q.numpy()
+            driver.begin(stream, mode)
+            try:
+                run.step()
+                test.assertTrue(stream.is_capturing)
+                test.assertIsNone(device.captures.get(stream))
+                unsafe = driver.unsafe_call()
+            finally:
+                ended, graph = driver.end(stream)
+            test.assertEqual((unsafe, ended), (0, 0))
+            driver.replay(graph, stream)
+            _assert_replayed(test, run, before)
+    test.assertGreater(run.solver.color_statistics()["two_sided"], 0)
+
+
+def test_scene_step_leaves_a_registered_foreign_capture_alone(test, device):
+    """Leave a capture its framework registered with Warp itself as it is, in the mode the framework gave.
+
+    A ``GLOBAL`` driver capture that the framework registers with ``wp.capture_begin(external=True,
+    capture_mode=GLOBAL)``: the step registers nothing (Warp's registration is the framework's, before and after), the
+    framework ends its registration and its capture, and the graph replays.
+    """
+    if not sys.platform.startswith("linux"):
+        test.skipTest("the CUDA driver capture loads libcuda.so.1")
+    driver = _CudaDriver()
+    run = _foreign_capture_run(device)
+    stream = wp.get_stream(device)
+    before = run.state.joint_q.numpy()
+    driver.begin(stream, driver.GLOBAL)
+    try:
+        wp.capture_begin(stream=stream, external=True, capture_mode=wp.CaptureMode.GLOBAL)
+        registered = device.captures.get(stream)
+        with mock.patch.object(wp, "capture_begin", wraps=wp.capture_begin) as begin:
+            run.step()
+        test.assertEqual(begin.call_count, 0)
+        test.assertIs(device.captures.get(stream), registered)
+        wp.capture_end(stream=stream)
+    finally:
+        ended, graph = driver.end(stream)
+    test.assertEqual(ended, 0)
+    driver.replay(graph, stream)
+    _assert_replayed(test, run, before)
+
+
+def test_scene_step_names_a_capture_begun_on_another_stream(test, device):
+    """Raise a ``RuntimeError`` naming the cause when Warp's stream joined a capture begun on another stream.
+
+    The framework begins its capture on its own stream and forks Warp's stream into it with an event: a conditional
+    graph node can pause a capture only on the stream that began it, so the step raises, and the capture is lost to
+    its framework as it would be under any capture-unsafe call. Warp keeps no record of the capture afterwards: an
+    array freed later is released at once.
+    """
+    if not sys.platform.startswith("linux"):
+        test.skipTest("the CUDA driver capture loads libcuda.so.1")
+    driver = _CudaDriver()
+    run = _foreign_capture_run(device)
+    stream, origin = wp.get_stream(device), wp.Stream(device)
+    driver.begin(origin, driver.THREAD_LOCAL)
+    try:
+        driver.fork(origin, stream)
+        with test.assertRaisesRegex(RuntimeError, "capture that began on another stream"):
+            run.step()
+    finally:
+        driver.fork(stream, origin)
+        ended, graph = driver.end(origin)
+        if ended == 0:
+            driver.cuda.cuGraphDestroy(graph)
+    test.assertNotEqual(ended, 0)
+    test.assertIsNone(device.captures.get(stream))
+    if device.is_mempool_enabled:
+        held = wp.zeros(1 << 24, dtype=wp.float32, device=device)
+        wp.synchronize_device(device)
+        used = wp.get_mempool_used_mem_current(device)
+        del held
+        wp.synchronize_device(device)
+        test.assertLess(wp.get_mempool_used_mem_current(device), used)
+
+
 PARENT_WRENCH_STEPS = 60
 """Steps of :func:`test_parent_wrench_matches_steel_under_scene`, enough for the boxes to settle."""
 
@@ -1416,6 +1627,10 @@ for _fn in (
     test_scene_mode_steps_without_iterations,  # graph capture
     test_scene_mode_reads_notified_restitution,  # compared with Steel on CUDA; test_scene_cpu rebounds on the CPU
     test_scene_status_reports_through_steel_api,  # graph capture, and contact torsion, which Steel refuses on the CPU
+    test_scene_step_runs_under_an_external_capture,  # graph capture
+    test_scene_step_hands_a_foreign_capture_back_relaxed,  # graph capture
+    test_scene_step_leaves_a_registered_foreign_capture_alone,  # graph capture
+    test_scene_step_names_a_capture_begun_on_another_stream,  # graph capture
 ):
     add_function_test(TestSteelSceneMode, _fn.__name__, _fn, devices=get_cuda_test_devices())
 

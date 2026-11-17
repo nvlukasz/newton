@@ -140,7 +140,9 @@ docstring names; none modifies Steel's state beyond the ``_scene_*`` attributes 
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import ctypes
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from typing import Literal
@@ -4211,6 +4213,63 @@ def _contact_row_arguments(solver, state_in, state_aug, contacts, contact_geomet
         "world_target_velocity": solver._target_velocity,
         "world_row_rebound_velocity": solver._row_rebound_velocity,
     }
+
+
+def _drop_warp_capture_record(device, stream) -> None:
+    """Drop Warp's own record of a capture registered with ``wp.capture_begin(external=True)`` after a failed
+    conditional node: ``wp.capture_pause`` unregisters the capture before it pauses, so a pause that fails leaves the
+    record of Warp's runtime behind, which would keep Warp deferring every later release of the process. Ending an
+    external capture in Warp's runtime drops the record and leaves the CUDA capture to the framework that began it."""
+    graph = ctypes.c_void_p()
+    wp._src.context.runtime.core.wp_cuda_graph_end_capture(device.context, stream.cuda_stream, ctypes.byref(graph))
+
+
+@contextmanager
+def capture_known_to_warp(device) -> Iterator[None]:
+    """Register with Warp, for the block, a CUDA graph capture that another framework began on Warp's current stream.
+
+    The scene's step builds conditional graph nodes (``wp.capture_if``, ``wp.capture_while``) and its unit build
+    scans with a temporary allocation (``wp.utils.array_scan``); both need a capture Warp knows. Under a capture
+    begun through the CUDA driver alone, as another framework begins one, ``wp.capture_if`` and ``wp.capture_while``
+    would run eagerly and read their condition back on the host, and the scan's allocation would invalidate the
+    capture. ``wp.capture_begin(external=True)`` lets Warp record into that capture, and the block's end hands it back
+    still capturing. A conditional node pauses the capture and resumes it in the mode it was registered with, and the
+    CUDA API does not report the mode the other framework began it in, so it is registered ``RELAXED``: no call the
+    framework's own mode allowed can invalidate it after the step. A caller that needs its capture back in its own
+    mode registers it first, ``wp.capture_begin(stream=..., external=True, capture_mode=...)``, and ends that with
+    ``wp.capture_end(stream=...)`` after the step; a capture Warp knows, no capture, or a CPU device: nothing to do.
+
+    Raises:
+        RuntimeError: If Warp's stream joined a capture begun on another stream (an event fork): a conditional node
+            can pause a capture only on the stream that began it.
+    """
+    stream = wp.get_stream(device) if device.is_cuda else None
+    foreign = stream is not None and stream.is_capturing and device.captures.get(stream) is None
+    if not foreign:
+        yield
+        return
+    wp.capture_begin(stream=stream, external=True, capture_mode=wp.CaptureMode.RELAXED)
+    try:
+        yield
+    except BaseException as error:
+        # The block's error is the one to report, also when it invalidated the capture Warp was handed.
+        if device.captures.get(stream) is not None:
+            try:
+                wp.capture_end(stream=stream)
+            except RuntimeError:
+                pass
+        else:
+            _drop_warp_capture_record(device, stream)
+        # CUDA error 903 (cudaErrorStreamCaptureUnmatched): the pause of a capture on a stream that did not begin it.
+        if isinstance(error, RuntimeError) and "error 903" in str(error):
+            raise RuntimeError(
+                "SolverSteel(solve_mode='scene') steps under a CUDA graph capture that began on another stream and "
+                "that Warp's stream joined: the scene's conditional graph nodes pause and resume the capture, which "
+                "only the stream that began it can do. Step the solver on that stream, or capture with Warp "
+                "(wp.ScopedCapture)."
+            ) from error
+        raise
+    wp.capture_end(stream=stream)
 
 
 def build_scene_rows(solver, state_in, state_aug, contacts, dt: float, control=None) -> None:

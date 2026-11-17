@@ -215,6 +215,7 @@ from .scene_solve import (
     SCENE_FREE_SUPPORT,
     SceneSolve,
     build_scene_rows,
+    capture_known_to_warp,
     factor_body_masks,
     factor_bytes_per_warp,
     plan_scene_groups,
@@ -7497,6 +7498,14 @@ class SolverSteel(SolverBase, CouplingInterface):
     ) -> State:
         """Advance the simulation by one time step.
 
+        Under ``solve_mode="scene"`` a CUDA graph capture of the step may be Warp's (:class:`warp.ScopedCapture`) or
+        another framework's on Warp's current stream. The scene's conditional graph nodes need Warp to know the
+        capture, so the step registers a capture Warp did not begin with Warp for its duration
+        (``wp.capture_begin(external=True)``) and hands it back still capturing, in ``RELAXED`` mode whatever mode it
+        began in (the CUDA API does not report that mode). A caller that needs its capture's own mode registers it with
+        Warp first, ``wp.capture_begin(stream=..., external=True, capture_mode=...)``, which the step leaves as it is,
+        and ends that registration with ``wp.capture_end(stream=...)`` after the step.
+
         Args:
             state_in: Input state. Its maximal coordinates (``body_q``) are refreshed from
                 ``joint_q`` by forward kinematics during the step; with ``reuse_kinematics`` on, a
@@ -7516,6 +7525,11 @@ class SolverSteel(SolverBase, CouplingInterface):
 
         Returns:
             ``state_out``.
+
+        Raises:
+            RuntimeError: Under ``solve_mode="scene"``, if Warp's stream joined a CUDA graph capture that began on
+                another stream: the scene's conditional graph nodes pause and resume a capture on the stream that began
+                it.
         """
         if self._contact_compliance:
             if getattr(self, "_scene_mode", False):
@@ -7547,7 +7561,12 @@ class SolverSteel(SolverBase, CouplingInterface):
         if observables is not None and observables.is_requested(SolverBase.ObservableKind.BODY_PARENT_F):
             body_parent_f = observables.body_parent_f
         try:
-            self._advance(state_in, state_out, control, contacts, dt, body_parent_f)
+            if self._scene_mode:
+                # The scene's conditional graph nodes need a capture Warp knows, also one another framework began.
+                with capture_known_to_warp(self.model.device):
+                    self._advance(state_in, state_out, control, contacts, dt, body_parent_f)
+            else:
+                self._advance(state_in, state_out, control, contacts, dt, body_parent_f)
         except BaseException:
             if self._double_buffer_selected:
                 self._double_buffer_selected = False
