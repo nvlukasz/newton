@@ -7532,15 +7532,8 @@ class SolverSteel(SolverBase, CouplingInterface):
                 it.
         """
         if self._contact_compliance:
-            if getattr(self, "_scene_mode", False):
-                # The scene builds its rows without Steel's stage-4 compliance checks: the host-side ones (Steel's
-                # start_step, which reads no device memory, so the step stays capturable) run here, before any stage
-                # can launch work; the step's data is checked on the device as its rows are prepared. (getattr: Steel's
-                # guard test steps a stand-in without the mode's attributes.)
-                _scene_compliance.start_scene_step(self, contacts, dt)
-            else:
-                # Reject unsupported state before any stage can launch work.
-                _contact_compliance.validate_step(self)
+            # Reject unsupported state before any stage can launch work.
+            _contact_compliance.validate_step(self)
             # The compliant contact law is validated on unreduced contacts only.
             self._require_unreduced_contacts(
                 contacts, supports_body_pair_reduced_contacts=False, configuration="contact_compliance=True"
@@ -7557,6 +7550,12 @@ class SolverSteel(SolverBase, CouplingInterface):
                 "contact_warmstart=True matches contacts across steps and requires a Contacts buffer created "
                 'with contact matching; create the CollisionPipeline with contact_matching="latest".'
             )
+        if self._contact_compliance and self._scene_mode:
+            # The scene builds its rows without Steel's stage-4 compliance checks: the host-side ones (Steel's
+            # start_step, which reads no device memory, so the step stays capturable) run here, after every host check
+            # of Steel's step, as Steel's stage 4 runs them, and before any stage can launch work; the step's data is
+            # checked on the device as its rows are prepared.
+            _scene_compliance.start_scene_step(self, contacts, dt)
         body_parent_f = state_out.body_parent_f
         if observables is not None and observables.is_requested(SolverBase.ObservableKind.BODY_PARENT_F):
             body_parent_f = observables.body_parent_f

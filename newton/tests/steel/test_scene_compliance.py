@@ -36,7 +36,8 @@ from newton._src.solvers.steel.kernels import (
 from newton._src.solvers.steel.scene_pgs import RANGE_TWO_SIDED
 from newton.tests.steel._compliance_reference import solve_reference
 from newton.tests.steel._fixtures import DT, _build_contact_scene, _set_box_velocities, run_fixture
-from newton.tests.steel._scene_fixtures import _humanoids, _Run
+from newton.tests.steel._scene_fixtures import CARRIED_MODES, _humanoids, _Run
+from newton.tests.steel.test_contact_reduction import _foot_model, _make_pipeline
 from newton.tests.steel.test_scene_features import TRACK_ROWS, _assert_phases_match_serial_oracle, _track_steel
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
@@ -680,6 +681,41 @@ def test_scene_step_checks_keep_steel_messages(test, device):
             assert_same_message(contacts_with(short=name), DT)
 
 
+def test_scene_step_rejects_in_steels_order(test, device):
+    """Raise Steel's first error, word for word, for a compliant step's buffer that fails several of Steel's checks.
+
+    The compliant step's own input checks (``start_step``: the per-contact material arrays, ``dt``) run after every
+    host check of Steel's step under both modes, so a buffer that also fails one of those raises that check's error:
+    ``test_contact_reduction``'s foot on the ground with its contacts reduced by body pair (Steel's reduced-contact
+    rejection), and a buffer larger than the solver's contact capacity (Steel's capacity mismatch), both without the
+    material arrays.
+    """
+    with wp.ScopedDevice(device):
+        model = _foot_model()
+        pipeline = _make_pipeline(model, True)
+    reduced = pipeline.contacts()
+    state_0, state_1 = model.state(), model.state()
+    pipeline.collide(state_0, reduced)
+    test.assertTrue(reduced.rigid_contact_body_pair_reduced)
+    test.assertIsNone(reduced.rigid_contact_stiffness)
+    solvers = {
+        mode: newton.solvers.SolverSteel(model, solve_mode=mode, contact_compliance=True, friction_anchor_beta=0.0)
+        for mode in CARRIED_MODES
+    }
+    oversized = newton.Contacts(solvers["serial"]._max_contacts_alloc + 1, 0, device=model.device)
+    test.assertIsNone(oversized.rigid_contact_stiffness)
+    cases = {"reduced contacts": (reduced, "contact_compliance=True"), "oversized buffer": (oversized, "capacity")}
+    for case, (contacts, fragment) in cases.items():
+        messages = {}
+        for mode, solver in solvers.items():
+            with test.subTest(case=case, solve_mode=mode), test.assertRaises(ValueError) as raised:
+                solver.step(state_0, state_1, model.control(), contacts, DT)
+            messages[mode] = str(raised.exception)
+        with test.subTest(case=case):
+            test.assertIn(fragment, messages["serial"])
+            test.assertEqual(messages["scene"], messages["serial"])
+
+
 def test_compliance_matches_the_serial_oracle(test, device):
     """Solve compliant rows in the phased sweep exactly as one thread walking the rows does, in every phase order.
 
@@ -720,6 +756,7 @@ for _fn in (
     test_compliant_friction_matches_steel_bitwise,  # Steel's compliance
     test_compliance_counts_match_steel,  # Steel's compliance
     test_scene_step_checks_keep_steel_messages,  # Steel's compliance
+    test_scene_step_rejects_in_steels_order,  # Steel's compliance
     test_compliance_matches_the_serial_oracle,  # the phases; the CPU sweeps the serial oracle alone
 ):
     add_function_test(TestSteelSceneCompliance, _fn.__name__, _fn, devices=get_cuda_test_devices())
