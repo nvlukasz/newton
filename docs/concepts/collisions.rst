@@ -769,20 +769,14 @@ Broad Phase and Shape Compatibility
 
 The ``"aggregate"`` mode keeps the uniform grid only where it should pay and otherwise sweeps the aggregate
 boxes with SAP. By default :meth:`~geometry.BroadPhaseAggregate.from_model` builds SAP when fewer than 2,048
-worlds hold aggregates and there are fewer than 32,768 aggregates (the grid's main stage costs about 0.1-0.25 ms
-at every size); and, in any number of worlds, when one long aggregate would make the grid's cells too large
-(with a warning), or when the aggregates crowd the cells at the initial pose: more than 90 on average share an
-aggregate's cell, itself included. The thresholds are judgments bracketed by scenes measured on an NVIDIA L40
-at their initial pose, not measured optima. In one world, piled humanoids favour the grid
-from about 28,400 aggregates while a sparse crowd favours SAP up to at least 65,536 (24 % and 8 % slower on the
-grid at 32,768 and 65,536; the latter within the 10 % the grid default was adopted under). In worlds of one
-humanoid, SAP sorts every world's segment, 0.289 ms of main stage at 4,096 worlds and 4.29 ms at 65,536 against
-the grid's 0.15 ms; nothing was measured between 1 and 4,096 worlds. The grid-side scenes read an occupancy of
-at most 18.9 and the chains of long articulations at least 428, with nothing measured between; the chains fall
-below the size threshold too, so the occupancy guard decides only for crowded scenes above it or in many worlds.
-:meth:`~geometry.BroadPhaseAggregate.statistics` reports the outcome as ``main_level`` and ``main_fallback``
-(``"size"``, ``"cell"`` or ``"occupancy"``), with ``aggregate_worlds`` and ``grid_occupancy``. An explicit
-``main="grid"`` or ``main="sap"`` in :meth:`~geometry.BroadPhaseAggregate.from_model` skips these rules.
+worlds hold aggregates and there are fewer than 32,768 aggregates, since the grid's main stage has a fixed cost
+that a small scene does not repay; and, in any number of worlds, when one long aggregate would make the grid's
+cells too large (with a warning), or when the aggregates crowd the cells at the initial pose: more than 90 on
+average share an aggregate's cell, itself included. These thresholds are heuristics rather than tuned optima;
+for a scene near one of them, time both main levels. :meth:`~geometry.BroadPhaseAggregate.statistics` reports
+the outcome as ``main_level`` and ``main_fallback`` (``"size"``, ``"cell"`` or ``"occupancy"``), with
+``aggregate_worlds`` and ``grid_occupancy``. An explicit ``main="grid"`` or ``main="sap"`` in
+:meth:`~geometry.BroadPhaseAggregate.from_model` skips these rules.
 
 :meth:`ModelBuilder.finalize` computes :attr:`Model.shape_contact_pair_count`
 without enumerating pairs. The explicit pair array,
