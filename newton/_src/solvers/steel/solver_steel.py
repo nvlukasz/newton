@@ -1616,9 +1616,12 @@ class SolverSteel(SolverBase, CouplingInterface):
         every unit of a color at once (phase B), and ends with the late rows in Steel's order, the spin rows of
         contact torsion before the velocity limits. ``scene_phase_order`` sets the order of the two phases on
         the articulations that have a two-sided unit: ``"BA"`` (default), ``"AB"`` or ``"ABA"``; the other
-        articulations run all their iterations first. Two-sided units that the coloring cannot place below its
-        color cap, or within its round cap, take a tail color, which one thread sweeps after the colors, one
-        unit at a time; the first :meth:`scene_statistics` call that finds such units warns once.
+        articulations run all their iterations first. At a fixed iteration count the phase swept last wins where
+        the two conflict: ``"BA"`` keeps stacked and leaning bodies from creeping, and ``"AB"`` holds grasps and
+        other contacts squeezed by mimic or loop-closure rows (see ``scene_phase_order``). Two-sided units that
+        the coloring cannot place below its color cap, or within its round cap, take a tail color, which one
+        thread sweeps after the colors, one unit at a time; the first :meth:`scene_statistics` call that finds
+        such units warns once.
 
         The row budgets are pooled. The scene's row capacity is ``articulation_constraint_max``, plus
         ``free_body_constraint_max`` when the model has free bodies, summed over the model's worlds (global
@@ -2635,12 +2638,18 @@ class SolverSteel(SolverBase, CouplingInterface):
                 themselves), ``"B"`` one sweep of the units joining two articulations, color by color.
                 ``"BA"`` (default) runs B then A, ``"AB"`` A then B, and ``"ABA"`` A, B and A again. In every
                 order the late rows (contact torsion's spin rows, then velocity limits) end the iteration, and
-                the articulations without such a unit run all their iterations first. ``"BA"``
-                ends each iteration with a body's ground contacts and limits corrected after the pushes it
-                received, which keeps bodies that lean on each other from creeping.
-                ``row_schedule="phased"`` runs ``"AB"`` whatever this option says, and the option still
-                reads back as requested. Another value raises :class:`ValueError` under the mode; the other
-                modes ignore the option.
+                the articulations without such a unit run all their iterations first. At a fixed iteration
+                count the phase swept last wins where the two conflict. ``"BA"`` ends each iteration with a body's
+                ground contacts and limits corrected after the pushes it received, which keeps bodies that lean on
+                each other from creeping, but it also ends with an articulation's mimic, loop-closure and limit rows,
+                so a grasp whose pads those rows hold can let a squeezed object slip: a linkage gripper (pads on
+                passive mimic linkages, lifting a box) drops the box at up to 64 iterations under ``"BA"`` and holds
+                it from 128, while ``"AB"`` holds it from 16, as Steel's serial solve does. Use ``"AB"`` for grasps
+                and tight closures at low iteration counts, and ``"BA"`` for stacked or leaning bodies, where
+                ``"AB"`` lets a loaded body creep. ``"BA"`` is the default, for the crowds of articulations in
+                contact that the mode is built for. ``row_schedule="phased"`` runs ``"AB"`` whatever this option
+                says, and the option still reads back as requested. Another value raises :class:`ValueError` under
+                the mode; the other modes ignore the option.
             scene_unit_max: Unit capacity of ``solve_mode="scene"``: the most units (an articulation's
                 internal rows, its velocity-limit rows, a contact) one step holds. ``None`` (default) sizes it
                 from the scene's row capacity: one contact unit per three rows (per row when a contact may

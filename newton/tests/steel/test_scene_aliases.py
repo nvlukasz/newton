@@ -590,6 +590,12 @@ for _fn in (
 PROPAGATION = {"articulated_contact_response": "propagation"}
 """The propagation response as Steel's tests request it; the scene runs it as its immediate response."""
 
+GRIPPER_SLIP = 0.1
+"""Bound [m] on the linkage gripper's box slip above which the box is lost from the grasp: half the 0.2 m lift."""
+
+GRIPPER_HOLD = 0.02
+"""Bound [m] on the linkage gripper's box slip below which the grasp holds the box."""
+
 
 def test_global_kinematic_floor_moves_articulated_bodies_under_scene(test, device):
     """Solve articulated contacts against a global kinematic floor in every world, under the scene as under Steel.
@@ -761,55 +767,92 @@ def test_regularized_feet_reach_immediate_equilibrium_under_scene(test, device):
                 test.assertAlmostEqual(float(qd[0]), float(expected[0]), delta=1.0e-4)
 
 
-def test_linkage_gripper_holds_lifted_box_under_scene(test, device):
-    """Hold a box through a lift with pads whose mobility is their own passive linkage, as Steel does.
+def _gripper_lift(model, palm: int, box: int, iterations: int, **options) -> tuple[float, float]:
+    """Run ``test_propagation``'s linkage gripper lift with a solver of ``options`` at ``iterations``.
 
-    ``test_propagation``'s linkage gripper with the propagation response requested, 64 iterations, replayed from one
-    captured pair of steps: its driver closes, then lifts the box 0.2 m along a smoothstep and holds; under each mode
-    the palm rises more than 15 cm and the box's drop below it changes by less than 1 cm from the grasp to the end.
-    The scene runs the phase order ``"AB"``: the gripper's mimic rows (an internal unit, phase A) and the pad contacts
-    (two-sided units, phase B) conflict at 64 iterations and the phase swept last wins, so the contacts get the last
-    word, as in Steel's order of its internal rows and contacts.
+    Replayed from one captured pair of steps, as Steel's test runs it: the driver closes, then lifts the box 0.2 m
+    along a smoothstep and holds. Returns the palm's rise [m] and the change of the box's drop below the palm [m] from
+    the grasp (tick 39) to the end (tick 109), the box's slip.
     """
-    model, palm, box = steel_propagation._linkage_gripper_model(device)
 
     def box_below_palm(state):
         body_q = state.body_q.numpy()
         return float(body_q[palm, 2] - body_q[box, 2])
 
+    solver = SolverSteel(
+        model, iterations=iterations, friction_anchor_beta=0.0, contact_friction_gap_max=0.001, **PROPAGATION, **options
+    )
+    pipeline = newton.CollisionPipeline(model)
+    contacts = pipeline.contacts()
+    state, output, control = model.state(), model.state(), model.control()
+    newton.eval_fk(model, model.joint_q, model.joint_qd, state)
+    with wp.ScopedCapture(device=model.device) as capture:
+        pipeline.collide(state, contacts)
+        for source, target in ((state, output), (output, state)) * 2:
+            source.clear_forces()
+            solver.step(source, target, control, contacts, 1.0 / 800.0)
+    joint_target = model.joint_target_q.numpy()
+    joint_target[2] = 0.8
+    grasped = None
+    palm_start = float(state.body_q.numpy()[palm, 2])
+    for tick in range(110):
+        lift = min(max(tick - 40, 0) / 50.0, 1.0)
+        joint_target[0] = 0.2 * lift * lift * (3.0 - 2.0 * lift)
+        control.joint_target_q.assign(joint_target)
+        wp.capture_launch(capture.graph)
+        if tick == 39:
+            grasped = box_below_palm(state)
+    return float(state.body_q.numpy()[palm, 2]) - palm_start, abs(grasped - box_below_palm(state))
+
+
+def test_linkage_gripper_holds_lifted_box_under_scene(test, device):
+    """Hold a box through a lift with pads whose mobility is their own passive linkage, as Steel does.
+
+    ``test_propagation``'s linkage gripper with the propagation response requested, 64 iterations, replayed from one
+    captured pair of steps (:func:`_gripper_lift`): its driver closes, then lifts the box 0.2 m along a smoothstep and
+    holds; under each mode the palm rises more than 15 cm and the box's drop below it changes by less than 1 cm from
+    the grasp to the end. The scene runs the phase order ``"AB"``: the gripper's mimic rows (an internal unit, phase
+    A) and the pad contacts (two-sided units, phase B) conflict at 64 iterations and the phase swept last wins, so the
+    contacts get the last word, as in Steel's order of its internal rows and contacts. The default order ``"BA"``
+    drops the box at 64 iterations (:func:`test_linkage_gripper_default_order_slips_under_scene`).
+    """
+    model, palm, box = steel_propagation._linkage_gripper_model(device)
     for mode, options in (("scene", {"scene_phase_order": "AB"}), ("serial", {})):
         with test.subTest(solve_mode=mode):
-            solver = SolverSteel(
-                model,
-                iterations=64,
-                friction_anchor_beta=0.0,
-                contact_friction_gap_max=0.001,
-                solve_mode=mode,
-                **PROPAGATION,
-                **options,
-            )
-            pipeline = newton.CollisionPipeline(model)
-            contacts = pipeline.contacts()
-            state, output, control = model.state(), model.state(), model.control()
-            newton.eval_fk(model, model.joint_q, model.joint_qd, state)
-            with wp.ScopedCapture(device=model.device) as capture:
-                pipeline.collide(state, contacts)
-                for source, target in ((state, output), (output, state)) * 2:
-                    source.clear_forces()
-                    solver.step(source, target, control, contacts, 1.0 / 800.0)
-            joint_target = model.joint_target_q.numpy()
-            joint_target[2] = 0.8
-            grasped = None
-            palm_start = float(state.body_q.numpy()[palm, 2])
-            for tick in range(110):
-                lift = min(max(tick - 40, 0) / 50.0, 1.0)
-                joint_target[0] = 0.2 * lift * lift * (3.0 - 2.0 * lift)
-                control.joint_target_q.assign(joint_target)
-                wp.capture_launch(capture.graph)
-                if tick == 39:
-                    grasped = box_below_palm(state)
-            test.assertGreater(float(state.body_q.numpy()[palm, 2]) - palm_start, 0.15, "the palm did not lift")
-            test.assertLess(abs(grasped - box_below_palm(state)), 0.01)
+            rise, slip = _gripper_lift(model, palm, box, 64, solve_mode=mode, **options)
+            test.assertGreater(rise, 0.15, "the palm did not lift")
+            test.assertLess(slip, 0.01)
+
+
+def test_linkage_gripper_default_order_slips_under_scene(test, device):
+    """Pin the default phase order's linkage gripper: the box is lost at up to 64 iterations and held from 128.
+
+    ``test_propagation``'s linkage gripper lift (:func:`_gripper_lift`) with the propagation response requested, under
+    the scene with ``scene_phase_order`` at its default, ``"BA"``. The pads ride passive mimic linkages, rows of the
+    gripper's internal unit (phase A), and squeeze the box through two-sided units (phase B); ``"BA"`` sweeps phase A
+    last, so at a fixed iteration count the mimic rows win where they conflict with the pad contacts. Measured on an
+    NVIDIA RTX 5090 Laptop GPU (the contacts are not deterministic, so a value varies by a few mm from run to run):
+    under ``"BA"`` the box slips 0.19 m at 4 to 64 iterations, the whole lift, 0.04 m at 96 and 0.011 m at 128; under
+    ``"AB"`` 0.005 m at 16, and under Steel's serial solve 0.004 to 0.008 m at 16.
+
+    Documentation of the trade-off (``scene_phase_order``'s documentation states it): the default reads back ``"BA"``,
+    loses the box (a slip above :data:`GRIPPER_SLIP`) at 16, 32 and 64 iterations and holds it (below
+    :data:`GRIPPER_HOLD`) at 128, while ``"AB"`` holds it at 16; the palm lifts in every run. A change of the default
+    order, or one that lets ``"BA"`` hold the grasp at fewer iterations, fails here and should update these numbers
+    and that documentation.
+    """
+    model, palm, box = steel_propagation._linkage_gripper_model(device)
+    test.assertEqual(SolverSteel(model, solve_mode="scene", **PROPAGATION).scene_phase_order, "BA")
+    runs = (("BA", 16, False), ("BA", 32, False), ("BA", 64, False), ("BA", 128, True), ("AB", 16, True))
+    for order, iterations, held in runs:
+        with test.subTest(scene_phase_order=order, iterations=iterations):
+            options = {} if order == "BA" else {"scene_phase_order": order}
+            rise, slip = _gripper_lift(model, palm, box, iterations, solve_mode="scene", **options)
+            test.assertGreater(rise, 0.15, "the palm did not lift")
+            if held:
+                test.assertLess(slip, GRIPPER_HOLD)
+            else:
+                test.assertGreater(slip, GRIPPER_SLIP)
 
 
 def test_colored_result_matches_the_immediate_response_under_scene(test, device):
@@ -926,6 +969,7 @@ for _fn in (
     test_restitution_rebounds_on_propagation_rows_under_scene,
     test_regularized_feet_reach_immediate_equilibrium_under_scene,
     test_linkage_gripper_holds_lifted_box_under_scene,
+    test_linkage_gripper_default_order_slips_under_scene,
     test_colored_result_matches_the_immediate_response_under_scene,
     test_cuda_actual_graph_publication_under_scene,
     test_interleaved_mixed_leaves_and_moving_parents_under_scene,
