@@ -663,12 +663,15 @@ def _hinge_closed_by(device, closure: str) -> newton.Model:
         "revolute": partial(builder.add_joint_revolute, axis=wp.vec3(0.0, 1.0, 0.0)),
         "fixed": builder.add_joint_fixed,
     }[closure]
-    add_closure(
-        parent=-1,
-        child=link,
-        parent_xform=wp.transform(wp.vec3(0.0, 0.0, 0.4), wp.quat_identity()),
-        child_xform=wp.transform(wp.vec3(0.0, 0.0, -0.1), wp.quat_identity()),
-    )
+    with warnings.catch_warnings():
+        # The closure parallels the hinge on purpose: both join the world and the link.
+        warnings.filterwarnings("ignore", message=".*Parallel joints between the same pair", category=NewtonWarning)
+        add_closure(
+            parent=-1,
+            child=link,
+            parent_xform=wp.transform(wp.vec3(0.0, 0.0, 0.4), wp.quat_identity()),
+            child_xform=wp.transform(wp.vec3(0.0, 0.0, -0.1), wp.quat_identity()),
+        )
     return builder.finalize(device=device)
 
 
