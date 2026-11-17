@@ -579,8 +579,10 @@ def test_global_kinematic_floor_moves_articulated_bodies_under_scene(test, devic
                 contacts = pipeline.contacts()
                 pipeline.collide(state_0, contacts)
                 solver.step(state_0, state_1, model.control(), contacts, 0.01)
-                test.assertGreater(int(contacts.rigid_contact_count.numpy()[0]), 0)
-                test.assertEqual(contact_routes(solver, contacts), {route})
+                count = int(contacts.rigid_contact_count.numpy()[0])
+                test.assertGreater(count, 0)
+                # Every contact on the route, none dropped (-1), as Steel's own test requires.
+                np.testing.assert_array_equal(solver._contact_path.numpy()[:count], route)
                 test.assertFalse(solver.constraint_overflow.numpy().any())
                 results[(floor, floor_velocity)] = state_1.body_qd.numpy()[:4]
             static = results[("static", 0.0)]
