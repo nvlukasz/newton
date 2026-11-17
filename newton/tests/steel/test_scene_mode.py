@@ -1812,9 +1812,13 @@ def _check_in_place_release_under_scene(test, device, **solver_kwargs):
     """``test_articulation.check_in_place_release`` under the scene and under Steel, each held to its checks."""
     for mode in CARRIED_MODES:
         with test.subTest(solve_mode=mode):
-            model, solver, state_0, state_1, control = articulation._four_bar_setup(
-                device, **solver_kwargs, solve_mode=mode
-            )
+            setup = partial(articulation._four_bar_setup, device, **solver_kwargs, solve_mode=mode)
+            if mode == "scene" and solver_kwargs.get("enable_bilateral_preelimination"):
+                # The scene sweeps the closure's plain rows, with Steel's fallback warning.
+                with test.assertWarnsRegex(NewtonWarning, re.escape("does not support solve_mode='scene'")):
+                    model, solver, state_0, state_1, control = setup()
+            else:
+                model, solver, state_0, state_1, control = setup()
             test.assertEqual(solver.solve_mode, mode)
             step = articulation._step_four_bar
             state_0, state_1 = step(solver, state_0, state_1, control, 240)
@@ -1845,7 +1849,7 @@ def test_in_place_release_with_preelimination_under_scene(test, device):
     """Release and re-engage a pre-eliminated four-bar closure through ``Model.joint_enabled``, as Steel does.
 
     :func:`test_in_place_release_under_scene` with ``enable_bilateral_preelimination=True``, which the scene runs as
-    its plain connect rows.
+    its plain connect rows, with Steel's fallback warning.
     """
     _check_in_place_release_under_scene(test, device, enable_bilateral_preelimination=True)
 

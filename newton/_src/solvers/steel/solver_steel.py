@@ -1646,11 +1646,12 @@ class SolverSteel(SolverBase, CouplingInterface):
         the immediate response, which the scene's factor coordinates give exactly, and builds none of the
         propagation response's rows, tree factors or caches, so the ``propagation_*`` options change nothing;
         the row schedules run the scene's own sweep, ``row_schedule="phased"`` in the phase order ``"AB"``
-        whatever ``scene_phase_order`` says; and ``enable_bilateral_preelimination`` sweeps the plain mimic and
-        loop-closure rows. The deprecated ``articulated_contact_response="propagation_colored"`` keeps this
-        mode and maps to ``"propagation"`` with a :class:`~newton.NewtonDeprecationWarning`, where the other
-        modes map it to ``solve_mode="colored"``. The diagonal mass, sparse-diagonal, articulation-local and
-        paired solves of the other modes are not selected.
+        whatever ``scene_phase_order`` says; and ``enable_bilateral_preelimination`` warns at construction, as
+        Steel does where it cannot pre-eliminate, and sweeps the plain mimic and loop-closure rows. The
+        deprecated ``articulated_contact_response="propagation_colored"`` keeps this mode and maps to
+        ``"propagation"`` with a :class:`~newton.NewtonDeprecationWarning`, where the other modes map it to
+        ``solve_mode="colored"``. The diagonal mass, sparse-diagonal, articulation-local and paired solves of the
+        other modes are not selected.
 
         :meth:`scene_statistics` reads back the step's rows (kept, requested, the capacity and the dropped
         rows), units, colors and tail, and the status of contact compliance and contact torsion;
@@ -2100,10 +2101,10 @@ class SolverSteel(SolverBase, CouplingInterface):
                 ``articulated_contact_response="propagation_colored"`` keeps this mode and maps to
                 ``"propagation"``. The row schedules read back as requested and run the scene's own sweep
                 (``"phased"`` in the phase order ``"AB"``), and ``enable_bilateral_preelimination`` reads back
-                as requested while the scene sweeps the plain mimic and connect rows. The diagonal mass,
-                sparse-diagonal, local and paired solves of the other modes are not selected. See
-                :meth:`scene_statistics`, :meth:`color_statistics` and :meth:`time_scene_units` for its
-                read-back.
+                as requested and warns at construction on a model with mimic or connect rows to eliminate, which
+                the scene sweeps as plain rows. The diagonal mass, sparse-diagonal, local and paired solves of the
+                other modes are not selected. See :meth:`scene_statistics`, :meth:`color_statistics` and
+                :meth:`time_scene_units` for its read-back.
 
                 .. deprecated:: 1.8
                     ``"matrix_free"`` maps to ``"serial"``, and ``"split"``, whose dense Delassus
@@ -4662,8 +4663,8 @@ class SolverSteel(SolverBase, CouplingInterface):
         The solver's other options pass, each with its effect under the mode documented with it:
         ``articulated_contact_response="propagation"`` solves with the immediate response
         (``_scene_contact_response``) and the ``propagation_*`` options change nothing; the row schedules run the
-        scene's own sweep (``_scene_phase_order``); ``enable_bilateral_preelimination`` runs the plain mimic and
-        connect rows of the internal units (:meth:`_build_preelimination_plan` builds nothing).
+        scene's own sweep (``_scene_phase_order``); ``enable_bilateral_preelimination`` warns and runs the plain
+        mimic and connect rows of the internal units (:meth:`_build_preelimination_plan` warns and builds nothing).
         """
         if self._scene_unit_max is not None:
             if int(self._scene_unit_max) < 1:
@@ -4691,16 +4692,24 @@ class SolverSteel(SolverBase, CouplingInterface):
         Per articulation that owns bilateral rows this allocates an index into the packed
         per-articulation buffers and the factor scratch. The row slots and the factor are
         rebuilt on the device every step. Unsupported configurations warn and keep the
-        mimic and connect rows in the iterative sweep. The scene mode builds none of it, nor
-        warns: ``enable_bilateral_preelimination=True`` names its plain mimic and connect rows
-        there (the internal units' families).
+        mimic and connect rows in the iterative sweep. The scene mode is one of them: it builds
+        none of it and, on a model with rows to eliminate, warns as the others do; its internal
+        units sweep the plain mimic and connect rows.
         """
         self._preelim_count = 0
         self._preelim_active = False
         include_mimics = self._bilateral_preelimination_include_mimics
-        if not self._enable_bilateral_preelimination or self._scene_mode:
+        if not self._enable_bilateral_preelimination:
             return
         if self._connect_count == 0 and (self._mimic_count == 0 or not include_mimics):
+            return
+        if self._scene_mode:
+            warnings.warn(
+                "SolverSteel: bilateral pre-elimination does not support solve_mode='scene'; pre-elimination is "
+                "disabled and every articulation keeps iterative mimic and connect rows.",
+                NewtonWarning,
+                stacklevel=3,
+            )
             return
         if self._articulated_contact_response != "immediate":
             warnings.warn(

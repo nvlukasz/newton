@@ -18,6 +18,7 @@ and reads back as requested: Steel's pre-elimination (its direct closure solve) 
 
 import re
 import unittest
+import warnings
 from unittest import mock
 
 import numpy as np
@@ -75,6 +76,12 @@ CARRIER_VELOCITY = (np.array([0.3, 0.0, 0.1]), np.array([0.0, 0.0, 1.5]))
 
 PREELIMINATION_ONLY = ("_preelim_art_to_idx", "_preelim_slots", "_preelim_S", "_preelim_LS")
 """Storage of Steel's pre-elimination plan (``_build_preelimination_plan``)."""
+
+SCENE_PREELIMINATION_WARNING = (
+    "SolverSteel: bilateral pre-elimination does not support solve_mode='scene'; pre-elimination is disabled and "
+    "every articulation keeps iterative mimic and connect rows."
+)
+"""Steel's fallback warning of ``enable_bilateral_preelimination=True`` under the scene mode."""
 
 PROPAGATION_ONLY = (
     "_propagation_joint_parent_slot",
@@ -143,7 +150,8 @@ def test_aliases_read_back_as_requested(test, device):
     the immediate response (``_scene_contact_response``), building none of the propagation response's storage, which
     Steel's serial solve builds on the same model; the deprecated ``"propagation_colored"`` keeps the scene mode and
     reads back ``"propagation"``. ``enable_bilateral_preelimination=True`` builds none of Steel's
-    pre-elimination storage, which Steel's serial solve builds on the four-bar.
+    pre-elimination storage, which Steel's serial solve builds on the four-bar, and warns as Steel does where it
+    cannot pre-eliminate (:func:`test_preelimination_warns_under_scene`).
     """
     model = _humanoids(device)
     for schedule, order, effective in (
@@ -179,7 +187,8 @@ def test_aliases_read_back_as_requested(test, device):
         test.assertIsNotNone(alias._scene)
     with test.subTest(enable_bilateral_preelimination=True):
         four_bar = _build_four_bar().finalize(device=device)
-        alias = SolverSteel(four_bar, **BILATERAL, solve_mode="scene", enable_bilateral_preelimination=True)
+        with test.assertWarnsRegex(newton.NewtonWarning, re.escape(SCENE_PREELIMINATION_WARNING)):
+            alias = SolverSteel(four_bar, **BILATERAL, solve_mode="scene", enable_bilateral_preelimination=True)
         steel = SolverSteel(four_bar, **BILATERAL, solve_mode="serial", enable_bilateral_preelimination=True)
         test.assertTrue(alias.enable_bilateral_preelimination)
         test.assertFalse(alias._preelim_active)
@@ -490,13 +499,15 @@ def test_preelimination_alias_converges(test, device):
     """Run ``enable_bilateral_preelimination=True`` as the scene's plain rows, reading back as requested.
 
     Steel's pre-elimination (a regularised direct solve of each articulation's closure rows) is not built in the scene
-    mode: the alias steps the four-bar bit for bit as the scene without it, none of Steel's pre-elimination storage
-    exists, and at 32 iterations the loop anchor gap after 720 driven steps is below :data:`ALIAS_GAP_MAX`.
+    mode, which warns as Steel does where it cannot pre-eliminate: the alias steps the four-bar bit for bit as the
+    scene without it, none of Steel's pre-elimination storage exists, and at 32 iterations the loop anchor gap after
+    720 driven steps is below :data:`ALIAS_GAP_MAX`.
     """
     model = _build_four_bar().finalize(device=device)
-    alias, alias_q, alias_gaps = _bilateral_run(
-        model, steps=720, leader_target=0.6, **BILATERAL, solve_mode="scene", enable_bilateral_preelimination=True
-    )
+    with test.assertWarnsRegex(newton.NewtonWarning, re.escape(SCENE_PREELIMINATION_WARNING)):
+        alias, alias_q, alias_gaps = _bilateral_run(
+            model, steps=720, leader_target=0.6, **BILATERAL, solve_mode="scene", enable_bilateral_preelimination=True
+        )
     plain, plain_q, _ = _bilateral_run(model, steps=720, leader_target=0.6, **BILATERAL, solve_mode="scene")
     steel = SolverSteel(model, **BILATERAL, solve_mode="serial", enable_bilateral_preelimination=True)
     test.assertEqual(alias.solve_mode, "scene")
@@ -514,6 +525,38 @@ def test_preelimination_alias_converges(test, device):
     test.assertLess(alias_gaps[-1], ALIAS_GAP_MAX, f"loop gap {alias_gaps[-1]:.3e} m after 720 steps")
 
 
+def test_preelimination_warns_under_scene(test, device):
+    """Warn once with Steel's fallback warning when the scene runs ``enable_bilateral_preelimination=True``.
+
+    Steel warns at construction wherever it cannot pre-eliminate a model's bilateral rows and keeps them iterative; the
+    scene never pre-eliminates, so on a model with bilateral rows to eliminate (the four-bar's loop closure, a mimic
+    chain's mimic row) the scene emits one :data:`SCENE_PREELIMINATION_WARNING`, where Steel's serial solve
+    pre-eliminates the rows without a warning. On a model without such rows (humanoids, or the mimic chain with
+    ``bilateral_preelimination_include_mimics=False``) neither mode warns, as Steel builds nothing there.
+    """
+
+    def preelimination_warnings(model, **options) -> list[str]:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            SolverSteel(model, **BILATERAL, enable_bilateral_preelimination=True, **options)
+        return [str(w.message) for w in caught if "pre-elimination" in str(w.message)]
+
+    four_bar = _build_four_bar().finalize(device=device)
+    mimic_chain = _build_two_revolute_chain(1.0, -1.0)[0].finalize(device=device)
+    humanoids = _humanoids(device)
+    for name, model, options, warns in (
+        ("four-bar", four_bar, {}, True),
+        ("mimic chain", mimic_chain, {}, True),
+        ("mimic chain without mimics", mimic_chain, {"bilateral_preelimination_include_mimics": False}, False),
+        ("humanoids", humanoids, {}, False),
+    ):
+        with test.subTest(model=name, solve_mode="scene"):
+            expected = [SCENE_PREELIMINATION_WARNING] if warns else []
+            test.assertEqual(preelimination_warnings(model, solve_mode="scene", **options), expected)
+        with test.subTest(model=name, solve_mode="serial"):
+            test.assertEqual(preelimination_warnings(model, solve_mode="serial", **options), [])
+
+
 class TestSteelSceneAliases(unittest.TestCase):
     pass
 
@@ -521,6 +564,7 @@ class TestSteelSceneAliases(unittest.TestCase):
 for _fn in (
     test_aliases_read_back_as_requested,
     test_phased_alias_runs_ab_order,
+    test_preelimination_warns_under_scene,
 ):
     add_function_test(TestSteelSceneAliases, _fn.__name__, _fn, devices=get_test_devices())
 
