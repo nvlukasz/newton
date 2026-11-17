@@ -21,9 +21,17 @@ from newton._src.solvers.steel._testing import kernel_overrides
 from newton._src.solvers.steel.scene_rows import FAMILY_CONNECT, FAMILY_MIMIC
 from newton._src.solvers.steel.scene_solve import SCENE_FREE_SUPPORT
 from newton._src.solvers.steel.scene_units import SceneUnits
-from newton.solvers import SolverSteel
+from newton.solvers import SolverBase, SolverSteel
 from newton.solvers.experimental.coupled import CouplingInterface
-from newton.tests.steel._fixtures import DT, _build_four_bar, _heap, set_torsion_radius
+from newton.tests.steel import test_contacts
+from newton.tests.steel._fixtures import (
+    DT,
+    _build_contact_scene,
+    _build_four_bar,
+    _heap,
+    _set_box_velocities,
+    set_torsion_radius,
+)
 from newton.tests.steel._scene_fixtures import (
     REBOUND_APEX_ATOL,
     SCENE,
@@ -34,9 +42,10 @@ from newton.tests.steel._scene_fixtures import (
     _steel_on,
     assert_rebound_tracks_steel,
 )
+from newton.tests.steel.test_scene_compliance import _CompliantStepper
+from newton.tests.steel.test_scene_features import TRACK_ROWS
+from newton.tests.steel.test_scene_torsion import FIXTURE_DT, _pad_model, _PadRun
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
-
-needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 
 STEEL = {**SCENE, "solve_mode": "serial"}
 """The scene tests' options on Steel's serial solve, the reference of the scene's checks."""
@@ -460,7 +469,6 @@ def test_scene_mode_lets_steel_reject_first(test, device):
             test.assertTrue(solver._scene.features.patches)
 
 
-@needs_read_back
 def test_scene_mode_steps_without_iterations(test, device):
     """With ``iterations=0`` build the rows and sweep none, eagerly and in a captured graph, as Steel does."""
     # Four lying humanoids 0.4 m apart: ground contacts, limits and units joining neighbors.
@@ -778,9 +786,21 @@ def _check_no_rows(test, solver, contacts):
     count = int(contacts.rigid_contact_count.numpy()[0])
     np.testing.assert_array_equal(solver._contact_path.numpy()[:count], -1)
     test.assertFalse(np.any(solver.constraint_overflow.numpy()))
-    if solver._scene_mode and solver.model.joint_count:
+    if solver._scene_mode:
         stats = solver.scene_statistics()
         test.assertEqual((stats["rows"], stats["rows_requested"], stats["units"], stats["dropped_rows"]), (0, 0, 0, 0))
+        # A model without articulations returns from every step before the scene runs: zeros, no step of the scene.
+        test.assertIs(stats["scene_stepped"], bool(solver.model.articulation_count))
+        if not solver.model.articulation_count:
+            # The capacity is the scene's; every count of a step is zero.
+            test.assertEqual(stats.pop("row_max"), solver._scene.row_max)
+            test.assertEqual(set(stats.values()), {0})
+            colors = solver.color_statistics()
+            test.assertIs(colors.pop("scene_stepped"), False)
+            test.assertEqual(colors.pop("per_color"), [0] * solver._scene_units.color_cap)
+            test.assertEqual(set(colors.values()), {0})
+            timing = solver.time_scene_units(n=2)
+            test.assertEqual(timing, {"build_ms": 0.0, "color_ms": 0.0, "n": 2, "mode": "none", "scene_stepped": False})
     return count
 
 
@@ -805,7 +825,6 @@ def test_scene_mode_constructs_models_without_responding_bodies(test, device):
                 test.assertEqual(str(raised.exception), str(steel.exception))
 
 
-@needs_read_back
 def test_scene_mode_steps_models_without_responding_bodies(test, device):
     """Step a model without a responding articulation or free body, as Steel does.
 
@@ -813,10 +832,11 @@ def test_scene_mode_steps_models_without_responding_bodies(test, device):
     factor group, no free body and no unit (:func:`_models_without_responding_bodies`). The scene solver and Steel's
     serial solver, both with ``row_watermark``, step ``1 + EMPTY_STEPS`` times with a collision pipeline. The
     welded box has contacts with the ground, the other models none; every contact is routed nowhere (no responding
-    side), and no row or unit is built (``scene_statistics()``: rows, rows requested, units and dropped rows 0, where
-    the scene's step runs); every row mark is zero, the contact mark the contact count; no overflow
-    (``check_constraint_capacity`` passes, after a reset too); and the state after each step is Steel's bit for bit,
-    without NaN. A step of a model without joints returns before any stage, in Steel and in the scene. On CUDA a
+    side), and no row or unit is built (``scene_statistics()``: rows, rows requested, units and dropped rows 0; on a
+    model without articulations every read-back is zeros with ``scene_stepped`` false); every row mark is zero, the
+    contact mark the contact count; no overflow (``check_constraint_capacity`` passes, after a reset too); and the
+    state after each step is Steel's bit for bit, without NaN. A step of a model without articulations returns before
+    any stage, in Steel and in the scene. On CUDA a
     graph of :data:`EMPTY_STEPS` steps, the states swapped between them, captured after an eager first step, ends at
     Steel's state, building no row.
     """
@@ -896,6 +916,135 @@ def test_articulation_constraint_max_reads_the_requested_budget(test, device):
     test.assertEqual(scene.articulation_constraint_max, 64)
 
 
+def _assert_refused_in_capture(test, device, reads: dict) -> None:
+    """Assert that each of ``reads`` (name: callable) raises inside a CUDA graph capture, naming the capture."""
+    with wp.ScopedCapture(device=device):
+        for name, read in reads.items():
+            with test.subTest(read=name), test.assertRaisesRegex(RuntimeError, "outside CUDA graph capture"):
+                read()
+
+
+def test_scene_status_reports_through_steel_api(test, device):
+    """Report the scene's torsion and compliance status through Steel's status API, and refuse every read in capture.
+
+    Torsion: the pads' contacts made hydroelastic (a positive stiffness), which the scene's spin rows refuse; the eager
+    step latches the cause instead of raising. Steel's ``_status_sources`` carries the scene's torsion status word, so
+    ``check_constraint_capacity`` raises it with Steel's prefix, live and from a ``snapshot_constraint_status`` copy,
+    and passes once a reset cleared it. Compliance: the compliant contact scene's captured step, replayed after its
+    contacts' stiffness turned NaN, latches into Steel's ``ComplianceBuffers.status``, which the check raises with
+    Steel's message and ``scene_statistics()`` reports (``compliant_contacts_invalid`` and ``compliance_error``); a
+    reset clears both. Inside a capture the scene's read-back (``scene_statistics``, ``color_statistics``,
+    ``time_scene_units``, ``_torsion_stats``) and Steel's status reads raise, as Steel's do.
+    """
+    model, state = _pad_model(device)
+    run = _PadRun(model, state, solve_mode="scene")
+    run.pipeline.collide(run.state_0, run.contacts)
+    run.contacts.rigid_contact_stiffness = wp.ones(run.contacts.rigid_contact_max, device=model.device)
+    solver = run.solver
+    solver.step(run.state_0, run.state_1, run.control, run.contacts, FIXTURE_DT)
+    test.assertEqual(solver.scene_statistics()["torsion_status"], 2)
+    test.assertIn("scene_torsion", solver._status_sources())
+    solver.snapshot_constraint_status()
+    hydroelastic = "Steel contact torsion rejected its input: Contact torsion does not support hydroelastic"
+    for snapshot in (True, False):
+        with test.subTest(snapshot=snapshot), test.assertRaisesRegex(RuntimeError, hydroelastic):
+            solver.check_constraint_capacity(snapshot=snapshot)
+    solver.reset(run.state_0)
+    solver.snapshot_constraint_status()
+    solver.check_constraint_capacity(snapshot=True)
+    solver.check_constraint_capacity()
+    _assert_refused_in_capture(
+        test,
+        device,
+        {
+            "scene_statistics": solver.scene_statistics,
+            "color_statistics": solver.color_statistics,
+            "time_scene_units": solver.time_scene_units,
+            "_torsion_stats": lambda: solver._torsion_stats,
+            "snapshot_constraint_status": solver.snapshot_constraint_status,
+            "check_constraint_capacity": solver.check_constraint_capacity,
+        },
+    )
+
+    stepper = _CompliantStepper(_build_contact_scene(device), TRACK_ROWS, {})
+    _set_box_velocities(stepper.solver.model, stepper.state_0)
+    stepper.step()
+    stepper.collide()
+    solver = stepper.solver
+    with wp.ScopedCapture(device=device) as capture:
+        solver.step(stepper.state_0, stepper.state_1, stepper.control, stepper.contacts, DT)
+    wp.capture_launch(capture.graph)
+    solver.check_constraint_capacity()
+    test.assertEqual(solver.scene_statistics()["compliance_error"], 0)
+    stepper.contacts.rigid_contact_stiffness.fill_(float("nan"))
+    wp.capture_launch(capture.graph)
+    stats = solver.scene_statistics()
+    test.assertEqual((stats["compliant_contacts_invalid"], stats["compliance_error"]), (1, 1))
+    test.assertEqual(stats["compliant_contacts_dropped"], 0)
+    solver.snapshot_constraint_status()
+    invalid = r"Steel contact compliance rejected its input: Invalid contact stiffness \(contact 0\)"
+    for snapshot in (True, False):
+        with test.subTest(snapshot=snapshot), test.assertRaisesRegex(RuntimeError, invalid):
+            solver.check_constraint_capacity(snapshot=snapshot)
+    solver.reset(stepper.state_0)
+    solver.check_constraint_capacity()
+    stats = solver.scene_statistics()
+    test.assertEqual((stats["compliant_contacts_invalid"], stats["compliance_error"]), (0, 0))
+    _assert_refused_in_capture(
+        test,
+        device,
+        {
+            "compliance_contact_count": lambda: solver.compliance_contact_count,
+            "compliance_skipped_contact_count": lambda: solver.compliance_skipped_contact_count,
+        },
+    )
+
+
+PARENT_WRENCH_STEPS = 60
+"""Steps of :func:`test_parent_wrench_matches_steel_under_scene`, enough for the stacked boxes to settle."""
+
+PARENT_WRENCH_RMS = 1.0e-5
+"""Agreement [RMS, N and N m] of the scene's ``BODY_PARENT_F`` with Steel's serial solve on the stacked boxes."""
+
+
+def test_parent_wrench_matches_steel_under_scene(test, device):
+    """Report ``BODY_PARENT_F`` and ``CONTACT_F`` from the scene's one solve world as Steel's serial solve does.
+
+    Two free boxes stacked on the ground (``test_contacts``' stacked pair), 32 iterations, stepped
+    :data:`PARENT_WRENCH_STEPS` times under the scene solve and under Steel's serial solve with both observables
+    requested. Each box's free joint transmits no wrench, so its parent wrench is its momentum change less gravity
+    less the contact wrenches read from the step's rows: a contact read from the wrong row or world would leave a
+    box's weight in it. The scene's parent wrenches agree with Steel's within :data:`PARENT_WRENCH_RMS` RMS, and its
+    per-contact forces sum to each box's weight within 3 %, as Steel's do.
+    """
+    model, _ = test_contacts._stacked_boxes(device)
+    test.assertEqual(model.articulation_count, 2)
+    kinds = {SolverBase.ObservableKind.BODY_PARENT_F, SolverBase.ObservableKind.CONTACT_F}
+    weight = np.linalg.norm(model.gravity.numpy()[0])
+    results = {}
+    for mode in ("scene", "serial"):
+        pipeline = newton.CollisionPipeline(model, rigid_contact_max=64)
+        contacts = pipeline.contacts()
+        solver = SolverSteel(model, solve_mode=mode, iterations=32, friction_anchor_beta=0.0)
+        observables = solver.observables(kinds, contacts=contacts)
+        states = [model.state(), model.state()]
+        control = model.control()
+        for _ in range(PARENT_WRENCH_STEPS):
+            pipeline.collide(states[0], contacts)
+            solver.step(states[0], states[1], control, contacts, DT, observables=observables)
+            states.reverse()
+        contact_f = observables.contact_f.numpy()
+        net = test_contacts._net_body_forces(model, contacts, contact_f)
+        for body, mass in enumerate((test_contacts.LOWER_MASS, test_contacts.UPPER_MASS)):
+            np.testing.assert_allclose(
+                net[body], [0.0, 0.0, mass * weight], atol=0.03 * mass * weight, err_msg=f"{mode}: box {body}"
+            )
+        results[mode] = observables.body_parent_f.numpy()
+    test.assertTrue(np.all(np.isfinite(results["scene"])))
+    rms = float(np.sqrt(np.mean((results["scene"] - results["serial"]) ** 2)))
+    test.assertLessEqual(rms, PARENT_WRENCH_RMS)
+
+
 class TestSteelSceneMode(unittest.TestCase):
     pass
 
@@ -917,6 +1066,7 @@ for _fn in (
     test_scene_rejects_new_upstream_features,
     test_scene_options_validate_their_values,
     test_propagation_options_are_accepted_and_ignored,
+    test_parent_wrench_matches_steel_under_scene,
 ):
     add_function_test(TestSteelSceneMode, _fn.__name__, _fn, devices=get_test_devices())
 
@@ -926,6 +1076,7 @@ for _fn in (
     test_scene_mode_lets_steel_reject_first,  # on the CPU Steel refuses its CUDA-only features before these checks
     test_scene_mode_steps_without_iterations,  # graph capture
     test_scene_mode_reads_notified_restitution,  # the device list of the stepping tests is re-decided with the step
+    test_scene_status_reports_through_steel_api,  # graph capture
 ):
     add_function_test(TestSteelSceneMode, _fn.__name__, _fn, devices=get_cuda_test_devices())
 

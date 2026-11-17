@@ -56,8 +56,6 @@ from newton.tests.steel.test_scene_features import (
 )
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
-needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
-
 FRICTION = 0.5
 """``joint_friction`` [N·m] of every hinge of the tracking tests."""
 
@@ -232,7 +230,6 @@ class _Stepper:
             wp.copy(getattr(self.state_0, name), getattr(self.state_1, name))
 
 
-@needs_read_back
 def test_internal_unit_rows_change_under_capture(test, device):
     """Replay one captured step exactly as eager steps while the internal units' rows appear and disappear.
 

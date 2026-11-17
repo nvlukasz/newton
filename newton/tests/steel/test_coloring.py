@@ -11,7 +11,6 @@ import warp as wp
 
 import newton
 from newton._src.solvers.steel.scene_units import COLOR_ROUND_MAX, SCAN_TILE, SceneUnits
-from newton.solvers import SolverSteel
 from newton.tests.steel._fixtures import CONTACT_MAX
 from newton.tests.steel._scene_fixtures import _scene_heap, _units_for, _units_view
 from newton.tests.steel.test_scene_units import (
@@ -487,7 +486,6 @@ def test_color_statistics_reads_back(test, device):
                 test.assertGreaterEqual(stats["tail"], stats["tail_fallback"])
 
 
-@unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 def test_time_scene_units_keeps_the_step(test, device):
     """Time build and color on the last step's contacts, from graphs or eagerly, leaving the step's units as they were."""
     model = _scene("tray", device)
@@ -511,7 +509,8 @@ def test_time_scene_units_keeps_the_step(test, device):
     for eager, mode in ((False, default_mode), (True, "eager")):
         with test.subTest(eager=eager):
             timing = solver.time_scene_units(n=3, eager=eager)
-            test.assertEqual(set(timing), {"build_ms", "color_ms", "n", "mode"})
+            test.assertEqual(set(timing), {"build_ms", "color_ms", "n", "mode", "scene_stepped"})
+            test.assertIs(timing["scene_stepped"], True)
             test.assertEqual(timing["n"], 3)
             test.assertEqual(timing["mode"], mode)
             test.assertGreater(timing["build_ms"], 0.0)

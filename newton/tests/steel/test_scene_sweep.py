@@ -83,8 +83,6 @@ DRIFT_MAX = 2.0e-3
 DRIFT_STEEL_RATIO = 1.5
 """Physics bound on the default order's drum displacement over Steel's."""
 
-needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
-
 SWEEP_CAPACITY = 10
 """Rows of the unit kernels' W = 1 arrays for ``_problem`` (8 rows), as Steel's kernel test."""
 
@@ -885,7 +883,6 @@ def _free_bodies(model):
     return model.joint_child.numpy()[model.joint_type.numpy() == int(newton.JointType.FREE)]
 
 
-@needs_read_back
 def test_cap_two_matches_cap_sixty_four_at_rest(test, device):
     """Rest where cap 64 rests with two-sided units in the tail (cap 2), and warn once that the cap is too small.
 
@@ -894,7 +891,7 @@ def test_cap_two_matches_cap_sixty_four_at_rest(test, device):
     leave Steel's own solve of the heap up to 14 % off a box's weight (48 of 108 boxes past 3 % at
     150 steps), so each box's own weight within 3 % is checked on the stacked boxes of the
     contact-force tests at 32 iterations, whose cap 2 puts two of the four box-box units in the
-    tail.
+    tail. At cap 64 a unit takes the tail only where the color masks of its two sides are full.
     """
     model = _heap(device)
     rows = _scene_rows(model)
@@ -916,8 +913,15 @@ def test_cap_two_matches_cap_sixty_four_at_rest(test, device):
     test.assertGreater(capped["tail"], capped["two_sided_units"] // 2)
     tail_warnings = [w for w in caught if issubclass(w.category, NewtonWarning) and "color_cap" in str(w.message)]
     test.assertEqual(len(tail_warnings), 1, msg=[str(w.message) for w in caught])
-    # The heap's busiest box can have 65 two-sided units, so cap 64 may leave one in the tail.
-    test.assertLessEqual(_statistics(runs[64].solver)["tail"], 1)
+    # At cap 64 a unit takes the tail only where the masks of its two sides are full: the heap's busiest boxes rest
+    # with more than 64 two-sided units each, so some of theirs take it.
+    units = runs[64].solver._scene_units
+    test.assertEqual(units.statistics()["tail_fallback"], 0)
+    view = _colored_view(units)
+    tail = view["color"] == units.color_cap
+    mask = units.side_mask.numpy()
+    full = mask[view["side_a"][tail]] | mask[view["side_b"][tail]]
+    test.assertTrue(np.all(full == np.iinfo(np.uint64).max), msg=f"{int(np.sum(tail))} tail units")
 
     stacked, pipeline = _stacked_boxes(device)
     for cap in (2, 64):

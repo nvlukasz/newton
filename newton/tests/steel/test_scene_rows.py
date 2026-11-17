@@ -25,8 +25,6 @@ from newton.tests.steel._scene_fixtures import SCENE, _global_box_model, _humano
 from newton.tests.steel.test_scene_tripwire import _native_snippet
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
-needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
-
 SCENE_ROW_MAX = 3 * CONTACT_MAX
 """``articulation_constraint_max`` of the scene-mode fixtures: three rows per contact of the buffer, per world."""
 
@@ -343,7 +341,6 @@ def test_global_body_couples_model_worlds(test, device):
     np.testing.assert_array_equal(steel.constraint_overflow.numpy(), [False, True, True])
 
 
-@needs_read_back
 def test_limits_unit_rows_follow_the_count_pass(test, device):
     """Give the limits unit the rows of the limits COUNT pass, ahead of its articulation's contacts."""
     solver, _state, _contacts = _rows(_humanoids(device), joint_limit_activation_gap=10.0)
@@ -404,7 +401,6 @@ def test_scene_row_build_replays_under_capture(test, device):
                 np.testing.assert_array_equal(replay[key], value, err_msg=key)
 
 
-@needs_read_back
 def test_scene_statistics_reads_back(test, device):
     """Read the scene's rows and units back to the host as plain ints, after a step and only in scene mode."""
     model = _heap(device)
@@ -419,8 +415,9 @@ def test_scene_statistics_reads_back(test, device):
     keys = ["rows", "rows_requested", "row_max", "dropped_rows", "units", "unit_overflow"]
     keys += ["one_sided_units", "two_sided_units", "late_units", "coupled_sides", "colors", "tail"]
     keys += ["compliant_contacts", "compliant_contacts_skipped", "compliant_contacts_dropped"]
-    keys += ["compliant_contacts_invalid", "compliance_error", "torsion_rows", "torsion_status"]
+    keys += ["compliant_contacts_invalid", "compliance_error", "torsion_rows", "torsion_status", "scene_stepped"]
     test.assertEqual(list(stats), keys)
+    test.assertIs(stats.pop("scene_stepped"), True)
     for key, value in stats.items():
         test.assertIs(type(value), int, msg=key)
     test.assertEqual(stats["rows"], int(solver._constraint_count.numpy()[0]))
@@ -433,7 +430,7 @@ def test_scene_statistics_reads_back(test, device):
     # Late units (velocity limits) are one-sided units; the heap has none.
     test.assertEqual(stats["late_units"], 0)
     # Without contact_compliance and contact torsion their counts are zero.
-    for key in keys[-7:]:
+    for key in keys[-8:-1]:
         test.assertEqual(stats[key], 0, key)
     test.assertEqual(json.loads(json.dumps(stats)), stats)
 

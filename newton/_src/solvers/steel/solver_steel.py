@@ -5,6 +5,7 @@ import functools
 import math
 import os
 import re
+import time
 import warnings
 import weakref
 from collections.abc import Iterable
@@ -225,7 +226,8 @@ from .scene_solve import (
     setup_scene_plan,
     static_shared_limit,
 )
-from .scene_units import SceneUnits
+from .scene_torsion_device import SCENE_TORSION_MESSAGES
+from .scene_units import COLOR_CAP_MAX, SceneUnits
 from .sleeping import _publish_body_awake, _SleepState
 from .sparse_contact import (
     _get_sparse_contact_response_kernel,
@@ -289,6 +291,22 @@ _MAX_CONTACT_REGULARIZATION = 1.0e6
 # One-warp worlds packed per block of the propagation row sweep, which uses no shared memory.
 _PROPAGATION_WORLDS_PER_BLOCK = 2
 _SOLVE_MODES = ("serial", "colored", "scene")
+
+_SCENE_COMPLIANCE_DROPPED = (
+    _contact_compliance._INPUT_OVERFLOW,
+    _contact_compliance._ROW_OVERFLOW,
+    _contact_compliance._UNMAPPED,
+    _contact_compliance._BEYOND_ROWS,
+)
+"""Steel's compliance status codes of a compliant contact that lost its rows (``scene_statistics``)."""
+
+_SCENE_COMPLIANCE_INVALID = (
+    _contact_compliance._INVALID_STIFFNESS,
+    _contact_compliance._INVALID_MATERIAL,
+    _contact_compliance._INVALID_SEPARATION,
+    _contact_compliance._FLOAT32_RANGE,
+)
+"""Steel's compliance status codes of a compliant contact with an invalid material (``scene_statistics``)."""
 _ARTICULATED_CONTACT_RESPONSES = ("immediate", "propagation")
 # solve_mode spellings from the 1.8 prereleases, accepted with a deprecation warning until their removal.
 _DEPRECATED_SOLVE_MODE_SPELLINGS = {
@@ -1413,7 +1431,13 @@ class SolverSteel(SolverBase, CouplingInterface):
       articulation's own rows, a contact); the units that join two articulations are colored so that units
       sharing an articulation differ, and each iteration sweeps every articulation's own rows and the joining
       units color by color (see ``scene_phase_order``). The row budgets stay per world: the scene sums them
-      into its row capacity and keeps or drops each unit whole.
+      into its row capacity and keeps or drops each unit whole. :meth:`scene_statistics`,
+      :meth:`color_statistics` and :meth:`time_scene_units` read its rows and units back. With contact torsion
+      a step never raises for torsion: it latches the cause, which :meth:`check_constraint_capacity` raises.
+      Steel's two refusals (an overflowing contact input, a hydroelastic contact) keep Steel's messages; the
+      scene adds two causes of its own, rows or units lost before the spin rows (it then builds none) and
+      spin rows dropped past the row capacity, where Steel records the loss in :attr:`constraint_overflow`
+      alone.
 
     ``articulated_contact_response`` selects how contacts of articulated bodies are
     solved. The default ``"immediate"`` response uses the generalized rows above.
@@ -3236,6 +3260,27 @@ class SolverSteel(SolverBase, CouplingInterface):
                 inputs=[self._shape_mu, self._contact_friction_scale],
                 device=model.device,
             )
+
+    @property
+    def _torsion_stats(self) -> dict:
+        """Steel's contact torsion diagnostics of the last step (``rows`` and per spin row ``groups``).
+
+        Steel's host preparation refreshes them every step and its device preparation on request. Under
+        ``solve_mode="scene"`` with contact torsion, once a step has run, they are read back from the scene's device
+        arrays on access (:meth:`SceneSolve.torsion_statistics
+        <newton._src.solvers.steel.scene_solve.SceneSolve.torsion_statistics>`), which raises
+        :class:`RuntimeError` during CUDA graph capture.
+        """
+        scene = getattr(self, "_scene", None)
+        if scene is not None and scene.features.torsion and scene.built:
+            if self.model.device.is_capturing:
+                raise RuntimeError("_torsion_stats must be read outside CUDA graph capture")
+            return scene.torsion_statistics(self)
+        return self._torsion_stats_host
+
+    @_torsion_stats.setter
+    def _torsion_stats(self, value: dict) -> None:
+        self._torsion_stats_host = value
 
     @property
     def _rebound_velocity_threshold(self) -> float:
@@ -8673,6 +8718,256 @@ class SolverSteel(SolverBase, CouplingInterface):
         """
         return 0 if self._compliance is None else _contact_compliance.counts(self)[1]
 
+    def _scene_stepped(self, method: str) -> bool:
+        """Whether a step built the scene's rows and units, which ``method`` of the scene's read-back reads.
+
+        A model without articulations returns from every step before the scene runs, so its read-back reports
+        zeros, ``scene_stepped`` false, instead of waiting for a step that never builds.
+
+        Raises:
+            RuntimeError: Without ``solve_mode="scene"``, during CUDA graph capture, or before the first step of a
+                model with articulations.
+        """
+        if self._scene is None:
+            raise RuntimeError(f'SolverSteel.{method}() needs solve_mode="scene"')
+        if self.model.device.is_capturing:
+            raise RuntimeError(f"{method}() must run outside CUDA graph capture")
+        if self._scene.built:
+            return True
+        if self.model.articulation_count:
+            raise RuntimeError(f"SolverSteel.{method}() needs a step first")
+        return False
+
+    def color_statistics(self) -> dict:
+        """Return the scene's units and colors of the last step (``solve_mode="scene"`` only).
+
+        Keys, all plain ``int`` except ``per_color`` and ``scene_stepped``:
+
+        - ``units``: units of the step; ``overflow``: units past ``scene_unit_max``, counted
+          but not stored.
+        - ``two_sided``: units between two articulations; ``limit_units``: internal units (an
+          articulation's own rows: drives, mimic, loop closures, joint limits and joint friction; the name is the
+          limits unit's).
+        - ``rounds``: pair rounds the coloring ran.
+        - ``colors``: the highest color below the color cap in use, plus one.
+        - ``per_color``: two-sided units of each color below the color cap (a ``list[int]`` of
+          ``scene_color_cap`` entries, the kernel override's value, :data:`COLOR_CAP_MAX
+          <newton._src.solvers.steel.scene_units.COLOR_CAP_MAX>` by default).
+        - ``tail``: two-sided units of the tail color, the cap, so ``sum(per_color) + tail == two_sided``.
+        - ``tail_fallback``: of those, the units the round cap left uncolored.
+        - ``scene_stepped``: ``True`` once a step built the units; ``False`` with every count zero on a model
+          without articulations, whose steps never build them.
+
+        Only units between two articulations are colored: units with one articulation (internal
+        units, ground or static contacts, self-contacts) stay uncolored and appear only in
+        ``units`` and ``limit_units``.
+
+        Reads the device on the host. Raises :class:`RuntimeError` without ``solve_mode="scene"``, during CUDA graph
+        capture, or before the first step of a model with articulations.
+        """
+        units = self._scene_units
+        if not self._scene_stepped("color_statistics"):
+            names = ("units", "overflow", "two_sided", "limit_units", "rounds", "colors")
+            zeros = dict.fromkeys(names, 0)
+            return {**zeros, "per_color": [0] * units.color_cap, "tail": 0, "tail_fallback": 0, "scene_stepped": False}
+        return {**units.statistics(), "scene_stepped": True}
+
+    def scene_statistics(self) -> dict:
+        """Return the scene's rows and units of the last step (``solve_mode="scene"`` only).
+
+        Keys, all plain ``int`` except ``scene_stepped``:
+
+        - ``rows``: rows kept (``_constraint_count``); ``rows_requested``: rows the units asked
+          for; ``row_max``: the scene's row capacity, the per-world budgets summed (see ``solve_mode``);
+          ``dropped_rows``: ``rows_requested - rows``, the rows of the units dropped past
+          ``row_max`` in row order.
+        - ``units``: units of the step; ``unit_overflow``: units past ``scene_unit_max``, which
+          get no rows.
+        - ``one_sided_units`` (internal units of drives, mimic, loop closures, joint limits and joint friction, late
+          units of joint and free-body velocity limits, ground or static contacts, self-contacts) and
+          ``two_sided_units`` (between two articulations), so their sum is ``units``; ``late_units``: the late units
+          among the one-sided ones, which the scans place after the tail.
+        - ``coupled_sides``: articulations with a two-sided unit.
+        - ``colors`` and ``tail``: as in :meth:`color_statistics`, over the two-sided units.
+        - ``compliant_contacts`` and ``compliant_contacts_skipped`` (``contact_compliance``, else ``0``): the step's
+          compliant contacts whose rows were assembled and those the allocator excluded on purpose, Steel's
+          :attr:`compliance_contact_count` and :attr:`compliance_skipped_contact_count`.
+        - ``compliant_contacts_dropped``, ``compliant_contacts_invalid`` and ``compliance_error``
+          (``contact_compliance``, else ``0``): ``1`` once a captured step since the last :meth:`reset` latched, in
+          Steel's compliance status word, a compliant contact that lost its rows (an overflowing contact input or
+          row capacity, a contact unmapped or mapped past the rows kept; also latched in
+          :attr:`constraint_overflow`), one with an invalid material (stiffness, damping, friction scale or
+          separation; it stays rigid), or any error; :meth:`check_constraint_capacity` raises the first. An eager
+          step raises Steel's error at once instead.
+        - ``torsion_rows`` (contact torsion, else ``0``): the step's spin rows that were kept; ``torsion_status``:
+          the causes since the last :meth:`reset` for which a step built no spin row or dropped one, Steel's bits
+          (1 an overflowing contact input, 2 a hydroelastic contact, 4 rows or units lost before the spin rows, 8 spin
+          rows dropped past the capacity), which :meth:`check_constraint_capacity` raises.
+        - ``scene_stepped``: ``True`` once a step built the rows; ``False`` with every count zero on a model
+          without articulations, whose steps never build them.
+
+        Units in the tail run one at a time on one thread after the colors, so the first call that
+        finds ``tail > 0`` emits one :class:`~newton.NewtonWarning` per solver naming the color cap.
+
+        Reads the device on the host. Raises :class:`RuntimeError` without ``solve_mode="scene"``, during CUDA graph
+        capture, or before the first step of a model with articulations.
+        """
+        scene = self._scene
+        stepped = self._scene_stepped("scene_statistics")
+        units = self._scene_units
+        names = ("rows", "rows_requested", "dropped_rows", "units", "unit_overflow", "one_sided_units")
+        names += ("two_sided_units", "late_units", "coupled_sides", "colors", "tail")
+        stats = dict.fromkeys(names, 0)
+        if stepped:
+            colors = units.statistics()
+            rows = int(self._constraint_count.numpy()[0])
+            requested = int(scene.rows_requested.numpy()[0])
+            if colors["tail"] > 0 and not scene.tail_warned:
+                scene.tail_warned = True
+                warnings.warn(
+                    f"SolverSteel(solve_mode='scene'): {colors['tail']} two-sided units took the tail color, which "
+                    f"one thread sweeps after the colors; raise the color cap (the scene_color_cap kernel override, "
+                    f"now {units.color_cap}, at most {COLOR_CAP_MAX}).",
+                    NewtonWarning,
+                    stacklevel=2,
+                )
+            stats = {
+                "rows": rows,
+                "rows_requested": requested,
+                "dropped_rows": requested - rows,
+                "units": colors["units"],
+                "unit_overflow": colors["overflow"],
+                # The units' one-sided count includes the late units, which the scans place after the tail.
+                "one_sided_units": int(np.sum(units.one_sided_count.numpy())),
+                "two_sided_units": colors["two_sided"],
+                "late_units": int(np.sum(units.late_count.numpy())),
+                "coupled_sides": int(np.count_nonzero(units.side_coupled.numpy())),
+                "colors": colors["colors"],
+                "tail": colors["tail"],
+            }
+        compliance = dict.fromkeys(
+            (
+                "compliant_contacts",
+                "compliant_contacts_skipped",
+                "compliant_contacts_dropped",
+                "compliant_contacts_invalid",
+                "compliance_error",
+            ),
+            0,
+        )
+        if stepped and self._compliance is not None:
+            active, skipped = _contact_compliance.counts(self)
+            # Eager steps raise and clear their own word, so the captured steps' word holds every latched error.
+            latched = self._compliance.status.numpy()[: _contact_compliance._STATUS_CODES]
+            compliance = {
+                "compliant_contacts": active,
+                "compliant_contacts_skipped": skipped,
+                "compliant_contacts_dropped": int(latched[list(_SCENE_COMPLIANCE_DROPPED)].any()),
+                "compliant_contacts_invalid": int(latched[list(_SCENE_COMPLIANCE_INVALID)].any()),
+                "compliance_error": int(latched.any()),
+            }
+        torsion_rows = torsion_status = 0
+        if stepped and scene.features.torsion:
+            torsion_rows = int(scene.torsion_counts.numpy()[2])
+            torsion_status = int(scene.torsion_status.numpy()[0])
+        return {
+            "rows": stats["rows"],
+            "rows_requested": stats["rows_requested"],
+            "row_max": int(scene.row_max),
+            **{name: stats[name] for name in names[2:]},
+            **compliance,
+            "torsion_rows": torsion_rows,
+            "torsion_status": torsion_status,
+            "scene_stepped": stepped,
+        }
+
+    def time_scene_units(self, n: int = 20, eager: bool = False) -> dict:
+        """Time the scene units' build and coloring on the last step's contacts (``solve_mode="scene"`` only).
+
+        Returns the mean milliseconds of one
+        :meth:`SceneUnits.build <newton._src.solvers.steel.scene_units.SceneUnits.build>` and one
+        :meth:`~newton._src.solvers.steel.scene_units.SceneUnits.color` (which includes the order
+        by color) over ``n`` runs: ``{"build_ms": float, "color_ms": float, "n": n, "mode": str,
+        "scene_stepped": bool}``.
+
+        - ``"graph"`` (on a CUDA device with conditional graph nodes, unless ``eager``): ``build``
+          and ``color`` are captured as two CUDA graphs on the current stream, each replayed once
+          to warm up and then ``n`` times between two device synchronizations; the time per
+          replay is the device cost a captured step pays.
+        - ``"eager"`` (on the CPU, or with ``eager=True``): ``build`` and then ``color`` run ``n``
+          times, each timed between device synchronizations. An eager ``color`` also reads its
+          loop condition back once per round, which a captured step does not.
+        - ``"none"``: on a model without articulations, whose steps never build the units, nothing is timed: both
+          times are ``0.0`` and ``scene_stepped`` is ``False``.
+
+        The contacts and their routing are the last step's, and ``color`` runs last, so the units,
+        colors and order by color end as that step left them. The routing (``contact_path``, the
+        contacts' articulations and rows) is the solver's from that step, but every build reads
+        ``rigid_contact_count`` from the contact buffer again: a caller that collides into the
+        same buffer after the step times the new count against the step's routing, and the units
+        then no longer match the step, so call this right after the step. A step that dropped units past the row
+        capacity has already marked their contacts ``contact_path == -1``, so the rebuild collects only the units
+        that kept their rows (and any past ``scene_unit_max``).
+
+        Raises:
+            RuntimeError: Without ``solve_mode="scene"``, during CUDA graph capture, or before the first step of a
+                model with articulations.
+            ValueError: If ``n`` is less than 1.
+        """
+        stepped = self._scene_stepped("time_scene_units")
+        n = int(n)
+        if n < 1:
+            raise ValueError(f"time_scene_units needs n >= 1, got {n}")
+        if not stepped:
+            return {"build_ms": 0.0, "color_ms": 0.0, "n": n, "mode": "none", "scene_stepped": False}
+        units = self._scene_units
+        device = self.model.device
+        contacts = units._last_contacts
+        # The step builds its internal and late units from the COUNT passes' rows (build_scene_rows).
+        rows = {
+            "internal_rows": self._scene_internal_rows,
+            "late_rows": self._scene_late_rows if self._scene.late_rows_in_use else None,
+        }
+        if not eager and device.is_cuda and wp.is_conditional_graph_supported():
+            # The unit arrays exist since the first step, so nothing is allocated by the solver
+            # inside the captures (the scans' scratch comes from the mempool).
+            with wp.ScopedCapture(device) as build_capture:
+                units.build(self, contacts, **rows)
+            with wp.ScopedCapture(device) as color_capture:
+                units.color()
+            seconds = []
+            for graph in (build_capture.graph, color_capture.graph):
+                wp.capture_launch(graph)
+                wp.synchronize_device(device)
+                start = time.perf_counter()
+                for _ in range(n):
+                    wp.capture_launch(graph)
+                wp.synchronize_device(device)
+                seconds.append(time.perf_counter() - start)
+            build_seconds, color_seconds = seconds
+            mode = "graph"
+        else:
+            build_seconds = 0.0
+            color_seconds = 0.0
+            for _ in range(n):
+                wp.synchronize_device(device)
+                start = time.perf_counter()
+                units.build(self, contacts, **rows)
+                wp.synchronize_device(device)
+                built = time.perf_counter()
+                units.color()
+                wp.synchronize_device(device)
+                build_seconds += built - start
+                color_seconds += time.perf_counter() - built
+            mode = "eager"
+        return {
+            "build_ms": 1e3 * build_seconds / n,
+            "color_ms": 1e3 * color_seconds / n,
+            "n": n,
+            "mode": mode,
+            "scene_stepped": True,
+        }
+
     def snapshot_constraint_status(self) -> None:
         """Copy the status that :meth:`check_constraint_capacity` reports on the device, without waiting.
 
@@ -8723,7 +9018,10 @@ class SolverSteel(SolverBase, CouplingInterface):
         input, while a failing eager step raised from :meth:`step`. Torsion rows dropped for
         capacity are a capacity loss of their worlds. With ``contact_compliance``,
         also raises if a captured step rejected its compliant contacts since the last :meth:`reset`;
-        discard the output of the replays since the last check.
+        discard the output of the replays since the last check. Under ``solve_mode="scene"`` with contact
+        torsion, also raises for the causes the scene latched since the last :meth:`reset`
+        (``scene_statistics()["torsion_status"]``): those steps built no spin row, or dropped some past the
+        capacity, and kept their output.
 
         Reads the status on the host, so call it outside CUDA graph capture, for example at
         an observation boundary. Kernels can read :attr:`constraint_overflow` directly without
@@ -8763,6 +9061,13 @@ class SolverSteel(SolverBase, CouplingInterface):
                 self._device_torsion.validate(int(arrays["torsion"].numpy()[0]))
             except (RuntimeError, ValueError) as error:
                 raise RuntimeError(f"Steel contact torsion rejected its input: {error}") from error
+        if "scene_torsion" in arrays:
+            # The scene latches what Steel's device preparation latches, never raising in a step, and two causes of
+            # its own (SCENE_TORSION_MESSAGES); the first latched cause raises here.
+            status = int(arrays["scene_torsion"].numpy()[0])
+            for bit, message in SCENE_TORSION_MESSAGES.items():
+                if status & bit:
+                    raise RuntimeError(f"Steel contact torsion rejected its input: {message}")
         if self._compliance is not None:
             try:
                 _contact_compliance.validate(arrays["compliance"], clear=False)
@@ -8811,6 +9116,8 @@ class SolverSteel(SolverBase, CouplingInterface):
             sources["torsion"] = self._device_torsion.work.status
         if self._compliance is not None:
             sources["compliance"] = self._compliance.status
+        if self._scene is not None and self._scene.features.torsion:
+            sources["scene_torsion"] = self._scene.torsion_status
         return sources
 
     def _contact_force_inputs(self, contacts: Contacts, inv_dt: float) -> list:

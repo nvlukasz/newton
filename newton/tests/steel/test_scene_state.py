@@ -591,7 +591,6 @@ def test_patch_radius_uses_divided_row_mu(test, device):
             test.assertGreater(ring_loaded, 0, "no anchor's pair passed its own normal's disk")
 
 
-@unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 def test_patch_rows_follow_the_anchors(test, device):
     """Give the anchors three rows and every other contact one, under the infinite friction gap.
 
@@ -1519,7 +1518,6 @@ def test_sleeping_tracks_steel(test, device):
     np.testing.assert_allclose(heights["scene"], heights["steel"], rtol=0.0, atol=REST_ATOL)
 
 
-@unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 def test_sleeping_island_gets_no_units(test, device):
     """Give a sleeping island's contacts no units: once every box of the heap sleeps, a step has no unit, row or color.
 
@@ -1546,7 +1544,6 @@ def test_sleeping_island_gets_no_units(test, device):
     test.assertEqual({key: stats[key] for key in ("units", "rows", "colors")}, {"units": 0, "rows": 0, "colors": 0})
 
 
-@unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 def test_all_asleep_scene_replays_under_capture(test, device):
     """Replay a step captured while the heap was awake through a scene without units, and wake the heap on contact.
 
@@ -1681,7 +1678,6 @@ def _internal_rows(solver) -> tuple[int, int, int]:
     return int(families[FAMILY_LIMIT]), int(families[FAMILY_JOINT_FRICTION]), internal
 
 
-@unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 def test_sleeping_articulation_gets_no_internal_rows(test, device):
     """Give a sleeping articulation no internal rows, and restore them when a force wakes it, under capture.
 
@@ -1886,7 +1882,6 @@ for _fn in (
     test_warmstart_carries_into_the_velocity_pass,
     test_warmstart_rejections_and_cold_start,
     test_sleeping_island_gets_no_units,
-    test_sleeping_articulation_gets_no_internal_rows,
 ):
     add_function_test(TestSteelSceneState, _fn.__name__, _fn, devices=get_test_devices())
 
@@ -1908,6 +1903,7 @@ for _fn in (
     test_masked_reset_wakes_model_worlds,  # Steel's sleeping
     test_contact_with_an_awake_box_wakes_its_island,  # Steel's sleeping
     test_islands_join_within_steel_solve_worlds,  # Steel's sleeping
+    test_sleeping_articulation_gets_no_internal_rows,  # Steel refuses joint friction on the CPU
 ):
     add_function_test(TestSteelSceneState, _fn.__name__, _fn, devices=get_cuda_test_devices())
 

@@ -36,8 +36,6 @@ from newton.tests.steel._fixtures import (
 from newton.tests.steel._scene_fixtures import SCENE, _humanoids, _rms
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
-needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
-
 HUMANOID_ROWS = {"articulation_constraint_max": 1024}
 """The row budget of :func:`_humanoid_rows`' one world, which none of their 30 steps overflows."""
 
@@ -186,7 +184,6 @@ def test_aliases_read_back_as_requested(test, device):
             test.assertFalse(hasattr(alias, attribute), attribute)
 
 
-@needs_read_back
 def test_phased_alias_runs_ab_order(test, device):
     """Step ``row_schedule="phased"`` as the scene in the phase order ``"AB"``, bit for bit, reading back ``"phased"``.
 
@@ -254,7 +251,6 @@ def test_contact_then_internal_alias_runs(test, device):
             test.assertLess(_rms(alias_q, steel_q), TRACK_RMS)
 
 
-@needs_read_back
 def test_propagation_alias_is_bitwise_immediate_scene(test, device):
     """Step the propagation response as the scene's immediate response, bit for bit, reading back as requested.
 

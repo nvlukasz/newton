@@ -92,7 +92,6 @@ from newton.tests.steel.test_capacity import _box_on_ground
 from newton.tests.steel.test_contacts import FILL, LOWER_MASS, _check_rows, _net_body_forces, _stacked_boxes
 from newton.tests.unittest_utils import StdOutCapture, add_function_test, get_cuda_test_devices, get_test_devices
 
-needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 """The mark of the tests that step the scene mode: they run once the solver has the scene mode and its read-back."""
 
 RESTITUTION_RHS_ATOL = 1.0e-6
@@ -548,7 +547,6 @@ def _track_steel(
     return scene, steel
 
 
-@needs_read_back
 def test_one_row_contacts_track_steel(test, device):
     """Solve the contacts beyond ``contact_friction_gap_max`` with their normal row alone, as Steel does.
 
@@ -712,7 +710,6 @@ def test_regularization_matches_the_serial_oracle(test, device):
     )
 
 
-@needs_read_back
 def test_row_watermark_counts_rows_per_model_world(test, device):
     """Accumulate the row high-water marks per model world, as Steel counts each world's rows.
 
@@ -775,7 +772,6 @@ def _world_rows(model, solver, contacts):
     return kept_rows, dropped_rows
 
 
-@needs_read_back
 def test_scene_capacity_failure_is_observable(test, device):
     """Flag the model worlds whose units the pooled row capacity dropped, until reset.
 
@@ -830,7 +826,6 @@ def test_scene_capacity_failure_is_observable(test, device):
             solver.check_constraint_capacity()
 
 
-@needs_read_back
 def test_scene_overflow_warning_is_printed_once(test, device):
     """Print the scene's one device-side overflow warning in the first overflowing step, and none after.
 
@@ -886,7 +881,6 @@ def test_scene_overflow_warning_is_printed_once(test, device):
         test.assertEqual(later, [])
 
 
-@needs_read_back
 def test_scene_contact_f_reports_each_box_weight_row_overflow(test, device):
     """Report each kept contact's force and zero on every contact the pooled row capacity dropped.
 
@@ -987,7 +981,6 @@ def test_scene_contact_f_reports_each_box_weight_row_overflow(test, device):
             test.assertLess(net[0, 2], LOWER_MASS * weight)
 
 
-@needs_read_back
 def test_scene_watermark_excess_counts_dropped_rows(test, device):
     """Record as a world's excess the rows its dropped units asked for, and none for a world that lost none.
 
@@ -1067,7 +1060,6 @@ def _row_owners(test, solver, contacts, rows):
     return owner
 
 
-@needs_read_back
 def test_one_row_contacts_use_the_slots_response(test, device):
     """Give a contact past ``contact_friction_gap_max`` one row, which the response kernel writes alone.
 

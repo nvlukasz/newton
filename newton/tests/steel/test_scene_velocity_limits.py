@@ -56,8 +56,6 @@ from newton.tests.steel.test_scene_features import (
 from newton.tests.steel.test_scene_internal_unit import HUMANOID_HINGES, _hinge_dofs, _Stepper
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
-needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
-
 VELOCITY_LIMIT = 2.0
 """``joint_velocity_limit`` [rad/s] of every hinge of the tracking tests."""
 
@@ -396,7 +394,6 @@ def test_late_rows_follow_the_coupled_pass(test, device):
         )
 
 
-@needs_read_back
 def test_late_rows_overflow_in_row_order(test, device):
     """Drop whole late units past the row capacity in row order; no sweep reads a dropped late row.
 
@@ -577,7 +574,6 @@ def _anchored_boxes(device) -> newton.Model:
     return model
 
 
-@needs_read_back
 def test_free_body_velocity_limits_track_steel(test, device):
     """Hold thrown boxes at 0.5 m/s and 2 rad/s with their velocity-limit rows, as Steel's free-body solve does.
 
@@ -633,7 +629,6 @@ def test_free_body_velocity_limits_track_steel(test, device):
     )
 
 
-@needs_read_back
 def test_free_body_late_units_overflow_in_row_order(test, device):
     """Drop whole free-body late units past the row capacity in row order; no sweep reads a dropped late row.
 
@@ -763,7 +758,6 @@ def test_free_body_velocity_limit_rows_match_steel_rows(test, device):
     )
 
 
-@needs_read_back
 def test_late_rows_change_under_capture(test, device):
     """Replay one captured step exactly as eager steps while late units come and go under the activation gate.
 

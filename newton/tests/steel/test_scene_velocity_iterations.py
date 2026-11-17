@@ -62,8 +62,6 @@ from newton.tests.steel.test_scene_internal_unit import HUMANOID_HINGES, _hinge_
 from newton.tests.steel.test_scene_velocity_limits import CROWD_LIMIT, _limit_hinges
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
-needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
-
 VELOCITY_ITERATIONS = 2
 """``velocity_iterations`` of the tests."""
 
@@ -325,7 +323,6 @@ def _record_solves(solver, *, velocity_rhs=None) -> list:
     return records
 
 
-@needs_read_back
 def test_velocity_pass_continues_the_position_solve(test, device):
     """Continue the position solve in the second solve: 3 sweeps, then 2 with ``reset=False``, are 5 sweeps.
 
@@ -434,7 +431,6 @@ class _FixedRun(_Run):
             wp.copy(getattr(self.state_0, name), getattr(self.state_1, name))
 
 
-@needs_read_back
 def test_velocity_iterations_replay_under_capture(test, device):
     """Replay one captured step, its velocity pass included, exactly as eager steps.
 

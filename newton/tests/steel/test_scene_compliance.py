@@ -34,7 +34,6 @@ from newton._src.solvers.steel.kernels import (
     PGS_CONSTRAINT_TYPE_JOINT_LIMIT,
 )
 from newton._src.solvers.steel.scene_pgs import RANGE_TWO_SIDED
-from newton.solvers import SolverSteel
 from newton.tests.steel._compliance_reference import solve_reference
 from newton.tests.steel._fixtures import DT, _build_contact_scene, _set_box_velocities, run_fixture
 from newton.tests.steel._scene_fixtures import _humanoids, _Run
@@ -474,7 +473,6 @@ def test_compliance_matches_reference_law(test, device):
                 np.testing.assert_allclose(ours, float(impulse[0]), rtol=IMPULSE_RTOL)
 
 
-@unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 def test_compliance_tracks_steel(test, device):
     """Step the compliant contact scene as Steel's solve does.
 
@@ -502,7 +500,6 @@ def test_compliance_tracks_steel(test, device):
     test.assertEqual(scene.solver.compliance_skipped_contact_count, steel.solver.compliance_skipped_contact_count)
 
 
-@unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 def test_compliance_replays_under_capture(test, device):
     """Replay one captured compliant step exactly as eager steps.
 
@@ -580,7 +577,6 @@ def test_compliant_friction_matches_steel_bitwise(test, device):
             np.testing.assert_array_equal(ours[slots + 1], expected)
 
 
-@unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
 def test_compliance_counts_match_steel(test, device):
     """Count the compliant and the excluded contacts as Steel does, and raise where Steel raises.
 

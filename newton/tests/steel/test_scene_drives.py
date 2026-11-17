@@ -58,8 +58,6 @@ from newton.tests.steel.test_scene_internal_unit import (
 )
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
 
-needs_read_back = unittest.skipUnless(hasattr(SolverSteel, "scene_statistics"), "needs the read-back API")
-
 DRIVE_KE = 20.0
 DRIVE_KD = 1.0
 """Target stiffness [N·m/rad] and damping [N·m·s/rad] of every driven hinge."""
@@ -323,7 +321,6 @@ def test_drive_descriptors_track_steel(test, device):
     np.testing.assert_array_equal(scene._scene_internal_rows.numpy(), family_rows.sum(axis=0))
 
 
-@needs_read_back
 def test_drive_rows_change_under_capture(test, device):
     """Replay one captured step exactly as eager steps while drive rows appear and disappear and targets move.
 
