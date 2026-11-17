@@ -1625,7 +1625,10 @@ class SolverSteel(SolverBase, CouplingInterface):
 
         The row budgets are pooled. The scene's row capacity is ``articulation_constraint_max``, plus
         ``free_body_constraint_max`` when the model has free bodies, summed over the model's worlds (global
-        entities add no world); ``propagation_constraint_max`` is not used. Units take rows in row order, the
+        entities add no world); ``propagation_constraint_max`` is not used. Both budgets are per world, so a
+        world that holds many articulations needs them scaled with their number: a single world of a hundred
+        articulations has the capacity of one world, not of a hundred, until ``articulation_constraint_max`` is
+        raised a hundredfold (:meth:`scene_statistics` reports ``row_max`` and ``dropped_rows``). Units take rows in row order, the
         one-sided units by articulation, then the two-sided units by color and the tail, then the late units,
         and are kept or dropped whole: the kept units are a prefix of that order, so a world can use rows that
         another world leaves free, and a unit that does not fit loses all of its rows, an articulation's
@@ -2088,7 +2091,9 @@ class SolverSteel(SolverBase, CouplingInterface):
                 description: every articulated joint topology is factored sparsely in its own factor group,
                 without the per-world shared-memory gate of the sparse factors; the rows form units, of which
                 those joining two articulations are colored every step; and the row budgets are pooled over the
-                model's worlds, which still label :attr:`constraint_overflow` and :meth:`reset`. The
+                model's worlds, which still label :attr:`constraint_overflow` and :meth:`reset` (the budgets stay
+                per world, so one world holding many articulations needs ``articulation_constraint_max`` scaled
+                with their number, see that argument). The
                 constructor's checks of the options and the model, up to those of the sleeping state, run
                 first, so a combination they reject raises their error under this mode too (the sleeping
                 state's own checks, ``enable_sleeping``, run after the mode's); the mode then raises
@@ -2199,7 +2204,12 @@ class SolverSteel(SolverBase, CouplingInterface):
                 dropped and reported, see :attr:`constraint_overflow`. ``solve_mode="scene"`` sums it,
                 plus ``free_body_constraint_max`` when the model has free bodies, over the model's worlds
                 (global entities add no world) into the scene's row capacity, and keeps or drops each unit
-                whole: an articulation's internal unit loses all of its rows past the capacity.
+                whole: an articulation's internal unit loses all of its rows past the capacity. The budget
+                is per world in every mode, so a world that holds many articulations needs it scaled with
+                their number (the default holds about ten contacts): a model of one world with a hundred
+                articulations needs a hundred times the budget of a hundred worlds of one. Under
+                ``"serial"`` and ``"colored"`` the dense rows are allocated for every articulation at this
+                capacity, so there a large budget on a world of many articulations costs memory in proportion.
             free_body_constraint_max: Capacity of free-body rows per world: free-body contact rows
                 and free-body velocity-limit rows. Under the ``"propagation"`` response free-body
                 contacts use the propagation rows, so

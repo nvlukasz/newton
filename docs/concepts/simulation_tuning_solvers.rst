@@ -270,7 +270,11 @@ repository examples spend tuning effort, not a shared solver API.
        and coupling, solves ``articulated_contact_response="propagation"`` with the
        immediate response and ignores the ``propagation_*`` options;
        ``scene_statistics()`` and ``color_statistics()`` report its rows, units and
-       colors. Which mode is faster depends on the model and the world count, so
+       colors. The row budgets stay per world: a model whose one world holds many
+       articulations needs ``articulation_constraint_max`` (default 32 rows, about
+       ten contacts) scaled with their number, or the scene drops whole units and
+       warns once; ``scene_statistics()["dropped_rows"]`` shows the loss. Which mode
+       is faster depends on the model and the world count, so
        measure the full step. On CPU every mode runs portable kernels, ``"serial"``
        and ``"colored"`` world-serial and ``"scene"`` its one solve world in serial order;
        contact torsion, contact compliance, joint friction, the non-default

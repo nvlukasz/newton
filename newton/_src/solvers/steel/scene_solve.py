@@ -1183,7 +1183,8 @@ def scene_row_status(
                     "%d further units passed scene_unit_max. Units are dropped in row order, the last first: the "
                     "late units (velocity limits) of the last sides, then the tail and the last colors, then the "
                     "one-sided units of the last sides. Increase articulation_constraint_max or "
-                    "free_body_constraint_max (rows per world) or scene_unit_max.\n",
+                    "free_body_constraint_max (rows per world; a world that holds many articulations needs them "
+                    "scaled with their number) or scene_unit_max.\n",
                     unit_count[0],
                     rows_requested[0],
                     row_max,
