@@ -8194,8 +8194,10 @@ def test_aggregate_mode_contacts_match_sap_deterministic(test, device):
 
 
 def test_aggregate_mode_overflow_narrow_phase_runs(test, device):
-    """Review Focus 5: an overflowing buffer is published full, the demand is reported and the narrow phase
-    makes contacts from the published pairs only."""
+    """Publish an overflowing pair buffer full, report the demand and make contacts from the published pairs only.
+
+    The narrow phase runs on the pairs the full buffer holds, a subset of the all-pairs reference's.
+    """
     model = _aggregate_humanoids(device, worlds=1, per_world=4, spacing=0.3)
     state = _aggregate_state(model)
     nxn = newton.CollisionPipeline(model, broad_phase="nxn", shape_pairs_max=100000)
@@ -8230,7 +8232,7 @@ def test_aggregate_mode_overflow_narrow_phase_runs(test, device):
 
 
 def test_aggregate_mode_two_pipelines_capture(test, device):
-    """Review Focus 4: two aggregate pipelines on two models, captured and replayed alternately, match eager.
+    """Capture two aggregate pipelines on two models and replay them alternately: each replay matches eager.
 
     With ``deterministic=True`` (ordered pairs) the replayed pair lists must equal the eager ones entry for entry.
     Both main levels run: the sweep the small scenes get by default and the grid, so two grid instances are

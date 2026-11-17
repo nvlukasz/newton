@@ -89,7 +89,10 @@ def _unit_view(solver):
 
 
 def _assert_row_order(test, solver):
-    """Check the row layout: one-sided units side-major, then the two-sided units by color; return the two-sided count."""
+    """Check the row layout: one-sided units side-major, then the two-sided units by color.
+
+    Return the count of two-sided units.
+    """
     units, scene = solver._scene_units, solver._scene
     sides = units.side_count
     view = _unit_view(solver)
@@ -324,7 +327,10 @@ def test_unit_overflow_latches_every_world(test, device):
 
 
 def test_global_body_couples_model_worlds(test, device):
-    """Solve a global body against the bodies of every model world in the one solve world; Steel drops and flags them."""
+    """Solve a global body against the bodies of every model world in the one solve world.
+
+    Steel, which solves the global body in world 0, drops and flags its contacts with the other worlds' bodies.
+    """
     model = _global_box_model(device)
     test.assertEqual(model.articulation_world.numpy().tolist(), [0, 1, -1])
     solver, _state, _contacts = _rows(model)
@@ -491,7 +497,7 @@ class TestSteelSceneRows(unittest.TestCase):
         """Give Steel's contact row builders every argument by its name, and refuse a missing or unknown one.
 
         The scene's row build launches ``allocate_world_contact_slots`` and ``prepare_world_contact_rows`` by name
-        (``scene_solve._launch_by_name``), so a parameter upstream adds, renames or removes fails at the launch, named,
+        (``scene_solve._launch_by_name``), so a parameter Steel adds, renames or removes fails at the launch, named,
         instead of shifting the arguments after it. The argument dicts the row build passes, read on stand-ins (no
         solver), hold exactly each kernel's parameters; a dict without one of them, or with one more, raises
         ``TypeError`` naming it, before anything launches.
@@ -546,7 +552,7 @@ class TestSteelSceneRows(unittest.TestCase):
         self.assertEqual(scene_rows.CONNECT_NORM_MIN, float(literal))
 
 
-# The rows build on every device; a Steel reference is Steel's split solve on the CPU (_steel_on).
+# The rows build on every device; a Steel reference is Steel's serial solve on either device (_steel_on).
 for _fn in (
     test_row_order_is_side_major_then_colors,
     test_free_free_rows_have_prefix_12,
@@ -560,13 +566,13 @@ for _fn in (
 
 # CUDA only, each for the reason beside it (test_scene_cpu compares the CPU's rows with CUDA's).
 for _fn in (
-    test_rows_match_steel_rows_bitwise,  # Steel's sparse rows are its matrix-free solve's; its CPU split's are dense
+    test_rows_match_steel_rows_bitwise,  # Steel builds its sparse rows on CUDA alone; on the CPU its rows are dense
     test_scene_row_build_replays_under_capture,  # graph capture
 ):
     add_function_test(TestSteelSceneRows, _fn.__name__, _fn, devices=get_cuda_test_devices())
 
 
-# Steel's mass-matrix and sparse-factor tests whose comparisons ran the scene mode, carried here: each runs the Steel
+# Steel's mass-matrix and sparse-factor tests run under the scene mode: each runs the Steel
 # test under the scene mode with its references on Steel's serial solve (solve_mode="serial"), on the same model.
 
 

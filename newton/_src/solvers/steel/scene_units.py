@@ -90,7 +90,7 @@ def _contact_unit_sides(
     contact_art_b: wp.array[int],
     articulation_response_dof_count: wp.array[int],
 ):
-    """The sides ``(side_a, side_b)``, ``side_a >= side_b``, of contact ``c``'s unit; ``side_a == -1`` when it has none."""
+    """The sides ``(side_a, side_b)``, ``side_a >= side_b``, of contact ``c``'s unit; ``side_a == -1`` without one."""
     # Dropped contacts (path -1) keep stale articulation indices; they get no unit.
     if contact_path[c] < 0:
         return -1, -1
@@ -224,7 +224,7 @@ def collect_units(
     unit_side_b: wp.array[int],
     unit_rows: wp.array[int],
 ):
-    """Write each flagged entry's unit at the slot the exclusive scan of the flags gives it (grid: as :func:`flag_units`).
+    """Write each flagged entry's unit at the slot the flags' exclusive scan gives it (grid: as :func:`flag_units`).
 
     The slots are therefore the internal units by articulation, the late units by articulation, then the
     contacts by index. Units whose slot is ``unit_max`` or more are counted in ``unit_overflow`` and not
@@ -1317,6 +1317,8 @@ class SceneUnits:
                 outputs=[self._unit_flag],
                 device=device,
             )
+            # The build runs at the top level of a captured step, where array_scan's scratch comes from the mempool;
+            # only the colors' scan runs inside a conditional graph node, which cannot allocate (_scan_exclusive).
             wp.utils.array_scan(self._unit_flag[:entries], self._unit_slot[:entries], inclusive=False)
         wp.launch(
             collect_units,
@@ -1368,6 +1370,7 @@ class SceneUnits:
             outputs=[self.unit_key, self._side_counts, self._incoming_bucket],
             device=device,
         )
+        # Outside any conditional graph node, as the flags' scan in _collect.
         wp.utils.array_scan(self._side_scan_input, self._side_scan, inclusive=False)
         wp.launch(
             publish_side_starts,

@@ -394,7 +394,7 @@ def test_overflow_counts_without_writing(test, device):
 
 
 def test_key_widths_follow_the_capacities(test, device):
-    """Size the sort key's fields from the articulation count and the contact capacity; reject only keys over 63 bits."""
+    """Size the sort key's fields from the articulation count and the contact capacity; refuse keys over 63 bits."""
     model = _scene("heap", device)
     solver = _solver(model)
     units = SceneUnits(_units_view(solver))
@@ -512,7 +512,10 @@ def test_counting_sort_matches_lexsort(test, device):
 
 
 def test_order_is_independent_of_arrival(test, device):
-    """Sort the same units identically whatever slots they occupy: the sorted view and incidence depend only on the units."""
+    """Sort the same units identically whatever slots they occupy.
+
+    The sorted view and the incidence depend only on the units.
+    """
     side_count, pairs = _hub_pairs()
     units = _stub_units(device, side_count, pairs, color=False)
     count = int(units.unit_count.numpy()[0])
@@ -605,7 +608,10 @@ def test_one_sided_prefix_and_coupling(test, device):
 
 
 def test_row_max_sizes_the_units(test, device):
-    """Size the units from a row budget at construction: a contact unit needs three rows, so ``row_max // 3`` plus the limits units."""
+    """Size the units from a row budget at construction.
+
+    A contact unit needs three rows, so the capacity is ``row_max // 3`` plus the limits units.
+    """
     model = _scene("articulated", device)
     solver = _solver(model, enable_joint_limits=True)
     view = _units_view(solver)

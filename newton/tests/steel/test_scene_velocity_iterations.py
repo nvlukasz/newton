@@ -154,9 +154,9 @@ def test_velocity_rows_rhs_is_unbiased(test, device):
     velocity-pass right-hand side of Steel's row for that contact (its dense ``_rhs_unbiased`` or its free-body
     ``_mf_rhs_unbiased``) within 1e-6, ``phi`` bit for bit, and the rows whose right-hand side is zero are Steel's.
     The law shows on both of Steel's row families: an impacting contact keeps its rebound target (the position
-    solve's right-hand side and Steel's, bit for bit), a resting contact loses its Baumgarte bias (zero where the position solve's
-    was negative), and on Steel's dense rows a speculative contact that stays open keeps its allowance ``phi / dt``.
-    The scene's rows past the kept rows are zero.
+    solve's right-hand side and Steel's, bit for bit), a resting contact loses its Baumgarte bias (zero where the
+    position solve's was negative), and on Steel's dense rows a speculative contact that stays open keeps its
+    allowance ``phi / dt``. The scene's rows past the kept rows are zero.
     """
     model = _build_contact_scene(device, restitution=0.4)
 
@@ -600,15 +600,15 @@ for _fn in (
     add_function_test(TestSteelSceneVelocityIterations, _fn.__name__, _fn, devices=get_test_devices())
 
 
-# CUDA only, each for the reason beside it: the references are Steel's CUDA velocity pass; test_scene_cpu steps the
-# scene's velocity pass on the CPU against CUDA's.
+# CUDA only, each for the reason beside it. Steel runs its velocity pass on the CPU too, but the comparisons with Steel
+# run on CUDA alone: test_scene_cpu steps the scene's velocity pass on the CPU against CUDA's.
 for _fn in (
-    test_velocity_iterations_track_steel,  # Steel's velocity pass
-    test_velocity_rows_rhs_is_unbiased,  # Steel's velocity pass
-    test_velocity_iterations_rebound_tracks_steel,  # Steel's velocity pass
+    test_velocity_iterations_track_steel,  # compared with Steel on CUDA
+    test_velocity_rows_rhs_is_unbiased,  # compared with Steel on CUDA
+    test_velocity_iterations_rebound_tracks_steel,  # compared with Steel on CUDA
     test_velocity_iterations_match_the_serial_oracle,  # the phases; the CPU sweeps the serial oracle alone
     test_velocity_iterations_replay_under_capture,  # graph capture
-    test_regularized_velocity_pass_tracks_steel,  # Steel's velocity pass
+    test_regularized_velocity_pass_tracks_steel,  # compared with Steel on CUDA
 ):
     add_function_test(TestSteelSceneVelocityIterations, _fn.__name__, _fn, devices=get_cuda_test_devices())
 

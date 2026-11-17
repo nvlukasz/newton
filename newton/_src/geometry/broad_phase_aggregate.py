@@ -58,8 +58,8 @@ AGGREGATE_PAIRS_PER_AGGREGATE = 16
 """Default capacity of the aggregate-pair list, per aggregate.
 
 Sized from measured crowds of 65,536 humanoids: settled and moving piles reach
-up to 4.14 overlapping aggregate pairs per humanoid, and twice that, rounded up to a power of two, gives 16. Single aggregates reach 17-19
-pairs where piles meet; the list is shared, so only the mean matters.
+up to 4.14 overlapping aggregate pairs per humanoid, and twice that, rounded up to a power of two, gives 16.
+Single aggregates reach 17-19 pairs where piles meet; the list is shared, so only the mean matters.
 """
 
 SHAPE_PAIRS_PER_SHAPE = 12
@@ -1288,7 +1288,7 @@ def _grid_query_kernel(
     aggregate_pairs: wp.array[wp.vec2i],
     aggregate_pair_count: wp.array[int],
 ):
-    """Query the grid for each aggregate, in bucket order: its half shell under its world key, then world -1's full shell.
+    """Query the grid per aggregate in bucket order: its half shell under its world key, then world -1's full shell.
 
     The half shell is the own cell (candidates b > a) and the 13 forward
     offsets, so a pair of one world key is found from exactly one side. World
@@ -2512,7 +2512,7 @@ def _model_shape_position(model: Model) -> np.ndarray:
 
 
 def _model_shape_extent(model: Model) -> float:
-    """Return the largest |coordinate| of any shape's world position in the model's initial state [m]."""
+    """Return the largest absolute coordinate of any shape's world position in the model's initial state [m]."""
     if int(model.shape_count) == 0:
         return 0.0
     return float(np.abs(_model_shape_position(model)).max())
@@ -2678,7 +2678,7 @@ class BroadPhaseAggregate:
     (in :meth:`from_model`, speculative growth included), bounds every
     union-box edge by 2R, and p = ``1e-6 * max(1 m, C)`` is the
     union pad at C = ``shape_extent + R``, the scene's initial extent (the
-    largest |coordinate| of a shape's world position, which :meth:`from_model`
+    largest absolute coordinate of a shape's world position, which :meth:`from_model`
     reads from the model's initial state). So a box exactly 2R wide, with its
     pad and float32 rounding out to that extent, never spans three cells;
     bodies that travel far beyond it can still fire the latch, which
@@ -2802,8 +2802,8 @@ class BroadPhaseAggregate:
         Args:
             shape_world: World index of each shape (-1 for shapes shared by every world).
             shape_body: Body of each shape (-1 for static shapes).
-            shape_aggregate: Aggregate of each shape, as :meth:`from_model` infers it. The colliding body shapes must carry the ids
-                0..aggregate_count-1, each aggregate in one world and each body's
+            shape_aggregate: Aggregate of each shape, as :meth:`from_model` infers it. The colliding body shapes
+                must carry the ids 0..aggregate_count-1, each aggregate in one world and each body's
                 colliding shapes in one aggregate; entries of other shapes are ignored.
             shape_type: Geometry type of each shape.
             shape_scale: Scale of each shape, shape [shape_count, 3].
@@ -2827,7 +2827,7 @@ class BroadPhaseAggregate:
                 It must cover the boxes :meth:`launch` is given, speculative growth
                 and sweep included: under a speculative cap c, 2c per body shape.
             shape_extent: How far from the origin the shapes start [m]: the largest
-                |coordinate| of a shape's world position, as :meth:`from_model` reads
+                absolute coordinate of a shape's world position, as :meth:`from_model` reads
                 it from the model's initial state. The grid's cell leaves room for
                 the union pad out to this extent. ``None`` counts 0. Only
                 ``main="grid"`` uses it.
@@ -3251,7 +3251,7 @@ class BroadPhaseAggregate:
                 margin and gap.
                 A split articulation's bodies, bodies outside articulations and
                 static shapes are their own roots. ``shape_extent`` is the largest
-                |coordinate| of a shape's world position in the model's initial
+                absolute coordinate of a shape's world position in the model's initial
                 state (``body_q``). A given ``shape_aggregate`` is used as is with
                 this reach, and ``aggregate_extent_overflow`` reports a union box
                 the cell cannot hold. With ``main=None`` the grid is built, then
@@ -4068,7 +4068,7 @@ class BroadPhaseAggregate:
         ]
 
     def _run_ordered_stage(self, stage: str) -> None:
-        """Run an ordered count pass (``"self"``, ``"static"``, ``"expand"``) or the scan and write passes (``"write"``)."""
+        """Run an ordered count pass (``"self"``, ``"static"``, ``"expand"``) or ``"write"``'s scan and write passes."""
         args = self._args
         device = args.device
         self_inputs = [

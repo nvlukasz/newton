@@ -4365,7 +4365,7 @@ def test_aggregate_splits_long_chains_by_default(test, device):
 
 
 def _chain_model(device, links: int, small_bodies: int = 0) -> newton.Model:
-    """A revolute chain of ``links`` capsule links 0.15 m apart, and ``small_bodies`` free spheres 1 m apart beside it."""
+    """A revolute chain of ``links`` capsule links 0.15 m apart, and ``small_bodies`` free spheres 1 m apart beside."""
     builder = newton.ModelBuilder()
     builder.add_ground_plane()
     for k in range(small_bodies):
@@ -4467,7 +4467,7 @@ def test_aggregate_grid_cell_guard(test, device):
 
 
 def _device_grid_occupancy(bp: BroadPhaseAggregate) -> float:
-    """The mean over aggregates of how many share its world key and cell, from the cells the grid's last launch binned."""
+    """The mean over aggregates of how many share its world key and cell, from the cells of the grid's last launch."""
     keys = np.column_stack((bp.aggregate_world.numpy().astype(np.int64) + 1, bp.grid_cell.numpy()))
     _, counts = np.unique(keys, axis=0, return_counts=True)
     return float(np.sum(counts.astype(np.float64) ** 2) / bp.aggregate_count)

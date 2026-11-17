@@ -2279,7 +2279,7 @@ add_function_test(
 )
 
 
-# Steel's contact, friction and drive tests whose comparisons ran the scene mode, carried here: each runs the Steel
+# Steel's contact, friction and drive tests run under the scene mode: each runs the Steel
 # test's steps under the scene mode and under Steel's serial solve (solve_mode="serial") on the same model and the
 # same contacts, through Steel's own helpers where they build the solver (default_solve_mode), and holds both to the
 # Steel test's checks, or compares the two within the Steel test's tolerance. The scene puts every contact on the

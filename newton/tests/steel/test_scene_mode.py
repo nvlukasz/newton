@@ -3,8 +3,9 @@
 
 """Scene mode of SolverSteel (``solve_mode="scene"``): one solve world, its row plan and its rejections.
 
-Steel's own checks run first, so a combination Steel rejects raises Steel's error under the mode too; what the mode
-then rejects on its own raises :class:`ValueError` naming the mode.
+The constructor's option and model checks, which precede the sleeping state's, run first, so a combination they
+reject raises their error under the mode too; what the mode then rejects on its own raises :class:`ValueError`
+naming the mode.
 """
 
 import re
@@ -842,12 +843,12 @@ def test_loop_closures_match_steel_under_scene(test, device):
             test.assertLessEqual(rms, CLOSURE_RMS)
 
 
-def test_scene_rejects_new_upstream_features(test, device):
+def test_scene_rejects_unsupported_steel_features(test, device):
     """Refuse the Steel features the scene does not implement yet with :class:`ValueError` naming the mode.
 
     Nesterov momentum, ``reuse_kinematics`` and coupling (the coupling hooks a coupled solver calls) each raise under
-    the mode, where Steel's serial solve accepts them. Steel's own checks run first: on the CPU, where Steel refuses
-    Nesterov momentum, the mode raises Steel's error.
+    the mode, where Steel's serial solve accepts them. The constructor's checks run first: on the CPU, where Steel
+    refuses Nesterov momentum, the mode raises Steel's error.
     """
     model = _humanoids(device)
     cuda = wp.get_device(device).is_cuda
@@ -1340,42 +1341,6 @@ def test_parent_wrench_matches_steel_under_scene(test, device):
     test.assertLessEqual(rms, PARENT_WRENCH_RMS)
 
 
-class TestSteelSceneMode(unittest.TestCase):
-    pass
-
-
-for _fn in (
-    test_scene_mode_is_off_by_default,
-    test_scene_mode_folds_model_worlds,
-    test_scene_mode_free_bodies_only_plan,
-    test_scene_mode_with_props_widens_the_free_response,
-    test_scene_mode_accepts_steel_options,
-    test_scene_mode_builds_its_model_features,
-    test_scene_mode_constructs_models_without_responding_bodies,
-    test_scene_mode_steps_models_without_responding_bodies,
-    test_scene_mode_accepts_none_anchor_beta,
-    test_scene_mode_sums_the_per_world_row_budgets,
-    test_scene_capacity_warning_reads_the_pooled_budget,
-    test_articulation_constraint_max_reads_the_requested_budget,
-    test_loop_closures_match_steel_under_scene,
-    test_scene_rejects_new_upstream_features,
-    test_scene_options_validate_their_values,
-    test_propagation_options_are_accepted_and_ignored,
-    test_parent_wrench_matches_steel_under_scene,
-):
-    add_function_test(TestSteelSceneMode, _fn.__name__, _fn, devices=get_test_devices())
-
-# CUDA only, each for the reason beside it.
-for _fn in (
-    test_scene_mode_selects_the_plan_past_the_shared_memory_gate,  # the shared-memory gate
-    test_scene_mode_lets_steel_reject_first,  # on the CPU Steel refuses its CUDA-only features before these checks
-    test_scene_mode_steps_without_iterations,  # graph capture
-    test_scene_mode_reads_notified_restitution,  # the device list of the stepping tests is re-decided with the step
-    test_scene_status_reports_through_steel_api,  # graph capture
-):
-    add_function_test(TestSteelSceneMode, _fn.__name__, _fn, devices=get_cuda_test_devices())
-
-
 def test_parent_wrench_includes_closure_reactions(test, device):
     """Report the loop closures' reactions in ``BODY_PARENT_F`` under the mode as Steel's serial solve does.
 
@@ -1418,15 +1383,44 @@ def test_parent_wrench_includes_closure_reactions(test, device):
             test.assertLessEqual(rms, CLOSURE_RMS)
 
 
-add_function_test(
-    TestSteelSceneMode,
-    test_parent_wrench_includes_closure_reactions.__name__,
+class TestSteelSceneMode(unittest.TestCase):
+    pass
+
+
+for _fn in (
+    test_scene_mode_is_off_by_default,
+    test_scene_mode_folds_model_worlds,
+    test_scene_mode_free_bodies_only_plan,
+    test_scene_mode_with_props_widens_the_free_response,
+    test_scene_mode_accepts_steel_options,
+    test_scene_mode_builds_its_model_features,
+    test_scene_mode_constructs_models_without_responding_bodies,
+    test_scene_mode_steps_models_without_responding_bodies,
+    test_scene_mode_accepts_none_anchor_beta,
+    test_scene_mode_sums_the_per_world_row_budgets,
+    test_scene_capacity_warning_reads_the_pooled_budget,
+    test_articulation_constraint_max_reads_the_requested_budget,
+    test_loop_closures_match_steel_under_scene,
+    test_scene_rejects_unsupported_steel_features,
+    test_scene_options_validate_their_values,
+    test_propagation_options_are_accepted_and_ignored,
+    test_parent_wrench_matches_steel_under_scene,
     test_parent_wrench_includes_closure_reactions,
-    devices=get_test_devices(),
-)
+):
+    add_function_test(TestSteelSceneMode, _fn.__name__, _fn, devices=get_test_devices())
+
+# CUDA only, each for the reason beside it.
+for _fn in (
+    test_scene_mode_selects_the_plan_past_the_shared_memory_gate,  # the shared-memory gate
+    test_scene_mode_lets_steel_reject_first,  # on the CPU Steel refuses its CUDA-only features before these checks
+    test_scene_mode_steps_without_iterations,  # graph capture
+    test_scene_mode_reads_notified_restitution,  # compared with Steel on CUDA; test_scene_cpu rebounds on the CPU
+    test_scene_status_reports_through_steel_api,  # graph capture, and contact torsion, which Steel refuses on the CPU
+):
+    add_function_test(TestSteelSceneMode, _fn.__name__, _fn, devices=get_cuda_test_devices())
 
 
-# Steel's tests whose comparisons ran the scene mode, carried here: each runs the Steel test's steps under the scene
+# Steel's tests run under the scene mode: each runs the Steel test's steps under the scene
 # mode and under Steel's serial solve (solve_mode="serial") on the same model, and holds both to the Steel test's
 # checks, or compares the two within the Steel test's tolerance.
 
@@ -1561,8 +1555,7 @@ def test_mixed_world_stack_rests_under_scene(test, device):
 
     ``test_articulation``'s two free boxes stacked on a position-driven platform slider, in two worlds, 240 steps:
     under the scene and under Steel the boxes rest on the platform and on each other within 2 mm and everything moves
-    below 2 cm/s, and every body pose of the scene agrees with Steel's within 2e-3 (the resting-state comparison of
-    the split solve's alias with Steel, which upstream removed with the split solve). Steel solves the platform's
+    below 2 cm/s, and every body pose of the scene agrees with Steel's within 2e-3. Steel solves the platform's
     contacts on its dense rows and the boxes' on its free-body rows; the scene solves them all on its one row family,
     and its free-body row count stays zero.
     """

@@ -77,14 +77,17 @@ from newton.tests.steel.test_scene_features import (
     TRACK_STEPS,
     _assert_phases_match_serial_oracle,
 )
+from newton.tests.steel.test_scene_friction_modes import (
+    FREE_MODE_ATOL,
+    LAYER_PITCH,
+    MODE_TRACK_Q_RMS,
+    _mixed_scene,
+    _slide_and_drop,
+)
 from newton.tests.steel.test_scene_velocity_iterations import VELOCITY_ITERATIONS, _FixedRun
 from newton.tests.steel.test_scene_velocity_limits import _free_body_dofs, _throw_free_bodies
 from newton.tests.steel.test_warmstart import _insertion_after_solved_single_contact, _resting_box_rows, _stack
 from newton.tests.unittest_utils import add_function_test, get_cuda_test_devices, get_test_devices
-
-# The tolerances, scenes and runs shared with the other scene test modules (test_scene_features, test_scene_drives,
-# test_scene_friction_modes, test_scene_velocity_iterations, test_scene_velocity_limits) are imported by the functions
-# that use them, all behind the scene-mode gate, so that this module's own checks run without those modules.
 
 PATCHES = {"friction_anchor_beta": None}
 """Steel's default friction over the :data:`~newton.tests.steel._scene_fixtures.SCENE` options' point friction: an
@@ -473,8 +476,6 @@ def _track_patches(test, model, *, init, rtol, atol):
     hardware or another compiler. The fixtures here stay far from such ties (30 of 30 steps equal);
     should one flip, the fallback is to compare the patch state after the first step alone, not a scene fault.
     """
-    from newton.tests.steel.test_scene_friction_modes import MODE_TRACK_Q_RMS  # noqa: PLC0415
-
     scene = _Run(model, TRACK_ROWS, {}, **PATCHES)
     steel = _Run(model, TRACK_ROWS, {}, solve_mode="serial", **PATCHES)
     test.assertEqual(scene.solver.solve_mode, "scene")
@@ -520,13 +521,6 @@ def test_patch_friction_tracks_steel(test, device):
     (``test_scene_drives.DRIVE_TRACK_RTOL`` and 1e-6: 2.4e-5 relative needed), and the joint coordinates after thirty
     steps within ``test_scene_friction_modes.MODE_TRACK_Q_RMS`` (1.1e-6 and 3.9e-7 measured).
     """
-    from newton.tests.steel.test_scene_friction_modes import (  # noqa: PLC0415
-        FREE_MODE_ATOL,
-        LAYER_PITCH,
-        _mixed_scene,
-        _slide_and_drop,
-    )
-
     scenes = {
         "layer": (
             lambda: _heap(device, nx=3, ny=3, nz=1, pitch=LAYER_PITCH),
@@ -647,8 +641,6 @@ def test_patch_anchors_take_precedence_over_shared_anchors(test, device):
     the normal rows are the point-friction ones bit for bit (the anchors move the tangent rows alone). Under point
     friction the friction flag moves the tangent rows to the witness midpoint.
     """
-    from newton.tests.steel.test_scene_friction_modes import LAYER_PITCH  # noqa: PLC0415
-
     model = _heap(device, nx=3, ny=3, nz=1, pitch=LAYER_PITCH)
     flags = {
         "none": {},
@@ -1093,8 +1085,6 @@ def test_warmstart_tracks_steel(test, device):
     rows' on some free-body anchor (:func:`_check_gather_mu`), and the coordinates after thirty steps agree within
     ``test_scene_features.TRACK_RMS`` (1.0e-5 measured, past ``MODE_TRACK_Q_RMS``, the other cases' bound).
     """
-    from newton.tests.steel.test_scene_friction_modes import FREE_MODE_ATOL, MODE_TRACK_Q_RMS  # noqa: PLC0415
-
     cases = {
         "point friction": {},
         "patches": PATCHES,
@@ -1342,8 +1332,6 @@ def test_warmstart_resets_by_world_mask(test, device):
     ``test_scene_drives.DRIVE_TRACK_RTOL`` and ``TRACK_ATOL`` on the articulations). The reset is captured with a live
     mask and replayed with world 0 then world 2 selected.
     """
-    from newton.tests.steel.test_scene_friction_modes import FREE_MODE_ATOL  # noqa: PLC0415
-
     model = _build_contact_scene(device, worlds=3)
     # Steel's default reserves contact rows in the order its threads arrive, so its sweep order, and its impulses past
     # these tolerances, would change from run to run; the run-to-run mode fixes the order.
@@ -1564,7 +1552,7 @@ def test_sleeping_island_gets_no_units(test, device):
 def test_all_asleep_scene_replays_under_capture(test, device):
     """Replay a step captured while the heap was awake through a scene without units, and wake the heap on contact.
 
-    Review Focus 1. ``_heap`` with its spare box beside it at :data:`HEAP_ITERATIONS`, eager and captured (one step of
+    ``_heap`` with its spare box beside it at :data:`HEAP_ITERATIONS`, eager and captured (one step of
     fixed buffers each, captured at the second step, when units exist). The replays follow the eager steps, awake flags
     equal, until every box sleeps. A replay then builds no unit, row or color (``scene_statistics``): the graph's
     launches keep their grids, ``SceneUnits.color`` and the sweeps' coupled branch run under ``wp.capture_if`` on
@@ -1903,23 +1891,24 @@ for _fn in (
     add_function_test(TestSteelSceneState, _fn.__name__, _fn, devices=get_test_devices())
 
 
-# CUDA only, each for the reason beside it; test_scene_cpu steps them on the CPU against CUDA's.
+# CUDA only, each for the reason beside it. Steel runs patches, the warm start and sleeping on the CPU too, but the
+# comparisons with Steel run on CUDA alone: test_scene_cpu steps those features on the CPU against CUDA's.
 for _fn in (
-    test_anchor_beta_none_resolves_as_steel,  # Steel's omitted beta
-    test_patch_friction_tracks_steel,  # Steel's patches
-    test_patch_radius_uses_divided_row_mu,  # Steel's patches
-    test_patch_rows_follow_the_anchors,  # Steel's patches
+    test_anchor_beta_none_resolves_as_steel,  # contact compliance and "bisection", which Steel refuses on the CPU
+    test_patch_friction_tracks_steel,  # compared with Steel on CUDA
+    test_patch_radius_uses_divided_row_mu,  # compared with Steel on CUDA
+    test_patch_rows_follow_the_anchors,  # compared with Steel on CUDA
     test_patches_match_the_serial_oracle,  # the phases; the CPU sweeps the serial oracle alone
     test_patches_replay_under_capture,  # graph capture
-    test_warmstart_tracks_steel,  # Steel's warm start
+    test_warmstart_tracks_steel,  # the friction mode "bisection", which Steel refuses on the CPU
     test_warmstart_matches_the_serial_oracle,  # the phases
     test_warmstart_replays_under_capture,  # graph capture
-    test_warmstart_resets_by_world_mask,  # Steel's warm start
-    test_sleeping_tracks_steel,  # Steel's sleeping
+    test_warmstart_resets_by_world_mask,  # compared with Steel on CUDA
+    test_sleeping_tracks_steel,  # compared with Steel on CUDA
     test_all_asleep_scene_replays_under_capture,  # graph capture
-    test_masked_reset_wakes_model_worlds,  # Steel's sleeping
-    test_contact_with_an_awake_box_wakes_its_island,  # Steel's sleeping
-    test_islands_join_within_steel_solve_worlds,  # Steel's sleeping
+    test_masked_reset_wakes_model_worlds,  # compared with Steel on CUDA
+    test_contact_with_an_awake_box_wakes_its_island,  # compared with Steel on CUDA
+    test_islands_join_within_steel_solve_worlds,  # compared with Steel on CUDA
     test_sleeping_articulation_gets_no_internal_rows,  # Steel refuses joint friction on the CPU
 ):
     add_function_test(TestSteelSceneState, _fn.__name__, _fn, devices=get_cuda_test_devices())

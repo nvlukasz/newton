@@ -4649,8 +4649,8 @@ class SolverSteel(SolverBase, CouplingInterface):
         It runs after the option checks and the mimic and connect plans' model checks, and before the sleeping
         state's checks (``_SleepState``). The scene runs every option and model those checks accept but these, each
         named in one :class:`ValueError`: ``nesterov_momentum`` (the scene's sweeps carry no momentum),
-        ``reuse_kinematics`` (the scene's step does not take the carried kinematics). Coupling is refused by the coupling
-        hooks (:meth:`_require_coupling_support`); every loop-closing joint the connect plan accepts is solved, and
+        ``reuse_kinematics`` (the scene's step does not take the carried kinematics). The coupling hooks refuse
+        coupling (:meth:`_require_coupling_support`); every loop-closing joint the connect plan accepts is solved, and
         meshes with surface velocity are accepted. The mode's own options raise :class:`ValueError` too:
         ``scene_unit_max`` below 1 and a ``scene_phase_order`` other than ``"BA"``, ``"AB"`` and ``"ABA"``.
 

@@ -524,7 +524,8 @@ for _fn in (
 ):
     add_function_test(TestSteelSceneAliases, _fn.__name__, _fn, devices=get_test_devices())
 
-# CUDA only, each for the reason beside it (the device lists of the stepping tests are re-decided with the step).
+# CUDA only, each for the reason beside it: the comparisons with Steel run on CUDA alone, where their references and
+# tolerances were measured.
 for _fn in (
     test_contact_then_internal_alias_runs,  # Steel's contact_then_internal reference was measured on CUDA
     test_propagation_alias_is_bitwise_immediate_scene,  # Steel's propagation reference was measured on CUDA
@@ -536,7 +537,7 @@ for _fn in (
     add_function_test(TestSteelSceneAliases, _fn.__name__, _fn, devices=get_cuda_test_devices())
 
 
-# Steel's propagation and tree-traversal tests whose comparisons ran the scene mode, carried here. The scene accepts
+# Steel's propagation and tree-traversal tests run under the scene mode. The scene accepts
 # articulated_contact_response="propagation" and solves its immediate response (PROPAGATION below), on the dense rows
 # (route 0) where Steel's propagation response puts its articulated contacts on its propagation rows (route 2). Each
 # test compares the scene with Steel's serial solve (solve_mode="serial") on the same model and the same contacts,

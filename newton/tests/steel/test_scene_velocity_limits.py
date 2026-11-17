@@ -830,11 +830,11 @@ for _fn in (
     add_function_test(TestSteelSceneVelocityLimits, _fn.__name__, _fn, devices=get_test_devices())
 
 
-# CUDA only, each for the reason beside it: the references are Steel's CUDA joint velocity limits; test_scene_cpu steps
-# the scene's on the CPU against CUDA's.
+# CUDA only, each for the reason beside it. Steel limits joint velocities on the CPU too, but the comparisons with Steel
+# run on CUDA alone: test_scene_cpu steps the scene's joint velocity limits on the CPU against CUDA's.
 for _fn in (
-    test_joint_velocity_limits_track_steel,  # Steel's joint velocity limits
-    test_velocity_limit_rows_match_steel_rows,  # Steel's joint velocity limits
+    test_joint_velocity_limits_track_steel,  # the rounding bounds are CUDA's; the CPU's first step exceeds them
+    test_velocity_limit_rows_match_steel_rows,  # compared with Steel on CUDA
     test_late_rows_follow_the_coupled_pass,  # the phases; the CPU sweeps the serial oracle alone
     test_late_rows_change_under_capture,  # graph capture
 ):

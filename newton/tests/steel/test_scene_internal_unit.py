@@ -542,12 +542,12 @@ add_function_test(
     devices=get_test_devices(),
 )
 
-# CUDA only, each for the reason beside it: Steel's joint friction is its matrix-free solve's (its CPU split solve
-# rejects it); test_scene_cpu steps the joint friction rows on the CPU against CUDA's.
+# CUDA only, each for the reason beside it: Steel refuses joint friction on the CPU, and so does the scene there
+# (Steel's checks run first), so every case below that steps joint friction runs on CUDA alone.
 for _fn in (
     test_joint_friction_tracks_steel,  # Steel's joint friction
     test_joint_friction_bounds_match_steel_bitwise,  # Steel's joint friction
-    test_internal_unit_rows_change_under_capture,  # graph capture
+    test_internal_unit_rows_change_under_capture,  # graph capture, of joint friction rows
     test_joint_friction_matches_the_serial_oracle,  # the phases; the CPU sweeps the serial oracle alone
 ):
     add_function_test(TestSteelSceneInternalUnit, _fn.__name__, _fn, devices=get_cuda_test_devices())

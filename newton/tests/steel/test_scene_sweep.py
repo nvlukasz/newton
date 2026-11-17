@@ -557,7 +557,7 @@ def test_worlds_fold_matches_steel_bitwise(test, device):
 
 
 def test_worlds_fold_matches_steel_bitwise_4096(test, device):
-    """The fold at the gate's smaller size: 4,096 worlds of one humanoid, bitwise for 10 steps."""
+    """The fold at a larger size: 4,096 worlds of one humanoid, bitwise for 10 steps."""
     _assert_worlds_fold_bitwise(test, device, 4096, 10, ("lanes8",))
 
 
@@ -1368,7 +1368,7 @@ for _fn in (
     add_function_test(TestSteelSceneSweep, _fn.__name__, _fn, devices=get_cuda_test_devices())
 
 
-# Steel's kernel-choice tests whose comparisons ran the scene mode, carried here: each compares the scene with Steel's
+# Steel's kernel-choice tests run under the scene mode: each compares the scene with Steel's
 # serial solve (solve_mode="serial") on the same model and contacts within the Steel test's tolerance, or the scene
 # with itself where the Steel test compares a kernel choice with the default bit for bit.
 

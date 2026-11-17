@@ -4095,8 +4095,8 @@ def scene_internal_bearing(solver, model) -> np.ndarray:
 def _launch_by_name(kernel: wp.Kernel, dim: int, arguments: dict, device) -> None:
     """Launch ``kernel`` with every argument of its signature by name, in its order, from ``arguments``.
 
-    Steel's contact row builders gain and rename parameters upstream; launching them by name makes a new, renamed or
-    removed parameter fail here, naming it, instead of shifting every later argument by one.
+    Steel's contact row builders gain and rename parameters as Steel changes; launching them by name makes a new,
+    renamed or removed parameter fail here, naming it, instead of shifting every later argument by one.
 
     Raises:
         TypeError: When ``arguments`` misses a parameter of ``kernel`` or names one it does not have.

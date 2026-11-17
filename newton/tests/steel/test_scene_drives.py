@@ -488,11 +488,11 @@ class TestSteelSceneDrives(unittest.TestCase):
 for _fn in (test_drive_rows_with_wide_masks_are_bitwise_one_word, test_drive_rows_build_beside_velocity_limits):
     add_function_test(TestSteelSceneDrives, _fn.__name__, _fn, devices=get_test_devices())
 
-# CUDA only, each for the reason beside it: the references are Steel's CUDA drive rows; test_scene_cpu steps the scene's
-# drive rows on the CPU against CUDA's.
+# CUDA only, each for the reason beside it. Steel builds drive rows on the CPU too, but the comparisons with Steel run
+# on CUDA alone: test_scene_cpu steps the scene's drive rows on the CPU against CUDA's.
 for _fn in (
-    test_drive_rows_track_steel,  # Steel's drive rows
-    test_drive_descriptors_track_steel,  # Steel's drive rows
+    test_drive_rows_track_steel,  # compared with Steel on CUDA
+    test_drive_descriptors_track_steel,  # compared with Steel on CUDA
     test_drive_rows_change_under_capture,  # graph capture
     test_drive_rows_match_the_serial_oracle,  # the phases; the CPU sweeps the serial oracle alone
 ):

@@ -197,7 +197,7 @@ class TestSteelSceneHarness(unittest.TestCase):
             "nesterov_momentum=True, reuse_kinematics=True",
         )
 
-    def test_forced_scene_forces_explicit_serial_in_upstream_modules(self):
+    def test_forced_scene_forces_explicit_serial_in_steel_modules(self):
         """The forced run builds an explicit ``solve_mode="serial"`` with the mode in a test of Steel's own modules.
 
         In a scene module (``_scene_parity.SCENE_TEST_MODULES``) an explicit ``"serial"`` is a reference and is kept;
@@ -220,14 +220,14 @@ class TestSteelSceneHarness(unittest.TestCase):
             modes[(where, "serial reuse_kinematics")] = kept.solve_mode
 
         # Test classes as Steel's own test_options and the scene's test_scene_rows would define them.
-        upstream = type("Probe", (unittest.TestCase,), {"test_builds": build, "__module__": "steel.test_options"})
+        steel_probe = type("Probe", (unittest.TestCase,), {"test_builds": build, "__module__": "steel.test_options"})
         scene = type("Probe", (unittest.TestCase,), {"test_builds": build, "__module__": "steel.test_scene_rows"})
         with tempfile.TemporaryDirectory() as directory:
             with _fresh_parity():
                 _scene_parity.install_forced_scene()
                 _scene_parity.install_recorder(directory)
                 result = unittest.TestResult()
-                upstream("test_builds").run(result)
+                steel_probe("test_builds").run(result)
                 scene("test_builds").run(result)
             records = _records(directory)
         self.assertEqual(result.errors + result.failures, [])

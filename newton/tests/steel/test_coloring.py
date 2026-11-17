@@ -394,7 +394,7 @@ def test_invalid_pair_rule_raises(test, device):
 
 
 def _assert_color_order(test, units):
-    """Count each color of the two-sided units, scan the counts into offsets and list their positions by color, stably."""
+    """Count each color of the two-sided units, scan the counts into offsets, list their positions by color stably."""
     view = _colored_view(units)
     cap = units.color_cap
     color = view["color"]
@@ -420,7 +420,7 @@ def _assert_color_order(test, units):
 
 
 def test_color_offsets_partition_units(test, device):
-    """Group the two-sided units' sorted positions by color: offsets scan the per-color counts, runs keep position order."""
+    """Group the two-sided units' sorted positions by color: offsets scan the color counts, runs keep position order."""
     cases = (
         ("heap", {}, {}),
         ("heap", {"scene_color_cap": 2}, {}),
@@ -487,7 +487,7 @@ def test_color_statistics_reads_back(test, device):
 
 
 def test_time_scene_units_keeps_the_step(test, device):
-    """Time build and color on the last step's contacts, from graphs or eagerly, leaving the step's units as they were."""
+    """Time build and color on the last step's contacts, from graphs or eagerly, leaving the step's units unchanged."""
     model = _scene("tray", device)
     solver = _solver(model, solve_mode="scene", enable_joint_limits=True)
     _step(model, solver)
@@ -592,7 +592,7 @@ def _assert_nothing_colored(test, units, view, stats):
 
 
 def test_recolor_without_two_sided_units_clears(test, device):
-    """Recolor one SceneUnits after its two-sided units are gone: the skipped branch leaves nothing of the last coloring."""
+    """Recolor a SceneUnits whose two-sided units are gone: the skipped branch keeps nothing of the last coloring."""
     for rule in ("speculative", "local_min"):
         with test.subTest(pair_rule=rule):
             solver, contacts = _stub(device, 6, _COUPLED_PAIRS, pair_rule=rule)
