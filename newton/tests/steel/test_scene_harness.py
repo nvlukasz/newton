@@ -4,18 +4,27 @@
 """The scene mode's test seams in SolverSteel (``solve_mode="scene"``): the kernel overrides it refuses or ignores,
 the default scene kernels' tripwire and the host shim that compiles the scene's thread loop for the CPU."""
 
+import contextlib
 import hashlib
+import importlib
+import json
+import os
 import re
+import tempfile
 import unittest
+import warnings
+from unittest import mock
 
 import numpy as np
 
+from newton import NewtonWarning
 from newton._src.solvers.steel._testing import kernel_overrides
 from newton._src.solvers.steel.scene_pgs import scene_kernel_snippets
 from newton._src.solvers.steel.scene_rows import _response_snippet
 from newton.solvers import SolverSteel
+from newton.tests.steel import _scene_parity
 from newton.tests.steel._fixtures import _run
-from newton.tests.steel._scene_fixtures import DEFAULT_SNIPPET_SHA256, _humanoids
+from newton.tests.steel._scene_fixtures import DEFAULT_SNIPPET_SHA256, _chain_worlds, _humanoids
 from newton.tests.steel.test_scene_sweep import SWEEP_CAPACITY, _launch_scene_serial
 from newton.tests.steel.test_sparse import _SWEEP_CASES, _problem, _sweep
 from newton.tests.unittest_utils import add_function_test, get_test_devices
@@ -28,6 +37,31 @@ without one its wide pairs as ``make_int2(-1, -1)``."""
 
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
+
+
+@contextlib.contextmanager
+def _fresh_parity():
+    """Let a test install the forced run's wrappers afresh, then put back what was installed before.
+
+    Inside, ``SolverSteel.__init__`` and ``unittest.TestCase.run`` are their unwrapped originals, so the test's own
+    installs are the only ones active even when the whole suite runs forced; on exit the previous functions return.
+    """
+    init, run = SolverSteel.__init__, unittest.TestCase.run
+    SolverSteel.__init__ = _scene_parity.unwrapped(init)
+    unittest.TestCase.run = _scene_parity.unwrapped(run)
+    try:
+        yield
+    finally:
+        SolverSteel.__init__, unittest.TestCase.run = init, run
+
+
+def _records(directory: str) -> list[dict]:
+    """The recorder's records in ``directory`` (one file per process), in file order."""
+    records = []
+    for name in sorted(os.listdir(directory)):
+        with open(os.path.join(directory, name), encoding="utf-8") as stream:
+            records.extend(json.loads(line) for line in stream if line.strip())
+    return records
 
 
 def test_explicit_scene_with_dense_override_raises(test, device):
@@ -104,6 +138,132 @@ class TestSteelSceneHarness(unittest.TestCase):
                 hashes[f"{support}/{free_response}/{key}"] = _sha256(snippet)
         hashes["sparse_contact/27"] = _sha256(_response_snippet(27, mask_words=1, specialized=True))
         self.assertEqual(hashes, DEFAULT_SNIPPET_SHA256)
+
+    def test_forced_scene_keeps_explicit_solve_modes(self):
+        """The forced run builds ``solve_mode="scene"`` where no mode is given and keeps an explicit mode.
+
+        A construction whose options the mode rejects (``_scene_parity.KEPT_ON_STEEL``) keeps Steel's default and is
+        recorded with the option it was kept for; every record names the test that built the solver.
+        """
+        model = _chain_worlds([3], "cpu")
+        modes = {}
+
+        class Probe(unittest.TestCase):
+            def test_builds(self):
+                modes["default"] = SolverSteel(model).solve_mode
+                modes["serial"] = SolverSteel(model, solve_mode="serial").solve_mode
+                with warnings.catch_warnings():
+                    # The colored mode warns that it runs the serial propagation sweep on the CPU.
+                    warnings.simplefilter("ignore", NewtonWarning)
+                    colored = SolverSteel(model, solve_mode="colored", articulated_contact_response="propagation")
+                modes["colored"] = colored.solve_mode
+                modes["reuse_kinematics"] = SolverSteel(model, reuse_kinematics=True).solve_mode
+                with kernel_overrides({"sparse_mass_matrix": False}):
+                    modes["dense"] = SolverSteel(model).solve_mode
+
+        with tempfile.TemporaryDirectory() as directory:
+            with _fresh_parity():
+                _scene_parity.install_forced_scene()
+                _scene_parity.install_recorder(directory)
+                result = unittest.TestResult()
+                Probe("test_builds").run(result)
+            records = _records(directory)
+        self.assertEqual(result.errors + result.failures, [])
+        self.assertEqual(
+            modes,
+            {
+                "default": "scene",
+                "serial": "serial",
+                "colored": "colored",
+                "reuse_kinematics": "serial",
+                "dense": "serial",
+            },
+        )
+        self.assertEqual(
+            [(r["test"], r["requested"], r["solve_mode"], r["effective"], r["kept"]) for r in records],
+            [
+                ("Probe::test_builds", None, "scene", True, None),
+                ("Probe::test_builds", "serial", "serial", False, None),
+                ("Probe::test_builds", "colored", "colored", False, None),
+                ("Probe::test_builds", None, "serial", False, "reuse_kinematics=True"),
+                ("Probe::test_builds", None, "serial", False, "kernel override sparse_mass_matrix=False"),
+            ],
+        )
+        self.assertEqual(records[3]["options"], {"reuse_kinematics": True})
+        self.assertEqual(records[4]["overrides"], ["sparse_mass_matrix"])
+        self.assertEqual(
+            _scene_parity.kept_on_steel({"nesterov_momentum": True, "reuse_kinematics": True}, {}),
+            "nesterov_momentum=True, reuse_kinematics=True",
+        )
+
+    def test_forced_scene_skips_listed_tests_with_their_reason(self):
+        """The forced run skips a test listed in ``_scene_parity.SKIPS`` with ``"Steel path: "`` and its reason.
+
+        A reason key reads its text from ``STEEL_PATH_REASONS``; any other entry (a scene counterpart) is the text
+        itself. A key without a device suffix covers the test's device variants. Without the forced run the listed
+        tests run.
+        """
+        ran = []
+
+        class Probe(unittest.TestCase):
+            def test_listed_cpu(self):
+                ran.append("listed")
+
+            def test_counterpart(self):
+                ran.append("counterpart")
+
+            def test_unlisted(self):
+                ran.append("unlisted")
+
+        listed = {
+            "Probe::test_listed": "STEEL_ROW_BUDGETS",
+            "Probe::test_counterpart": "scene counterpart: test_counterpart_under_scene",
+        }
+        names = ("test_listed_cpu", "test_counterpart", "test_unlisted")
+        with tempfile.TemporaryDirectory() as directory, _fresh_parity(), mock.patch.dict(_scene_parity.SKIPS, listed):
+            _scene_parity.install_recorder(directory)
+            unforced = unittest.TestResult()
+            for name in names:
+                Probe(name).run(unforced)
+            self.assertEqual((ran, unforced.skipped), (["listed", "counterpart", "unlisted"], []))
+            ran.clear()
+            _scene_parity.install_forced_scene()
+            forced = unittest.TestResult()
+            probes = [Probe(name) for name in names]
+            for probe in probes:
+                probe.run(forced)
+        self.assertEqual(ran, ["unlisted"])
+        self.assertEqual(
+            forced.skipped,
+            [
+                (probes[0], "Steel path: " + _scene_parity.STEEL_PATH_REASONS["STEEL_ROW_BUDGETS"]),
+                (probes[1], "Steel path: scene counterpart: test_counterpart_under_scene"),
+            ],
+        )
+        self.assertNotIn("test_listed_cpu", vars(probes[0]))
+        # The table's entries: a reason key, or a scene counterpart, a rejected feature or a recorded exception.
+        prefixes = ("scene counterpart: ", "rejected: ", "exception: ")
+        self.assertEqual(len(_scene_parity.STEEL_PATH_REASONS), 13)
+        for test, entry in _scene_parity.SKIPS.items():
+            with self.subTest(test=test):
+                self.assertTrue(entry in _scene_parity.STEEL_PATH_REASONS or entry.startswith(prefixes), entry)
+
+    def test_skips_name_registered_tests(self):
+        """Every ``_scene_parity.SKIPS`` key names a test this package registers, so no entry silently never skips.
+
+        A key ``"<Class>::<name>"`` matches a method ``name`` of the test class ``Class``, with or without a device
+        suffix (a test with no device on this machine registers under its bare name).
+        """
+        registered = set()
+        directory = os.path.dirname(os.path.abspath(__file__))
+        for stem in sorted(name[:-3] for name in os.listdir(directory) if re.fullmatch(r"test_\w+\.py", name)):
+            module = importlib.import_module(f"{__package__}.{stem}")
+            for cls in vars(module).values():
+                if isinstance(cls, type) and issubclass(cls, unittest.TestCase) and cls.__module__ == module.__name__:
+                    for method in dir(cls):
+                        if method.startswith("test"):
+                            registered.add(f"{cls.__name__}::{_scene_parity._DEVICE_SUFFIX.sub('', method)}")
+        self.assertEqual([key for key in _scene_parity.SKIPS if key not in registered], [])
 
 
 add_function_test(
