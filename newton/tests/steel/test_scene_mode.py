@@ -15,6 +15,7 @@ import unittest
 import warnings
 from collections.abc import Callable
 from functools import partial
+from types import SimpleNamespace
 from typing import NamedTuple
 from unittest import mock
 
@@ -1591,6 +1592,23 @@ def test_scene_step_leaves_a_registered_foreign_capture_alone(test, device):
     _assert_replayed(test, run, before)
 
 
+def test_dropping_warps_capture_record_is_best_effort(test, device):
+    """Never replace a failed scene step's error while dropping Warp's record of a foreign capture.
+
+    The record is dropped through a function private to Warp's native runtime, which runs while the step's own error
+    propagates: a Warp without that function, or one whose call fails, leaves the call without an error.
+    """
+    stream = SimpleNamespace(cuda_stream=None)
+    target = SimpleNamespace(context=None)
+
+    def fail(*_args):
+        raise RuntimeError("native failure")
+
+    for name, core in (("missing", SimpleNamespace()), ("failing", SimpleNamespace(wp_cuda_graph_end_capture=fail))):
+        with test.subTest(function=name), mock.patch.object(wp._src.context, "runtime", SimpleNamespace(core=core)):
+            scene_solve._drop_warp_capture_record(target, stream)
+
+
 def test_scene_step_names_a_capture_begun_on_another_stream(test, device):
     """Raise a ``RuntimeError`` naming the cause when Warp's stream joined a capture begun on another stream.
 
@@ -1739,6 +1757,7 @@ for _fn in (
     test_parent_wrench_matches_steel_under_scene,
     test_parent_wrench_includes_closure_reactions,
     test_scene_status_snapshot_is_kept_by_reset,
+    test_dropping_warps_capture_record_is_best_effort,
 ):
     add_function_test(TestSteelSceneMode, _fn.__name__, _fn, devices=get_test_devices())
 

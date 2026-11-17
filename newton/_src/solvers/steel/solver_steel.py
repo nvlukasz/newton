@@ -7530,10 +7530,12 @@ class SolverSteel(SolverBase, CouplingInterface):
         Under ``solve_mode="scene"`` a CUDA graph capture of the step may be Warp's (:class:`warp.ScopedCapture`) or
         another framework's on Warp's current stream. The scene's conditional graph nodes need Warp to know the
         capture, so the step registers a capture Warp did not begin with Warp for its duration
-        (``wp.capture_begin(external=True)``) and hands it back still capturing, in ``RELAXED`` mode whatever mode it
-        began in (the CUDA API does not report that mode). A caller that needs its capture's own mode registers it with
-        Warp first, ``wp.capture_begin(stream=..., external=True, capture_mode=...)``, which the step leaves as it is,
-        and ends that registration with ``wp.capture_end(stream=...)`` after the step.
+        (``wp.capture_begin(external=True)``) and hands it back still capturing. A conditional node pauses and
+        resumes the capture, and the CUDA API does not report the mode it began in, so a step that builds one (every
+        step of a model with articulations: the units' coloring is one) hands it back in ``RELAXED`` mode whatever
+        mode it began in; a step that builds none hands it back in its own mode. A caller that needs its capture's
+        own mode registers it with Warp first, ``wp.capture_begin(stream=..., external=True, capture_mode=...)``,
+        which the step leaves as it is, and ends that registration with ``wp.capture_end(stream=...)`` after the step.
 
         Args:
             state_in: Input state. Its maximal coordinates (``body_q``) are refreshed from

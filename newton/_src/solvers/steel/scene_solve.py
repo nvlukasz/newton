@@ -4245,11 +4245,22 @@ def _contact_row_arguments(solver, state_in, state_aug, contacts, contact_geomet
 
 def _drop_warp_capture_record(device, stream) -> None:
     """Drop Warp's own record of a capture registered with ``wp.capture_begin(external=True)`` after a failed
-    conditional node: ``wp.capture_pause`` unregisters the capture before it pauses, so a pause that fails leaves the
-    record of Warp's runtime behind, which would keep Warp deferring every later release of the process. Ending an
-    external capture in Warp's runtime drops the record and leaves the CUDA capture to the framework that began it."""
-    graph = ctypes.c_void_p()
-    wp._src.context.runtime.core.wp_cuda_graph_end_capture(device.context, stream.cuda_stream, ctypes.byref(graph))
+    conditional node, best effort.
+
+    A Warp defect: ``wp.capture_pause`` unregisters the capture before the native pause, so a pause that fails leaves
+    the record of Warp's native runtime behind, which would keep Warp deferring every later release of the process
+    (in Warp 1.17.0 through 1.19.0 and in its development tree at d443699e8). Ending an external capture in Warp's
+    native runtime drops the record and leaves the CUDA capture to the framework that began it. The call is private
+    to Warp, so it is looked up by name and any failure is ignored: it runs while the step's own error propagates,
+    which it must not replace. A Warp that unregisters only after a successful pause keeps its record, and
+    :func:`capture_known_to_warp` ends the registration with ``wp.capture_end`` instead.
+    """
+    try:
+        end_capture = getattr(wp._src.context.runtime.core, "wp_cuda_graph_end_capture", None)
+        if end_capture is not None:
+            end_capture(device.context, stream.cuda_stream, ctypes.byref(ctypes.c_void_p()))
+    except Exception:
+        pass
 
 
 @contextmanager
@@ -4263,8 +4274,10 @@ def capture_known_to_warp(device) -> Iterator[None]:
     capture. ``wp.capture_begin(external=True)`` lets Warp record into that capture, and the block's end hands it back
     still capturing. A conditional node pauses the capture and resumes it in the mode it was registered with, and the
     CUDA API does not report the mode the other framework began it in, so it is registered ``RELAXED``: no call the
-    framework's own mode allowed can invalidate it after the step. A caller that needs its capture back in its own
-    mode registers it first, ``wp.capture_begin(stream=..., external=True, capture_mode=...)``, and ends that with
+    framework's own mode allowed can invalidate it after the step. A block that builds a conditional node (a step of
+    a model with articulations, whose unit coloring is one) hands the capture back in ``RELAXED`` mode; one that
+    builds none leaves it in the mode it began in. A caller that needs its capture back in its own mode registers it
+    first, ``wp.capture_begin(stream=..., external=True, capture_mode=...)``, and ends that with
     ``wp.capture_end(stream=...)`` after the step; a capture Warp knows, no capture, or a CPU device: nothing to do.
 
     Raises:
