@@ -216,6 +216,7 @@ from .scene_solve import (
     SceneSolve,
     build_scene_rows,
     capture_known_to_warp,
+    check_scene_row_store,
     factor_body_masks,
     factor_bytes_per_warp,
     plan_scene_groups,
@@ -1627,7 +1628,10 @@ class SolverSteel(SolverBase, CouplingInterface):
         another world leaves free, and a unit that does not fit loses all of its rows, an articulation's
         internal unit included. A dropped unit flags the worlds of its articulations in
         :attr:`constraint_overflow`. ``scene_unit_max`` bounds the units of one step; units past it get no rows
-        and flag every world. The spin rows of contact torsion follow every unit, and those that fit are kept.
+        and flag every world. The rows' entries are addressed with 32-bit offsets, so the constructor raises
+        :class:`ValueError` when the row capacity times the entries of the widest row (its support, or 12 with
+        free bodies when that is wider) exceeds ``2**31 - 1``. The spin rows of contact torsion follow every
+        unit, and those that fit are kept.
         :meth:`constraint_row_watermarks` keeps its marks per world, a world's excess being the rows its
         dropped units asked for.
 
@@ -6052,7 +6056,9 @@ class SolverSteel(SolverBase, CouplingInterface):
         (:func:`~newton._src.solvers.steel.scene_solve.setup_scene_free_only`). A topology whose factor does not
         fit one warp's static shared memory raises :class:`NotImplementedError`, naming the bytes it needs and the
         bytes the device allows, and so does the test-only kernel override ``sparse_mass_matrix=False``, which
-        selects dense factors the scene does not have.
+        selects dense factors the scene does not have. A row store whose rows times its widest row (the support, or
+        the free-body response) outgrow the rows' 32-bit entry offsets raises :class:`ValueError` before it is
+        allocated (:func:`~newton._src.solvers.steel.scene_solve.check_scene_row_store`).
 
         ``_sparse_mass_matrix_size`` and ``_sparse_mass_matrix_plan`` hold the first factor group's size and plan,
         so that the size says a factor was selected, and ``_sparse_mass_matrix_groups`` the groups, the free group
@@ -6105,6 +6111,11 @@ class SolverSteel(SolverBase, CouplingInterface):
         max_support = scene_support(self, model, groups, body_masks, body_group)
         if not max_support:
             return
+        # The rows' 32-bit entry offsets address the support and, with free bodies, the free-body response.
+        check_scene_row_store(
+            self._articulation_constraint_max,
+            max(max_support, SCENE_FREE_SUPPORT) if self._has_free_rigid_bodies else max_support,
+        )
         # Every factor group's factor fits one warp's static shared memory.
         factor_warps = [scene_factor_warps(self, group.size, group.nonzero_count) for group in factor_groups]
         if min(factor_warps) < 1:

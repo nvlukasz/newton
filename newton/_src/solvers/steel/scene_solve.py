@@ -276,6 +276,10 @@ It is the least row support of a scene with free bodies and the width of a row's
 response ``H^-1 J^T``.
 """
 
+SCENE_ROW_OFFSET_MAX = 2**31 - 1
+"""The most entries the scene's row store can hold: its native row kernels address a row's entries at
+``row * width + entry`` in 32-bit ``int`` arithmetic (:func:`check_scene_row_store`)."""
+
 
 def _mask_words(size: int) -> int:
     """``uint64`` words of a support mask over ``size`` coordinates, ``ceil(size / 64)``."""
@@ -3844,6 +3848,27 @@ def scene_factor_warps(solver, size: int, nonzero_count: int) -> int:
     return min(warps_max, static_shared_limit(device) // per_warp)
 
 
+def check_scene_row_store(rows: int, width: int) -> None:
+    """Refuse a scene row store that its 32-bit row offsets cannot address, before it is allocated.
+
+    The scene's native row kernels (the row builders, the sweeps and the friction blocks) address entry ``entry`` of
+    row ``row`` at ``row * width + entry`` in 32-bit ``int`` arithmetic, where Warp's own array indexing is 64-bit, so
+    the store's ``rows * width`` entries must not exceed :data:`SCENE_ROW_OFFSET_MAX`. ``rows`` is the scene's row
+    capacity (:func:`scene_row_capacity`) and ``width`` the widest row of the store: the support, or the free-body
+    response's :data:`SCENE_FREE_SUPPORT` entries when the scene has free bodies and that is wider.
+
+    Raises:
+        ValueError: If ``rows * width`` exceeds :data:`SCENE_ROW_OFFSET_MAX`, naming both sizes and the product.
+    """
+    entries = int(rows) * int(width)
+    if entries > SCENE_ROW_OFFSET_MAX:
+        raise ValueError(
+            f"solve_mode='scene' needs {rows} rows of {width} entries for the scene, {entries} entries, more than the "
+            f"{SCENE_ROW_OFFSET_MAX} entries its 32-bit row offsets can address; lower articulation_constraint_max or "
+            "free_body_constraint_max, or use fewer worlds"
+        )
+
+
 def setup_scene_free_only(solver) -> None:
     """Plan the scene rows of a model of free bodies only (``solve_mode="scene"``).
 
@@ -3858,11 +3883,13 @@ def setup_scene_free_only(solver) -> None:
     row store (``_sparse_row_dof``, ``_sparse_row_factor``, ``_sparse_row_free_response``, ``_sparse_row_incident``,
     ``_sparse_factor_velocity_delta``, ``_sparse_world_free_dof_mask``, ``_sparse_free_factor_dummy``), its
     ``_sparse_body_dof_mask``, ``_sparse_mass_matrix_groups``, ``_sparse_contact_lanes`` and no sweep kernel
-    (``_pgs_solve_sparse_kernel = None``).
+    (``_pgs_solve_sparse_kernel = None``). Raises :class:`ValueError` before allocating when the rows outgrow their
+    32-bit offsets (:func:`check_scene_row_store`).
     """
     model = solver.model
     device = model.device
     plan = solver._model_plan
+    check_scene_row_store(solver._articulation_constraint_max, SCENE_FREE_SUPPORT)
     solver._sparse_mass_matrix_groups = plan_scene_groups(
         scene_topology_keys(solver, model), (plan.is_free_rigid != 0) & (plan.response_dof_count > 0)
     )

@@ -23,9 +23,10 @@ import warp as wp
 
 import newton
 from newton import NewtonWarning
+from newton._src.solvers.steel import scene_solve
 from newton._src.solvers.steel._testing import kernel_overrides
 from newton._src.solvers.steel.scene_rows import FAMILY_CONNECT, FAMILY_MIMIC
-from newton._src.solvers.steel.scene_solve import SCENE_FREE_SUPPORT
+from newton._src.solvers.steel.scene_solve import SCENE_FREE_SUPPORT, SCENE_ROW_OFFSET_MAX, check_scene_row_store
 from newton._src.solvers.steel.scene_units import SceneUnits
 from newton.solvers import SolverBase, SolverSteel
 from newton.solvers.experimental.coupled import CouplingInterface
@@ -257,6 +258,61 @@ def test_scene_mode_sums_the_per_world_row_budgets(test, device):
     test.assertEqual(model.world_count, 2)
     solver = SolverSteel(model, **budgets, **SCENE)
     test.assertEqual(solver._scene_plan.row_max, 2 * (128 + 48))
+
+
+def _pendulum_beside_a_box(device) -> newton.Model:
+    """A one-DOF pendulum and a free box in one world: seven response coordinates, so the rows' support (at most the
+    coordinates) is narrower than their 12-entry free-body response."""
+    builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
+    link = builder.add_link(xform=wp.transform(wp.vec3(0.0, 0.0, 1.0), wp.quat_identity()))
+    builder.add_shape_box(link, hx=0.05, hy=0.05, hz=0.2)
+    hinge = builder.add_joint_revolute(parent=-1, child=link, axis=wp.vec3(0.0, 1.0, 0.0))
+    builder.add_articulation([hinge])
+    box = builder.add_body(xform=wp.transform(wp.vec3(1.0, 0.0, 0.5), wp.quat_identity()))
+    builder.add_shape_box(box, hx=0.1, hy=0.1, hz=0.1)
+    return builder.finalize(device=device)
+
+
+def test_scene_mode_refuses_rows_past_32_bit_offsets(test, device):
+    """Refuse a row store whose entries the scene's 32-bit row offsets cannot address, before allocating it.
+
+    The scene's native row kernels address a row's entries at ``row * width + entry`` in 32-bit ``int`` arithmetic,
+    so the scene's rows times its widest row (the support, or the 12-entry free-body response) must not exceed
+    :data:`SCENE_ROW_OFFSET_MAX`, a bound the row count alone does not give. At the real limit, a support of 31
+    admits 69,273,666 rows and refuses one more, and 131,072 worlds of 544 rows (Steel's default budgets with free
+    bodies) at that support are refused, while 65,536 worlds of 128 rows at a support of 30 pass. Construction checks
+    the store it is about to allocate: with the limit lowered to one entry below a model's store, the constructor
+    raises, naming the rows and the width, and at the store's size it constructs; the width is the support of
+    articulated rows (humanoids, with or without free props), the free-body response of a free-bodies-only scene, and
+    the free-body response where it is wider than the support (a pendulum beside a free box).
+    """
+    width = 31
+    rows = SCENE_ROW_OFFSET_MAX // width
+    check_scene_row_store(rows, width)
+    check_scene_row_store(65_536 * 128, 30)
+    for refused in (rows + 1, 131_072 * 544):
+        with test.subTest(rows=refused, width=width):
+            message = f"needs {refused} rows of {width} entries for the scene, {refused * width} entries"
+            with test.assertRaisesRegex(ValueError, re.escape(message)):
+                check_scene_row_store(refused, width)
+    for name, model, expected_width in (
+        ("humanoids", _humanoids(device, worlds=4), 30),
+        ("humanoids and free props", _humanoids(device, worlds=2, props=True), 30),
+        ("free bodies only", _heap(device, nx=2, ny=2, nz=1), SCENE_FREE_SUPPORT),
+        ("pendulum beside a free box", _pendulum_beside_a_box(device), SCENE_FREE_SUPPORT),
+    ):
+        with test.subTest(model=name):
+            solver = SolverSteel(model, **SCENE)
+            rows = solver._articulation_constraint_max
+            store_width = max(solver._sparse_row_dof.shape[2], solver._sparse_row_free_response.shape[2])
+            test.assertEqual(store_width, expected_width)
+            entries = rows * store_width
+            with mock.patch.object(scene_solve, "SCENE_ROW_OFFSET_MAX", entries - 1):
+                message = f"needs {rows} rows of {store_width} entries for the scene, {entries} entries, more than"
+                with test.assertRaisesRegex(ValueError, re.escape(message)):
+                    SolverSteel(model, **SCENE)
+            with mock.patch.object(scene_solve, "SCENE_ROW_OFFSET_MAX", entries):
+                SolverSteel(model, **SCENE)
 
 
 def test_scene_capacity_warning_reads_the_pooled_budget(test, device):
@@ -1673,6 +1729,7 @@ for _fn in (
     test_scene_mode_steps_models_without_responding_bodies,
     test_scene_mode_accepts_none_anchor_beta,
     test_scene_mode_sums_the_per_world_row_budgets,
+    test_scene_mode_refuses_rows_past_32_bit_offsets,
     test_scene_capacity_warning_reads_the_pooled_budget,
     test_articulation_constraint_max_reads_the_requested_budget,
     test_loop_closures_match_steel_under_scene,
