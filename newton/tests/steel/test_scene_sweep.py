@@ -49,10 +49,11 @@ STEEL_SUMS = {"scene_sum_order": "steel"}
 SERIAL_SUMS = {"scene_sum_order": "serial"}
 
 # Granularities and summation orders the serial oracle must reproduce bit for bit: Steel's sums at
-# either granularity, or one thread per side and per unit with serial sums (8 lanes with serial sums
+# any granularity, or one thread per side and per unit with serial sums (lane groups with serial sums
 # add in another order than the oracle's one thread).
 PHASE_CONFIGS = (
     {"scene_side_sweep": "lanes8", "scene_unit_sweep": "lanes8", "scene_sum_order": "steel"},
+    {"scene_side_sweep": "lanes32", "scene_unit_sweep": "lanes8", "scene_sum_order": "steel"},
     {"scene_side_sweep": "thread", "scene_unit_sweep": "thread", "scene_sum_order": "steel"},
     {"scene_side_sweep": "thread", "scene_unit_sweep": "thread", "scene_sum_order": "serial"},
 )
@@ -553,12 +554,12 @@ def _assert_worlds_fold_bitwise(test, device, worlds, steps, side_sweeps):
 def test_worlds_fold_matches_steel_bitwise(test, device):
     """Solve N worlds of one humanoid folded into one solve world exactly as Steel solves the N worlds."""
     for worlds in (1, 64):
-        _assert_worlds_fold_bitwise(test, device, worlds, 20, ("lanes8", "thread"))
+        _assert_worlds_fold_bitwise(test, device, worlds, 20, ("lanes8", "lanes16", "lanes32", "thread"))
 
 
 def test_worlds_fold_matches_steel_bitwise_4096(test, device):
     """The fold at a larger size: 4,096 worlds of one humanoid, bitwise for 10 steps."""
-    _assert_worlds_fold_bitwise(test, device, 4096, 10, ("lanes8",))
+    _assert_worlds_fold_bitwise(test, device, 4096, 10, ("lanes8", "lanes32"))
 
 
 def _finite(*arrays):

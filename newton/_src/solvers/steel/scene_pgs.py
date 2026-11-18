@@ -317,8 +317,10 @@ coupled sides (``SceneSolve._sweep_late``). With contact torsion the isolated si
 one-sided spin rows between phases A and C, and the coupled sides' phase C splits in two around the two-sided spin rows:
 the fourth pass sweeps their one-sided spin rows (C1), the third their late rows (C2)."""
 
-SCENE_SIDE_LANES = {"thread": 1, "lanes8": 8}
-"""Lanes per side of each phase-A granularity (``scene_side_sweep``)."""
+SCENE_SIDE_LANES = {"thread": 1, "lanes8": 8, "lanes16": 16, "lanes32": 32}
+"""Lanes per side or unit of each sweep granularity (``scene_side_sweep``, ``scene_unit_sweep``). A row's entries are
+spread over the lanes (lane g holds entries g, g + lanes, ...), so wider groups load a row with fewer passes; with
+Steel's sums every granularity reduces in Steel's 32-lane order."""
 SCENE_SUM_ORDERS = ("serial", "steel")
 """Summation orders of a row's dot products (``scene_sum_order``)."""
 SCENE_SWEEPS = ("phases", "serial")
@@ -1742,7 +1744,7 @@ def _sweep_sides_late_snippet(
 
 @cache
 def get_sweep_sides_kernel(
-    granularity: Literal["thread", "lanes8"],
+    granularity: Literal["thread", "lanes8", "lanes16", "lanes32"],
     sums: Literal["serial", "steel"],
     support: int,
     *,
@@ -1755,9 +1757,9 @@ def get_sweep_sides_kernel(
     another side this step, so each runs all ``iterations`` sweeps in this one launch and stops
     after a sweep that changes no impulse (Steel's stationary exit, per side). Such a
     sweep is a bitwise fixed point, so the exit changes no result. ``coupled_pass == 1`` gives each
-    coupled side one sweep. ``granularity`` is ``"thread"`` (one thread per side) or ``"lanes8"``
-    (8 lanes per side, lane g holding entries g, g + 8, g + 16, ...). ``support`` is the rows'
-    entries (``S``) and ``free_response`` whether rows may start with free-body entries.
+    coupled side one sweep. ``granularity`` is ``"thread"`` (one thread per side) or ``"lanes8"``,
+    ``"lanes16"`` or ``"lanes32"`` (that many lanes per side, lane g holding entries g, g + lanes, ...).
+    ``support`` is the rows' entries (``S``) and ``free_response`` whether rows may start with free-body entries.
     ``features`` are the build constants (:class:`SceneFeatures`): with any feature on, the kernel
     is the featured definition, which takes ``friction_start: int``, ``row_w``, ``row_bound``, the
     four drive descriptors, ``side_late_begin``, ``side_late_end``, ``drive_vel_limit`` and ``freeze_drives: int``
@@ -2691,7 +2693,7 @@ def _sweep_color_snippet(
 
 @cache
 def get_sweep_color_kernel(
-    granularity: Literal["thread", "lanes8"],
+    granularity: Literal["thread", "lanes8", "lanes16", "lanes32"],
     sums: Literal["serial", "steel"],
     support: int,
     *,
@@ -2990,7 +2992,7 @@ def _sweep_block_snippet(
 
 @cache
 def get_sweep_block_kernel(
-    granularity: Literal["thread", "lanes8"],
+    granularity: Literal["thread", "lanes8", "lanes16", "lanes32"],
     sums: Literal["serial", "steel"],
     support: int,
     *,
@@ -3283,7 +3285,7 @@ def _sweep_torsion_snippet(
 
 @cache
 def get_sweep_torsion_kernel(
-    granularity: Literal["thread", "lanes8"],
+    granularity: Literal["thread", "lanes8", "lanes16", "lanes32"],
     sums: Literal["serial", "steel"],
     support: int,
     *,
@@ -3442,7 +3444,7 @@ def scene_kernel_snippets(
 
     The default configuration is ``scene_solve.SceneSolve``'s without overrides: the group-table contact
     response kernel for groups of at most ``dof_max`` DOFs with one-word support masks and 8 lanes
-    per contact, ``"lanes8"`` sides and units, :func:`_default_sum_order` and the ``"BA"`` order
+    per contact, ``"lanes32"`` sides, ``"lanes8"`` units, :func:`_default_sum_order` and the ``"BA"`` order
     oracle. Keys: ``response`` (the group-table contact response, ``scene_rows._response_snippet`` with
     ``specialized=False``), ``sides`` (:func:`get_sweep_sides_kernel`), ``serial``
     (:func:`get_sweep_rows_serial_kernel`), ``order_serial`` (:func:`get_sweep_order_serial_kernel`), ``color``
@@ -3454,7 +3456,7 @@ def scene_kernel_snippets(
     sums = _default_sum_order(support)
     return {
         "response": _response_snippet(dof_max, specialized=False),
-        "sides": _sweep_sides_snippet("lanes8", sums, support, free_response, features),
+        "sides": _sweep_sides_snippet("lanes32", sums, support, free_response, features),
         "serial": _sweep_rows_serial_snippet(sums, support, free_response, features),
         "order_serial": _sweep_order_serial_snippet(SCENE_PHASE_ORDERS[0], sums, support, free_response, features),
         "color": _sweep_color_snippet("lanes8", sums, support, free_response, features),
