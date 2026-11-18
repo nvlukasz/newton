@@ -429,19 +429,19 @@ def assert_rebound_tracks_steel(test, runs, velocities, label="", atol=0.0):
 
 DEFAULT_SNIPPET_SHA256: dict[str, str] = {
     "21/False/response": "ec4be98c37f0472d3732b02bc4e3c9c542166e637882bc8f65ed4fd79708a3b8",
-    "21/False/sides": "a7044ccdd33238488b6fd7d3d80ed2b5c9dbd5bd99ddfb11c35c2b6377515717",
+    "21/False/sides": "565eac1cb3514a62e8533fa57fe848e0440e411d262a53c72918c91b239cdc5e",
     "21/False/serial": "f6f99bb7535380233ef006f8fd8b4f41d6cbac50ec5af4113fa960ff7b3ed6c7",
     "21/False/order_serial": "ee903605980b90591544724b91a7dfe4f7f876c136a0641907c5b0a78cfff345",
     "21/False/color": "8b53b2a0f00b890131bbf9419492dcb3a882dfa63e1d3005a02484284c932b01",
     "21/False/block": "df41b9e6aeff7ea08b62d41f1d17325bf092f6eb88326db31f6982004d38d7e1",
     "30/False/response": "ec4be98c37f0472d3732b02bc4e3c9c542166e637882bc8f65ed4fd79708a3b8",
-    "30/False/sides": "68ec644078a5661feea0878b20e8394d07fd0fd9fea63d17f87243a686dc0ad1",
+    "30/False/sides": "f417da3618852265093f31b598cabaec27ffe17ed335cb933b7817d23329c2c4",
     "30/False/serial": "3dd994d6e4e1015d74eaa70ac25973debb01e8a3b3f885f6c49400a77097fa26",
     "30/False/order_serial": "1890a16108be081847e6d4125c2c029c70a72e4ec8887be48b6119d52a843a48",
     "30/False/color": "2c87549e875242daa61b7178ecb650ba40661c53be2bc22d730702ee567edd5c",
     "30/False/block": "a40816654e1e7e7700256d3cf62fcf7b15562093f2da8c5a51dce5061896899e",
     "12/True/response": "b581394683041fab33354fd795767bbba058196b8a3991b99c5d2fc114c16c0f",
-    "12/True/sides": "4e128591b2fcac2895457c6fe1b5c787db92957c63af195cd66c5542a0684cef",
+    "12/True/sides": "891b9023e836da6fd7283e52e0b6e68991d5e88f10b35f36d1ff55595a998483",
     "12/True/serial": "240f01468759b6ed31e151ef928291477b7dc5026083dd48ea10b9e3b8c9625d",
     "12/True/order_serial": "2aad0922add4631bb18a30cbce109cf3993be43a74b1b2bddfb962cc306b79da",
     "12/True/color": "d4437d281a3de2a91e195d9f4beff49bd75f5503142ea9bcdc913ae5271f0b34",
@@ -453,8 +453,8 @@ DEFAULT_SNIPPET_SHA256: dict[str, str] = {
 A ``"<support>/<free_response>/<kernel>"`` key hashes one snippet of ``scene_pgs.scene_kernel_snippets(support,
 free_response=free_response, dof_max=dof_max)`` for the configurations (21, False, 27), (30, False, 27) and
 (12, True, 6): the group-table contact response (``response``) and the sweep snippets (``sides``, ``serial``,
-``order_serial``, ``color``, ``block``) with ``"lanes8"`` sides and units, Steel-order sums and the ``"BA"`` order
-oracle. ``sparse_contact/27`` hashes ``scene_rows._response_snippet(27, specialized=True)``, which is the snippet of
+``order_serial``, ``color``, ``block``) with ``"lanes32"`` sides, ``"lanes8"`` units, Steel-order sums and the ``"BA"``
+order oracle. ``sparse_contact/27`` hashes ``scene_rows._response_snippet(27, specialized=True)``, which is the snippet of
 ``_get_sparse_contact_response_kernel(27)``, Steel's own text, and equals that entry of :data:`STEEL_TEXT_SHA256`.
 
 Recorded from ``scene_pgs`` as it re-derived the sweep from Steel's current text. Against the text before, the

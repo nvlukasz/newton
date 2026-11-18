@@ -1501,8 +1501,10 @@ class SceneSolve:
     and frozen drives, which every sweep launch reads). The kernel overrides
     (:func:`~newton._src.solvers.steel._testing.kernel_overrides`), read at construction:
 
-    - ``scene_side_sweep``: phase A's lanes per side, ``"lanes8"`` (default) or ``"thread"``.
-    - ``scene_unit_sweep``: phase B's lanes per unit, ``"lanes8"`` (default) or ``"thread"``.
+    - ``scene_side_sweep``: phase A's lanes per side, ``"lanes32"`` (default), ``"lanes16"``, ``"lanes8"`` or
+      ``"thread"``.
+    - ``scene_unit_sweep``: phase B's lanes per unit, ``"lanes8"`` (default), ``"lanes16"``, ``"lanes32"`` or
+      ``"thread"``.
     - ``scene_sum_order``: ``"steel"`` (default) sums a row's products in Steel's 32-lane order, so
       the sweep is bitwise Steel's on the same rows; ``"serial"`` sums them in entry order. Rows wider
       than 32 entries default to ``"serial"`` (and reject ``"steel"``).
@@ -1866,7 +1868,7 @@ class SceneSolve:
         )
         # The sweep.
         self.color_cap = int(units.color_cap)
-        self.side_sweep = str(overrides.get("scene_side_sweep", "lanes8"))
+        self.side_sweep = str(overrides.get("scene_side_sweep", "lanes32"))
         self.sum_order = str(overrides.get("scene_sum_order", _default_sum_order(plan.support)))
         self.sweep = str(overrides.get("scene_sweep", "phases"))
         if self.sweep not in SCENE_SWEEPS:
